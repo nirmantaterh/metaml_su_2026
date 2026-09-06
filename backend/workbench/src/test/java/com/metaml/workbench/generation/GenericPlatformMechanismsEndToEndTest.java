@@ -308,7 +308,7 @@ class GenericPlatformMechanismsEndToEndTest {
         }
     }
 
-    // Stress-tests the same two-step handoff at higher concurrency and with adversarial start
+    // Stress-tests the same two-step handoff at higher concurrency and with hostile start
     // ordering, to raise confidence beyond a single pair: 5 concurrent Main/Twin pairs, started in
     // a deliberately interleaved order (not grouped pair-by-pair - do not assume creation order
     // means execution order), including one pair (B) started Twin-first, reversing which
@@ -319,7 +319,7 @@ class GenericPlatformMechanismsEndToEndTest {
     // first observed complete - the same proof as the single-pair causal test, re-run here under
     // pressure from four other simultaneously-active pairs.
     @Test
-    void fiveConcurrentPairsWithAdversarialOrderingNeverCrossTalkOrReleaseEarly() throws Exception {
+    void fiveConcurrentPairsWithInterleavedOrderingNeverCrossTalkOrReleaseEarly() throws Exception {
         Path outputDir = tempDir.resolve("generated-projects");
         SpringBootProjectGenerator generator = new SpringBootProjectGenerator(REAL_TEMPLATE.toString(),
                 outputDir.toString(), new TwinModelGenerator(), new DelegateClassGenerator(),

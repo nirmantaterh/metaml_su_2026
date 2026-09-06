@@ -25,7 +25,8 @@ export const WorkbenchRoutes = {
     EvolvePage: { path: `/wb/evolve` },
     // New scope item 5 (Evolve Workflow) - a distinct thing from EvolvePage above, which is the pre-existing twin workflow. This one is "connect to an existing deployed application".
     DeployedAppsPage: { path: `/wb/deployed` },
-    // Phase 6C: tenant policy lifecycle UI (Policy -> PolicyVersion -> PolicyRule). A third, unrelated thing from both Evolve entries above - this manages what a tenant's policy SAYS, not any single twin's execution.
+    // Tenant policy lifecycle UI (Policy -> PolicyVersion -> PolicyRule). Unrelated to the Evolve entries
+// above: this manages what a tenant's policy says, not any single twin's execution.
     GovernancePolicies: { path: `/wb/governance/policies` },
     // This phase: the other half of governance - resolving the REQUIRE_APPROVAL decisions that policy above produces, not editing the policy itself.
     GovernanceApprovals: { path: `/wb/governance/approvals` },

@@ -24,9 +24,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-// Phase 13: Final BPMN Runtime Coverage Verification Test Suite
+// BPMN runtime coverage verification
 // Verifies Event SubProcess, Timer Boundary Event, and Error Boundary Event execution in Camunda 7.22.
-class Phase13CoverageVerificationTest {
+class BpmnCoverageVerificationTest {
 
     private final TwinModelGenerator generator = new TwinModelGenerator();
     private ProcessEngine engine;

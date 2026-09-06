@@ -19,7 +19,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-// Durable half of WorkflowStateTracker's event log - same file-based pattern as WorkbenchStateStore right next to it (atomic tmp-then-move write, rewrite the whole file every time, never throw to the caller, an `enabled` flag so tests can opt out the same way). Kept as its own class rather than folded into WorkbenchStateStore because the two stores serialize genuinely different shapes (workflow events are keyed by model id and grow without bound over a model's lifetime; process models/twins are each a flat list) - forcing them into one file and one DTO would just make an unrelated change to one accidentally risk corrupting the other. Instant is serialized as epoch millis via a plain DTO, not left to Jackson's default Instant handling - found the hard way earlier this session that comparing a live in-memory Instant against one that's round-tripped through JSON can disagree on precision (nanos vs millis) even when nothing is actually wrong; a stable, explicit long sidesteps that class of false alarm entirely rather than requiring every caller to know to compare loosely.
+// Durable half of WorkflowStateTracker's event log; same file pattern as WorkbenchStateStore next to
+// it. Kept separate because the two serialize different shapes - workflow events are keyed by model
+// id and grow over a model's lifetime, twins are a flat list.
+// Instants are stored as epoch millis rather than left to Jackson, so a round-tripped value cannot
+// disagree with the in-memory one on nanos-vs-millis precision.
 @Component
 public class WorkflowEventStore {
 

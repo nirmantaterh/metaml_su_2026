@@ -10,6 +10,7 @@ import java.util.List;
 import org.camunda.bpm.engine.HistoryService;
 import org.camunda.bpm.engine.RepositoryService;
 import org.camunda.bpm.engine.RuntimeService;
+import org.camunda.bpm.engine.ExternalTaskService;
 import org.camunda.bpm.engine.TaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,7 +53,7 @@ class TwinProcessDiscoveryTest {
         twinC.setStatus("RUNNING");
 
         WorkbenchStateStore stateStore = mock(WorkbenchStateStore.class);
-        when(stateStore.load()).thenReturn(new WorkbenchStateStore.Snapshot(List.of(), List.of(twinA, twinB, twinC)));
+        when(stateStore.load()).thenReturn(new WorkbenchStateStore.Snapshot(List.of(twinA, twinB, twinC)));
 
         service = new WorkbenchServiceImpl(
                 mock(NodeManagerClient.class),
@@ -63,6 +64,7 @@ class TwinProcessDiscoveryTest {
                 mock(RepositoryService.class, org.mockito.Mockito.RETURNS_DEEP_STUBS),
                 mock(HistoryService.class),
                 mock(TaskService.class),
+                mock(ExternalTaskService.class),
                 mock(TwinModelGenerator.class),
                 stateStore,
                 mock(ProcessModelFileStore.class),

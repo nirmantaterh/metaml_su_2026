@@ -18,6 +18,15 @@ public final class AgentVariables {
         return "evolvedAgent_" + perVisit(twinActivityId, loopCounter);
     }
 
+    // The agent type (e.g. "validator") that was resolved by the node manager during evolution.
+    // Stored alongside the agent name so the automation dispatch can fall back to type-level
+    // executor matching when no executor handles the specific agent name — the only way
+    // multi-instance activities work, since each parallel sibling gets a distinct agent name
+    // from the catalog but they all share one type that maps to one ComponentExecutor.
+    public static String evolvedAgentType(String twinActivityId, Object loopCounter) {
+        return "evolvedAgentType_" + perVisit(twinActivityId, loopCounter);
+    }
+
     public static String evolvedAgentOutput(String outputName, String twinActivityId, Object loopCounter) {
         return "evolvedAgentOutput_" + outputName + "_" + perVisit(twinActivityId, loopCounter);
     }
@@ -29,6 +38,21 @@ public final class AgentVariables {
 
     public static String agentExecuted(String activityId, Object loopCounter) {
         return "agentExecuted_" + perVisit(activityId, loopCounter);
+    }
+
+    // Set when an operator has claimed this activity for component integration and the decision has
+    // not resolved yet. While it is present the auto-bridge must not bind DEFAULT_BRIDGE_AGENT_TYPE
+    // to this visit or advance the twin through it - otherwise the twin runs the default component
+    // the instant the original reaches the activity, which is strictly before any human integration
+    // can legally evolve it (evolveActivity itself requires the activity to already be reached), so
+    // the integrated component could never become the one that actually executes. Cleared as soon
+    // as an evolution actually binds an agent for the visit. Per-visit like every other agent
+    // variable, so one sibling of a parallel multi-instance activity can be held without holding
+    // the others; declared with a null loopCounter when the claim is made before any instance of
+    // the activity exists yet, which holds every sibling of that activity - the honest reading of
+    // a claim staked before there was anything to distinguish.
+    public static String integrationPending(String twinActivityId, Object loopCounter) {
+        return "integrationPending_" + perVisit(twinActivityId, loopCounter);
     }
 
     // written on the twin; the only signal that automation actually ran (vs. just having an agent assigned)
@@ -55,6 +79,14 @@ public final class AgentVariables {
         }
         return List.of(joined.split(OUTPUT_NAME_SEPARATOR));
     }
+
+    // Process variable holding a Map<String,Object> of explicit simulation gateway values.
+    // Isolated from production semantics: tests and the demo harness write to this variable,
+    // and the runtime reads from it only when no legitimate producer (ComponentExecutor,
+    // external-task worker, user task completion) has already set the gateway variable.
+    // The map is keyed by gateway variable name ("qualityPassed", "orderApproved", etc.)
+    // and valued by the explicit deterministic value the simulation requires.
+    public static final String SIMULATION_GATEWAY_VALUES = "_simulationGatewayValues";
 
     // multi-instance: same activity id per visit, so loop index is in the name to keep visits distinct
     private static String perVisit(String activityId, Object loopCounter) {

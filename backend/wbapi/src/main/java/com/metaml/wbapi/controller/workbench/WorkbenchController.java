@@ -45,8 +45,6 @@ import com.metaml.wbapi.utils.FeedbackMessage;
 public class WorkbenchController {
     private final WorkbenchService workbenchService;
 
-    // public WorkbenchController(WorkbenchService workbenchService) { this.workbenchService = workbenchService; }
-
     @GetMapping(WorkbenchUrlMapping.TRANSMUTE_SAMPLE_ONLY)
     public ResponseEntity<ApiResponse> getSampleMethod() {
         try {
@@ -75,7 +73,10 @@ public class WorkbenchController {
         }
     }
 
-    // Product-path entry point for a model with its own independently authored second BPMN (e.g. Manufacturing + Twin supplied as two separate files) - without this, saveProcessModelWithAuthoredTwin was reachable only by calling WorkbenchService directly, never through the real API. Generation itself needs no separate endpoint: TRANSMUTE_GENERATE_PROJECT below already branches on ProcessModel.hasAuthoredTwin() once the model is saved this way.
+    // Entry point for a model with its own independently authored second BPMN (Manufacturing + Twin as two
+    // files); without this, saveProcessModelWithAuthoredTwin was only reachable by calling the service
+    // directly. Generation needs no separate endpoint - TRANSMUTE_GENERATE_PROJECT already branches on
+    // whether the model has an authored twin.
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_MODELE_AUTHORED_TWIN)
     public ResponseEntity<ApiResponse> saveModelWithAuthoredTwin(
             @RequestBody com.metaml.wbapi.payload.request.SaveAuthoredTwinProcessModelRequest request) {
@@ -93,7 +94,8 @@ public class WorkbenchController {
         }
     }
 
-    // New scope item 1 (Navigation & UI): backs "Edit Existing Project" - a picker needs something to list, not just a lookup by an id the user already has to know
+    // Backs "Edit Existing Project": a picker needs something to list, not just a lookup by an id the
+    // user already has to know.
     @GetMapping(WorkbenchUrlMapping.TRANSMUTE_MODELE)
     public ResponseEntity<ApiResponse> listModels() {
         try {
@@ -159,7 +161,8 @@ public class WorkbenchController {
         }
     }
 
-    // New scope item 3 (BPMN Processing): the first step of Model -> Generate -> Launch. Returns one generated Java Delegate class per unique delegateExpression on the saved model's service tasks - read-only, nothing is written to disk or deployed yet. That's the Spring Boot generation step, still waiting on the template project's exact controller shape.
+    // First step of Model -> Generate -> Launch. Returns one generated Java Delegate class per
+    // delegateExpression in the saved model.
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_GENERATE)
     public ResponseEntity<ApiResponse> generateDelegates(@RequestBody GenerateDelegatesRequest request) {
         try {
@@ -309,11 +312,39 @@ public class WorkbenchController {
         }
     }
 
+    // Claims an activity for component integration so the auto-bridge holds the twin at it instead
+    // of autonomously running DEFAULT_BRIDGE_AGENT_TYPE the moment the original reaches it. The
+    // claim is released by the evolution that binds an agent. Reuses EvolveActivityRequest's shape
+    // (twinProcessId/activityId/optional activityInstanceId); agentType is not required here
+    // because the whole point is that the component has not been chosen yet.
+    @PostMapping(WorkbenchUrlMapping.TRANSMUTE_INTEGRATION_CLAIM)
+    public ResponseEntity<ApiResponse> requestComponentIntegration(
+            @RequestBody EvolveActivityRequest request) {
+        try {
+            TwinProcess twin = workbenchService.requestComponentIntegration(request.getTwinProcessId(),
+                    request.getActivityId(), request.getActivityInstanceId());
+            return ResponseEntity.ok(new ApiResponse(FeedbackMessage.SUCCESS, twin));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(BAD_REQUEST).body(new ApiResponse(e.getMessage(), null));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.status(NOT_FOUND).body(new ApiResponse(e.getMessage(), null));
+        } catch (Exception e) {
+            return ResponseEntity.status(INTERNAL_SERVER_ERROR).body(new ApiResponse(e.getMessage(), null));
+        }
+    }
+
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_EVOLVE)
     public ResponseEntity<ApiResponse> evolveActivity(@RequestBody EvolveActivityRequest request) {
         try {
-            AgentDecision decision = workbenchService.evolveActivity(request.getTwinProcessId(),
-                    request.getActivityId(), request.getAgentType());
+            // Scope 6 identity fix: an explicit activityInstanceId routes to the instance-scoped
+            // overload so it targets exactly that runtime sibling; its absence preserves the
+            // existing 3-argument behavior (currentVisitId()'s resolution) unchanged.
+            String activityInstanceId = request.getActivityInstanceId();
+            AgentDecision decision = (activityInstanceId != null && !activityInstanceId.isBlank())
+                    ? workbenchService.evolveActivity(request.getTwinProcessId(), request.getActivityId(),
+                            activityInstanceId, request.getAgentType())
+                    : workbenchService.evolveActivity(request.getTwinProcessId(), request.getActivityId(),
+                            request.getAgentType());
             return ResponseEntity.ok(new ApiResponse(FeedbackMessage.SUCCESS, decision));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(BAD_REQUEST).body(new ApiResponse(e.getMessage(), null));

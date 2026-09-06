@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
 import java.util.Map;
 
 // Read-only projection of what a single Twin activity's automation has actually done, built
@@ -32,4 +33,13 @@ public class TwinActivityExecutionState {
     // this activity - keys and types are entirely component-specific (e.g. credit-risk-assessor's
     // riskScore/riskFlagged vs validator's validationPassed/validationStatus). Never a fixed schema.
     private Map<String, Object> output;
+    // Scope 6 P1 identity fix: currently-active runtime siblings of this activityId on the
+    // ORIGINAL process instance, read live from runtimeService.getActivityInstance() - never
+    // historic ordering. Empty when the activity hasn't been reached, has already completed, or
+    // the original process has ended. Size 0 or 1 for an ordinary (non-multi-instance) activity;
+    // size 2+ only when a parallel multi-instance activity genuinely has concurrent siblings
+    // active right now. Lets a caller (the VS Code plugin) discover and target one specific
+    // sibling via evolveActivity(twinId, activityId, activityInstanceId, agentType) instead of
+    // falling through to currentVisitId()'s heuristic.
+    private List<ActiveRuntimeInstance> activeInstances;
 }

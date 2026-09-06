@@ -14,7 +14,9 @@ const STATUS_ICON = {
 };
 const STATUS_CAPTION = { PENDING: "Pending", IN_PROGRESS: "In progress", FAILED: "Failed" };
 
-// New scope item 1's breadcrumb, redone to consume real backend state instead of guessing from local component variables (see WorkbenchService.getWorkflowState / the backend's WorkflowStateTracker) - this component does no inference of its own, it only renders whatever stage/status pairs it's handed. currentStage and stages both come straight off the API response shape: { currentStage: "GENERATE", stages: { MODEL: {status, timestamp, detail}, ... } }. Phase 2B: same data, just drawn as a compact icon row (✓ / ● / ○ / ✕) instead of colored pill badges, with a short caption next to whichever stage is current - that's the only stage worth a word of text next to it, the rest already say enough with the icon alone.
+// Model -> Generate -> Launch breadcrumb. Renders the stage/status pairs the backend supplies and
+// infers nothing of its own; currentStage and stages come straight off the API response shape
+// { currentStage: "GENERATE", stages: { MODEL: {status, timestamp, detail}, ... } }.
 const WorkflowProgress = ({ currentStage, stages }) => {
     const statusFor = (phase) => stages?.[phase]?.status || "PENDING";
 

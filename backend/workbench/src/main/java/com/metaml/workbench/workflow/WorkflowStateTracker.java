@@ -14,7 +14,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-// Single source of truth for where a model's Model -> Generate -> Launch pipeline actually is. The event log (one CopyOnWriteArrayList per model id) IS the state - "current stage" and "each stage's status" are both just a fold over it, computed fresh on every read, not separate fields that could drift out of sync with what was actually recorded. Callers (WorkbenchServiceImpl) record an event at the start and the end of each stage; nothing here decides on its own when a stage happens, it only remembers what it was told - and now checks that what it was told is a legal transition (see recordValidated below) before remembering it. Persisted via WorkflowEventStore (see its own header comment for why that's a separate class rather than folded into WorkbenchStateStore). Loaded once at startup, rewritten after every record() - the same "always fully durable, fine at demo scale" choice WorkbenchStateStore already makes for process models and twins.
+// Single source of truth for where a model's Model -> Generate -> Launch pipeline is.
+// The event log IS the state: current stage and per-stage status are folds over it computed on every
+// read, not separate fields that could drift from what was recorded.
 @Component
 public class WorkflowStateTracker {
 
@@ -88,7 +90,9 @@ public class WorkflowStateTracker {
         return index == 0 ? null : order[index - 1];
     }
 
-    // for backfilling a stage's event with a timestamp other than "now" - specifically, restoring MODEL/COMPLETED for a model whose workflow history predates this class having real persistence at all (see WorkbenchServiceImpl.restoreState's own comment on when it still reaches for this). Backfilling with the model's own real createdAt rather than the restart time keeps the history honest about when the model was actually first saved. Deliberately bypasses transition validation - a backfilled event describes something that is already known to have happened in the past (the model demonstrably exists), not a live operation whose ordering this class has any business second-guessing.
+    // Backfills a stage event with a timestamp other than "now" - specifically MODEL/COMPLETED for a model
+    // whose history predates this class having real persistence. Using the model's own createdAt rather
+    // than the restart time keeps the history honest.
     public void record(String modelId, WorkflowStage stage, StageStatus status, String detail, Instant timestamp) {
         append(modelId, new StageEvent(stage, status, timestamp, detail));
     }
@@ -127,7 +131,8 @@ public class WorkflowStateTracker {
         return latest;
     }
 
-    // The stage the breadcrumb should highlight as "where you are right now": something actively running takes priority over everything else, then a blocker (the earliest stage that failed, since that's what's actually stopping the pipeline from moving forward) takes priority over stages further along that only look further along because an earlier retry hasn't happened yet, and otherwise it's the stage right after the furthest one that's actually finished.
+    // Which stage the breadcrumb highlights: something actively running wins, then the earliest failure
+    // (that is what is actually blocking the pipeline), then the furthest stage reached.
     private static WorkflowStage resolveCurrentStage(Map<WorkflowStage, StageInfo> stages) {
         for (WorkflowStage stage : WorkflowStage.values()) {
             if (stages.get(stage).status() == StageStatus.IN_PROGRESS) {

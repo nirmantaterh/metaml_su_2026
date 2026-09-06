@@ -11,7 +11,7 @@ Every construct classified below as "SUPPORTED AND IN SCOPE" was proven end-to-e
 ## Environment
 
 ```
-Git HEAD:            800beb8 (chore: remove local Claude Code configuration) + uncommitted
+Git HEAD:            800beb8 + uncommitted
                       Pass 1-3/DLQ/Phase-5 hardening (unchanged by this run)
 Repository:          https://github.com/nirmantaterh/metaml_su_2026/
 RedCollarTP template: backend/RedCollarTP (Camunda 7.20.0, Spring Boot 3.1.12, Java 25)

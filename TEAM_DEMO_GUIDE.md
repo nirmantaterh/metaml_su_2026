@@ -284,7 +284,7 @@ frontend/src/pages/workbench/    ModelPage, EvolvePage, DeployedAppsPage, Govern
 templates/camundademo/           the Spring Boot template projects are generated from
 demo/                            fixtures + DEMO_PROTOCOL.md (regression script)
 docs/architecture/               ARCHITECTURE.md, DIAGRAMS.md, ADRs
-PROJECT_STATUS.md                cross-session status - read this first
+PROJECT_STATUS.md                current project status - read this first
 ```
 
 ---

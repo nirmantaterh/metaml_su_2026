@@ -342,7 +342,7 @@ class TwinExecutionWalkthroughTest {
                 .isEqualTo("Process_WireTransfer_twin");
     }
 
-    // Phase 9/10 red team finding: a multi-instance activity's receive task deliberately keeps the
+    // A multi-instance activity's receive task deliberately keeps the
     // original activity's id, but lives inside a generator-built wrapper sub-process. moveToNode()
     // is scope-blind, so a later flow leaving that same activity used to find the nested receive
     // task and keep building from inside the wrapper - nesting the entire rest of the process inside
@@ -433,7 +433,7 @@ class TwinExecutionWalkthroughTest {
                 .hasMessageContaining("originalActivityId");
     }
 
-    // Phase 7 red team finding W1: evolvedAgent_<twinActivityId> and the twin's own advance message
+    // EvolvedAgent_<twinActivityId> and the twin's own advance message
     // are both keyed on twinActivityId alone, so two original activities sharing one twin activity
     // would silently clobber each other's agent instead of each getting its own. connectActivity is
     // the only place links are created, so it's the one place that has to refuse this.
@@ -461,7 +461,7 @@ class TwinExecutionWalkthroughTest {
         assertThat(workbenchService.getTwinProcess(twin.getId()).findTwinActivityId(AML)).contains(KYC);
     }
 
-    // Caught by an independent adversarial review of the fix directly above, not written test-first:
+    // 
     // the check (stream/filter/findFirst) and the mutation (removeIf + add) are three separate
     // CopyOnWriteArrayList operations - thread-safe individually, but not as a sequence - so two
     // concurrent calls connecting different originals to the same still-unclaimed twin activity
@@ -516,7 +516,7 @@ class TwinExecutionWalkthroughTest {
         assertThat(claimants).isEqualTo(1);
     }
 
-    // caught by an adversarial review of the sync/automation split, not written test-first: an
+    // An
     // activity id ending in one of the generator's own reserved suffixes collides with its own
     // derived twin ids ("Task_A_automate" next to "Task_A"'s derived automation task, both named
     // "Task_A_automate") and used to fail deployment with an opaque duplicate-id error instead of
@@ -547,7 +547,7 @@ class TwinExecutionWalkthroughTest {
                 com.metaml.workbench.bpmn.TwinModelGenerator.automationTaskId("Task_Loop"))).isNotNull();
     }
 
-    // Phase 9/10 red team finding: a literal completionCondition on a multi-instance activity used
+    // A literal completionCondition on a multi-instance activity used
     // to be silently dropped with no warning at all, unlike the sibling non-literal-cardinality
     // fallback right above, which does warn - a genuine, silent multi-instance completion-semantics
     // divergence from what the original's own definition specifies.
@@ -566,17 +566,13 @@ class TwinExecutionWalkthroughTest {
         assertThat(loop.getCompletionCondition().getTextContent()).isEqualTo("true");
     }
 
-    // Phase 7 red team finding W2 originally added Inclusive Gateway support here (the builder API
-    // does support it natively), but Phase 9's independent BPMN review found - and empirically
-    // confirmed - that the generator's verbatim-condition-copy strategy makes it genuinely unsafe
-    // for this construct specifically: the twin's own split evaluates the copied conditions against
-    // TWIN-local variables, so it can activate a different branch set than the original's split did,
-    // and unlike Exclusive Gateway (self-limiting) or Parallel Gateway (no data-dependence),
-    // Inclusive Gateway's join-synchronization-plus-data-dependence combination turns that mismatch
-    // into a permanent deadlock rather than a wrong-but-completing path. Reverted in Phase 10 back
-    // to the same fail-fast policy every other unsupported construct gets, rather than accept the
-    // deadlock risk - fixing it properly would mean the bridge communicating which flows the
-    // original's gateway actually took, a new synchronization concept outside this phase's scope.
+    // Inclusive Gateway gets the same fail-fast treatment as every other unsupported construct.
+    // The generator copies conditions verbatim, so the twin's split evaluates them against
+    // TWIN-local variables and can activate a different branch set than the original's split did.
+    // Exclusive Gateway is self-limiting and Parallel Gateway has no data-dependence, but an
+    // Inclusive Gateway combines join synchronization with data-dependence, so that mismatch
+    // deadlocks rather than completing on a wrong path. Supporting it safely would require the
+    // bridge to communicate which flows the original's gateway actually took.
     @Test
     void anInclusiveGatewayIsSupportedAndLaunchesTwinSuccessfully() throws IOException {
         ProcessModel model = workbenchService.saveProcessModel(null, "inclusive gateway test",

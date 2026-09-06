@@ -85,7 +85,28 @@ public interface WorkbenchService {
 
     TwinProcess connectActivity(String twinProcessId, String originalActivityId, String twinActivityId);
 
+    // Claims an activity for component integration, so the auto-bridge holds the twin at it instead
+    // of autonomously binding DEFAULT_BRIDGE_AGENT_TYPE and running it the moment the original
+    // reaches it. Without this claim there is no window in which an integration can win: evolution
+    // is only legal once the activity has been reached, and that is exactly when the auto-bridge
+    // fires. A null activityInstanceId claims the activity as a whole (used when the claim is made
+    // before the activity has any runtime instance); a non-null one claims just that sibling.
+    // The claim is released by the evolution that binds an agent for the visit. An activity with no
+    // claim keeps today's autonomous default-bridge behavior unchanged.
+    TwinProcess requestComponentIntegration(String twinProcessId, String activityId,
+            String activityInstanceId);
+
     AgentDecision evolveActivity(String twinProcessId, String activityId, String agentType);
+
+    // Evolves one specific runtime sibling of a parallel (non-sequential) multi-instance
+    // activity. currentVisitId()'s most-recently-started heuristic (used by the 3-arg overload
+    // above) cannot distinguish between concurrently active siblings that share the same
+    // activityId; this overload trusts the caller-supplied activityInstanceId directly instead,
+    // the same runtime activity-instance identity bridgeActivityEvent(twinId, activityId,
+    // activityInstanceId) already accepts. A null activityInstanceId reproduces the 3-arg
+    // overload's existing behavior exactly.
+    AgentDecision evolveActivity(String twinProcessId, String activityId, String activityInstanceId,
+            String agentType);
 
     // Approves a pending evolution decision.
     AgentDecision approveEvolution(String approvalId, String tenantId);

@@ -41,6 +41,18 @@ public class DefaultProjectAutomationService implements ProjectAutomationService
         if (agent != null && !agent.toString().isBlank()) {
             String agentNameOrType = agent.toString();
             ComponentExecutor matching = findExecutor(agentNameOrType);
+
+            // Multi-instance parallel activities: each sibling gets a distinct agent name
+            // from the catalog but they all share one type that maps to one ComponentExecutor.
+            // Fall back to type-level dispatch when no executor handles the specific name.
+            if (matching == null) {
+                Object agentTypeVar = execution.getVariable(AgentVariables.evolvedAgentType(activityId,
+                        execution.getVariable("loopCounter")));
+                if (agentTypeVar != null && !agentTypeVar.toString().isBlank()) {
+                    matching = findExecutor(agentTypeVar.toString());
+                }
+            }
+
             if (matching != null) {
                 logger.info("Twin activity {} on instance {} dispatching to exact executor {} for agent '{}'",
                         activityId, execution.getProcessInstanceId(), matching.getClass().getSimpleName(), agentNameOrType);

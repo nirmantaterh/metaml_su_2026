@@ -10,7 +10,7 @@ import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnPlane;
 import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnShape;
 import org.junit.jupiter.api.Test;
 
-// The generated Twin's own diagram interchange used to be dropped outright (stripDiagramInterchange)
+// The generated Twin carries its own diagram interchange
 // because the builder hands every DI element a fresh random id on every call, which broke
 // enableDuplicateFiltering - relaunching the same model kept deploying a spurious new Twin
 // definition version. stabilizeDiagramInterchange fixes that the same way the message/loop ids

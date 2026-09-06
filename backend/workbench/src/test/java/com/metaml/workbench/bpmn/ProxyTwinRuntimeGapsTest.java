@@ -21,12 +21,12 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-// Phase 11: Proxy/Twin Runtime Gap Closure Test Suite
+// Proxy/Twin runtime gap coverage
 // Verifies:
 // 1. Intermediate Signal/Message/Timer Catch Event Proxy/Twin lockstep synchronization
 // 2. Expression-based Multi-Instance loop cardinality preservation and runtime execution
-// 3. Complex adversarial multi-construct workflows combining Catch Events, Gateways, SubProcesses, and Expression MI
-class Phase11ProxyTwinGapsTest {
+// 3. Complex multi-construct workflows combining Catch Events, Gateways, SubProcesses, and Expression MI
+class ProxyTwinRuntimeGapsTest {
 
     private final TwinModelGenerator generator = new TwinModelGenerator();
     private ProcessEngine engine;
@@ -197,7 +197,7 @@ class Phase11ProxyTwinGapsTest {
     }
 
     @Test
-    void combinedAdversarialWorkflow_catchEventsSubProcessAndExpressionMI() {
+    void combinedWorkflow_catchEventsSubProcessAndExpressionMI() {
         String bpmnXml = """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"

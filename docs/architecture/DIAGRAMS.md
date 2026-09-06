@@ -25,7 +25,7 @@ flowchart TB
         TAD["TwinAutomationDelegate\n(Twin service task)"]
         PAS["ProjectAutomationService\n(pluggable, per-project)"]
         GSI["GovernanceServiceImpl"]
-        WSS["WorkbenchStateStore\n(JSON: models + twins only)"]
+        WSS["WorkbenchStateStore\n(JSON: twins only)"]
         NMC["NodeManagerClient"]
         AOD["AgentOutputDeclarations"]
     end

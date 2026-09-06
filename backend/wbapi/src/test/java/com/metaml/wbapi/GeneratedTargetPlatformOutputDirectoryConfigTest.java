@@ -9,7 +9,7 @@ import java.util.Properties;
 
 import org.junit.jupiter.api.Test;
 
-// Phase 2 correction: pins the ACTUAL configured value in application.properties, not a
+// Pins the ACTUAL configured value in application.properties, not a
 // re-typed copy of it - a hand-copied literal here would keep passing even if someone edited the
 // real property back to a path under the repo, which defeats the point of a regression test.
 //

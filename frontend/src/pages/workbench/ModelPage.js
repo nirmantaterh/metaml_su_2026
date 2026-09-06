@@ -16,6 +16,7 @@ import {
     listTenants,
     generateProject,
     launchProject,
+    loadExecutionEvidence,
 } from "../../services/workbench/WorkbenchService";
 import { listProjects } from "../../services/workbench/ProjectService";
 import { openCockpitUrl } from "../../components/workbench/openCockpitUrl";
@@ -79,6 +80,36 @@ const ModelPage = () => {
     const [launching, setLaunching] = useState(false);
     // Populated only by a successful Launch here - port/processKey/pairing detail, same shape LaunchProjectListPage keeps per row. Cleared on every new Generate, since a fresh generation invalidates whatever was previously launched.
     const [launchInfo, setLaunchInfo] = useState(null);
+
+    // Runtime execution evidence for Workflow Details. Kept here rather than inside the panel so
+    // WorkflowDetailsPanel stays the purely presentational component it already is. Loaded only
+    // while the details dropdown is actually open - this is observability on demand, not another
+    // polling loop layered on top of the workflow-state refresh above.
+    const [execution, setExecution] = useState(null);
+
+    useEffect(() => {
+        if (!detailsOpen || !currentModelId) {
+            setExecution(null);
+            return;
+        }
+        let cancelled = false;
+        const load = async () => {
+            try {
+                const twins = await loadExecutionEvidence(currentModelId);
+                if (!cancelled) setExecution({ twins, error: null });
+            } catch (err) {
+                if (!cancelled) setExecution({ twins: [], error: true });
+            }
+        };
+        load();
+        // A twin can execute while the panel is open (bridge/executor complete asynchronously), so
+        // refresh at the same gentle cadence for as long as it stays open, and stop when it closes.
+        const timer = setInterval(load, 5000);
+        return () => {
+            cancelled = true;
+            clearInterval(timer);
+        };
+    }, [detailsOpen, currentModelId]);
 
     const refreshWorkflowState = async (modelId) => {
         if (!modelId) return;
@@ -490,6 +521,7 @@ const ModelPage = () => {
                                 workflowState={workflowState}
                                 onClose={() => setDetailsOpen(false)}
                                 onGoToError={handleGoToError}
+                                execution={execution}
                             />
                         )}
                     </div>

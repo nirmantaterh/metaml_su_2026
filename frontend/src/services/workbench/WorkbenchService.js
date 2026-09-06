@@ -81,6 +81,60 @@ export async function getTwin(id) {
     return result.data;
 }
 
+// Twins belonging to one saved model. Same endpoint the VS Code extension's tree uses to populate
+// its "Twin Processes" section - no Workbench-specific twin listing exists or should.
+export async function listTwinProcesses(modelId) {
+    const result = await api.get(`/wb/transmute/twins`, { params: { modelId } });
+    return result.data;
+};
+
+// The authoritative runtime execution state for ONE activity on ONE twin: the exact endpoint the
+// VS Code extension already consumes (WorkbenchService#getActivityExecutionState ->
+// TwinActivityExecutionState). Returns whatever the runtime actually recorded - agentName, status,
+// summary, output, activeInstances - and nothing derived. The Workbench renders this; it never
+// reconstructs execution from workflow history or from the presence of a binding.
+export async function getActivityExecutionState(twinProcessId, activityId) {
+    const result = await api.get(
+        `/wb/transmute/twin/${encodeURIComponent(twinProcessId)}/activity/${encodeURIComponent(activityId)}/execution`
+    );
+    return result.data;
+};
+
+// Composes the two calls above into the shape Workflow Details renders: for each twin of this
+// model, the runtime state of each activity that has actually been connected to it. Deliberately
+// scoped to connected activities (twin.activityLinks) because an unconnected activity has no twin
+// activity for the runtime to have executed anything against.
+//
+// Per-activity failures are captured rather than thrown so one unreachable activity cannot blank
+// out the evidence for the rest; a twin with no links contributes nothing at all.
+export async function loadExecutionEvidence(modelId) {
+    // Every backend response here is the standard ApiResponse envelope ({ message, data }); the
+    // rest of this app unwraps it at the call site with the same `res.data || res` idiom (see
+    // ModelPage's setWorkflowState). Do it once here so callers get plain runtime data.
+    const unwrap = (res) => (res && res.data !== undefined ? res.data : res);
+
+    const twins = unwrap(await listTwinProcesses(modelId)) || [];
+    const withLinks = twins.filter((twin) => (twin.activityLinks || []).length > 0);
+
+    return Promise.all(
+        withLinks.map(async (twin) => ({
+            twinId: twin.id,
+            twinStatus: twin.status ?? null,
+            launchedAt: twin.launchedAt ?? null,
+            activities: await Promise.all(
+                (twin.activityLinks || []).map(async (link) => {
+                    try {
+                        const state = unwrap(await getActivityExecutionState(twin.id, link.originalActivityId));
+                        return { activityId: link.originalActivityId, state, error: null };
+                    } catch (err) {
+                        return { activityId: link.originalActivityId, state: null, error: "unavailable" };
+                    }
+                })
+            ),
+        }))
+    );
+};
+
 export async function launchModel(payload) {
     const result = await api.post(`/wb/transmute/launch`, payload);
     return result.data;

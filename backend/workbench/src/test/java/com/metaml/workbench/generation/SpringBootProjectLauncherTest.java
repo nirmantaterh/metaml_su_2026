@@ -419,7 +419,7 @@ class SpringBootProjectLauncherTest {
         }
     }
 
-    // Caught by an adversarial review of the tests themselves: the previous version of this helper
+    // The previous version of this helper
     // polled for up to 15s and then just RETURNED whether or not the port had actually gone quiet,
     // so every caller that "verified" a stop was really only verifying that 15 seconds could
     // elapse. It has to fail the test when the port is still up, which is the whole point of it.

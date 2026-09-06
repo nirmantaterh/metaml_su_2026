@@ -19,10 +19,10 @@ import org.camunda.bpm.model.bpmn.instance.SignalEventDefinition;
 import org.camunda.bpm.model.bpmn.instance.SubProcess;
 import org.junit.jupiter.api.Test;
 
-// Phase 8 verification test: proves that TwinModelGenerator correctly processes, preserves,
+// Verifies that TwinModelGenerator correctly processes, preserves,
 // and outputs valid BPMN for ScriptTask, BusinessRuleTask, CallActivity, SubProcess, SendTask,
 // ManualTask, IntermediateThrowEvent, and non-plain EndEvents.
-class Phase8BpmnConstructsTest {
+class BpmnConstructCoverageTest {
 
     private final TwinModelGenerator generator = new TwinModelGenerator();
 

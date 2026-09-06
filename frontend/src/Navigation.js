@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React from "react";
 import {
     Route,
     RouterProvider,
@@ -21,7 +21,6 @@ import EvolvePage from "./pages/workbench/EvolvePage";
 import DeployedAppsPage from "./pages/workbench/DeployedAppsPage";
 import GovernancePoliciesPage from "./pages/workbench/GovernancePoliciesPage";
 import GovernanceApprovalsPage from "./pages/workbench/GovernanceApprovalsPage";
-import ProtectedRoute from "./components/auth/ProtectedRoute";
 import { CommonRoutes, WorkbenchRoutes } from "./routes";
 
 const router = createBrowserRouter(

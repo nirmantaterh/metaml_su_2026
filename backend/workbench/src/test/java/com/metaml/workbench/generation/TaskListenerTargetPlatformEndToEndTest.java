@@ -24,7 +24,7 @@ import com.metaml.workbench.bpmn.TwinModelGenerator;
 import com.metaml.workbench.codegen.DelegateClassGenerator;
 import com.metaml.workbench.codegen.ExternalTaskWorkerGenerator;
 
-// Phase 5 acceptance test for camunda:taskListener support in the RedCollarTP Target Platform
+// Acceptance test for camunda:taskListener support in the RedCollarTP Target Platform
 // pipeline (TargetPlatformSourceGenerator.scanTaskListeners). The professor-supplied RedCollar
 // BPMNs contain no User Task, so this deliberately builds its own minimal fixture (Start -> User
 // Task with a "create" Task Listener -> End) rather than modifying those files - the "create" event

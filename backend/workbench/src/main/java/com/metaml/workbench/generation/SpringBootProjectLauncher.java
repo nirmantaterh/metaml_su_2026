@@ -24,18 +24,23 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
-// New scope item 4 (Spring Boot Generation)'s last piece: actually starting a project SpringBootProjectGenerator assembled on disk, as its own background process. Kept separate from that class for the same reason its own header comment gives - file assembly is trivially unit testable, starting a real child JVM is not, and mixing the two would have made every generator test slow and flaky. User's own explicit decision (asked directly, not assumed): support more than one generated app running at once, with ports assigned automatically rather than fixed - two generated projects both hardcoded to 8080 would just fail the second one to start. Tracked here, in memory, keyed by projectId; this is also the registry the future Evolve workflow step ("connect to an existing deployed application") will read from.
+// Starts a project SpringBootProjectGenerator assembled on disk as its own child JVM. Kept separate
+// from the generator because file assembly is trivially unit-testable and starting a real JVM is not.
+// Several generated apps can run at once, so ports are assigned automatically rather than fixed.
 @Component
 public class SpringBootProjectLauncher {
 
     private static final Logger logger = LoggerFactory.getLogger(SpringBootProjectLauncher.class);
 
-    // Camunda's own engine bootstrap plus a cold Maven dependency resolution on a machine that hasn't run this exact generated project before can genuinely take the better part of a minute - proven empirically against the real template, not guessed at. 120s was the original figure from that measurement on a small demo process; a large real-world model (Citi Bank's wire transfer review, dozens of activities) has more to deploy and can genuinely need longer on a cold cache, so this is 5 minutes now rather than assume every generated project is as small as the one this was first measured against.
+    // Camunda bootstrap plus a cold Maven resolution can take minutes on a machine that has not built
+    // this project before, and a large model has more to deploy - hence minutes, not seconds.
     private static final Duration DEFAULT_READY_TIMEOUT = Duration.ofMinutes(5);
 
     private final Map<String, Running> running = new ConcurrentHashMap<>();
 
-    // One lock object per projectId, deliberately NOT ConcurrentHashMap.compute() on `running` itself. compute() would give the same atomicity in fewer lines, but it holds the map's own bin lock for the whole duration of the mapping function - and here that function spawns a child JVM and then waits up to the full readiness timeout on it, now several minutes. CHM bins are shared by hash, and a resize needs every bin, so an unrelated projectId that happens to hash into the same bin (or any writer arriving during a resize) would block behind a Maven startup that has nothing to do with it. Serialising unrelated launches is a worse bug than the race being fixed, so the lock is keyed on the projectId that actually needs it. These entries are never removed: a stop()ped project can be relaunched under the same id, so dropping the lock would reopen the race for exactly that case. Bounded by the number of distinct generated projects seen since startup, which is small and in-memory anyway. ReentrantLock rather than a plain Object monitor (which is what this was until retention needed it) purely because runIfIdle() below has to be able to give up instead of blocking - synchronized has no tryLock. The mutual exclusion launch() gets out of it is identical.
+    // One lock per projectId rather than ConcurrentHashMap.compute() on `running`: compute() holds the
+    // map's bin lock for the whole mapping function, which here spawns a child JVM and waits out the
+    // readiness timeout, so an unrelated projectId hashing into the same bin would block behind it.
     private final Map<String, ReentrantLock> launchLocks = new ConcurrentHashMap<>();
     private final Duration readyTimeout;
 
@@ -51,12 +56,15 @@ public class SpringBootProjectLauncher {
     private record Running(LaunchedProject info, Process process) {
     }
 
-    // Caught by an adversarial review: stop -> findFreePort -> startProcess -> put used to be four separate steps, so two concurrent launches of the SAME projectId could both find nothing to stop, both spawn a child JVM, and the second put() would then overwrite the first one's entry - leaving that first process running with nothing in the map pointing at it. Unreachable via find()/listRunning(), so unkillable via stop(), and holding its port until the workbench itself dies. The whole sequence is now atomic per projectId; see launchLocks above for why it's a per-key lock rather than a compute() on the running map.
+    // stop -> findFreePort -> startProcess -> put has to be atomic per projectId. As separate steps two
+    // concurrent launches of the same id could both spawn a JVM, and the second put() would orphan the
+    // first - still running, unreachable through find(), holding its port until shutdown.
     public LaunchedProject launch(GeneratedProject project) {
         return launch(project, Map.of());
     }
 
-    // extraEnv is additive, on top of the SERVER_PORT/SERVER_ADDRESS this method always sets - for a caller that needs the launched app started with a property the generated project's own application.properties leaves at its default, e.g. METAML_MESSAGING_ENABLED=true (Spring's relaxed env-var binding maps that to metaml.messaging.enabled) to demonstrate the real RabbitMQ path against a broker the caller has separately made available. The single-arg overload above is unchanged behavior for every existing caller.
+    // extraEnv is additive on top of the SERVER_PORT/SERVER_ADDRESS this always sets, for a caller that
+    // needs a property the generated project leaves at its default (e.g. METAML_MESSAGING_ENABLED=true).
     public LaunchedProject launch(GeneratedProject project, Map<String, String> extraEnv) {
         ReentrantLock lock = lockFor(project.projectId());
         lock.lock();
@@ -94,7 +102,10 @@ public class SpringBootProjectLauncher {
         return launchLocks.computeIfAbsent(projectId, id -> new ReentrantLock());
     }
 
-    // Retention safety gate. Runs `action` only while this projectId is provably idle - not running, and not in the middle of being launched - holding the same per-project lock launch() takes, so the answer cannot go stale between the check and the action. The in-flight half is the reason this exists at all rather than callers just asking find(). launch() only publishes into `running` AFTER awaitReady returns, which for a real generated project is up to five minutes of Maven and Camunda startup. For that entire window find() honestly reports "not running" while a child JVM is actively compiling and booting out of that very directory - so a cleanup that trusted find() alone would delete a project's source out from under its own starting process. Holding the launch lock is what closes that window; nothing else in this class distinguishes "idle" from "starting". tryLock, not lock: the whole point is that the caller is doing opportunistic cleanup on a request thread. Blocking here would mean a regenerate sitting behind a five-minute launch of the very project it was about to discard. Returning false instead just leaves the directory for the next lifecycle event (stop, another regenerate, restart) to collect - cleanup is always best-effort by design, never the thing that makes an operation fail.
+    // Runs `action` only while this projectId is provably idle - neither running nor mid-launch - under
+    // the same lock launch() takes, so the answer cannot go stale between the check and the action.
+    // The in-flight half is why this exists: launch() only publishes into `running` after awaitReady
+    // returns, so for minutes find() honestly reports "not running" while a JVM is still booting.
     public boolean runIfIdle(String projectId, Runnable action) {
         if (projectId == null || projectId.isBlank()) {
             return false;
@@ -102,7 +113,10 @@ public class SpringBootProjectLauncher {
         return runIfAllIdle(List.of(projectId), action);
     }
 
-    // The all-or-nothing form, for a caller acting on a whole SET of projects at once - model deletion, which must not remove some of a model's generated projects and then discover another one is running. Same guarantee as runIfIdle scaled up: every project is proven idle, and stays idle, for the whole action. Locks are taken in sorted order purely as a discipline. Two concurrent model deletions can't actually contend (a generated project belongs to exactly one model), so this isn't fixing a live deadlock; it means a future caller with overlapping sets can't introduce one either. Liveness is checked only after ALL locks are held - checking as we went would let an already-checked project start launching while later ones were still being locked.
+    // All-or-nothing form for a caller acting on a set of projects at once, such as model deletion,
+    // which must not delete some of a model's projects and then find another one still running.
+    // Locks are taken in sorted order as discipline, so a future caller with overlapping sets cannot
+    // introduce a deadlock.
     public boolean runIfAllIdle(Collection<String> projectIds, Runnable action) {
         List<String> ordered = projectIds.stream()
                 .filter(id -> id != null && !id.isBlank())
@@ -141,7 +155,8 @@ public class SpringBootProjectLauncher {
                 : new GeneratedProjectLaunchException(e.getMessage(), port, null, e);
     }
 
-    // Query-time liveness, not a background daemon: awaitReady already proved isAlive() is the right signal for "did this JVM actually survive", this just asks the same question again on every read instead of trusting whatever launch() last observed. A generated app that dies on its own (OOM, an uncaught exception, someone kill -9ing it directly - proven live against a real generated project) leaves its port unreachable and its Process no longer alive; nothing about that requires polling in the background to detect, only checking before this class hands the entry to a caller who's about to act on "is this actually running".
+    // Liveness is checked on read rather than by a background poller: an app that dies on its own leaves
+    // its Process not alive, and this asks before any entry is handed to a caller acting on it.
     public Optional<LaunchedProject> find(String projectId) {
         Running r = running.get(projectId);
         if (r == null) {
@@ -168,7 +183,8 @@ public class SpringBootProjectLauncher {
         return alive;
     }
 
-    // Self-heals the registry the moment a dead entry is observed, rather than leaving it for stop() to eventually clear - conditional on value (remove(key, value), not remove(key)) so this can never delete a DIFFERENT, freshly-launched Running that raced in under the same projectId between the isAlive() check above and this call (launch()'s own per-key lock allows exactly that: stop-then-relaunch under one id is the documented, intended way to reuse a projectId).
+    // Self-heal as soon as a dead entry is seen. Conditional remove(key, value) so it can never drop a
+    // different, freshly-launched Running that raced in under the same projectId.
     private void forgetIfStillDead(String projectId, Running observed) {
         if (running.remove(projectId, observed)) {
             logger.warn("Generated project {} was reported running but its process has died; "
@@ -186,7 +202,9 @@ public class SpringBootProjectLauncher {
         return true;
     }
 
-    // Nothing else kills these. A generated app is a child JVM started with ProcessBuilder, which does NOT die with its parent on either Windows or Linux - so before this existed, every workbench restart during a demo left the previous run's generated apps alive, still holding their ports, with the new workbench instance having no record of them and no way to stop them. Spring calls this on normal context shutdown (Ctrl+C included, via the JVM shutdown hook Spring Boot registers); a hard kill -9 of the workbench still leaks them, which is the same residual gap any parent-side cleanup has and isn't fixable from here.
+    // Nothing else kills these: a child JVM started with ProcessBuilder does not die with its parent, so
+    // before this every workbench restart left the previous run's apps alive holding their ports.
+    // Spring calls this on normal shutdown; a hard kill of the workbench still leaks them.
     @PreDestroy
     void stopEverythingStillRunning() {
         for (String projectId : List.copyOf(running.keySet())) {
@@ -224,7 +242,11 @@ public class SpringBootProjectLauncher {
         }
     }
 
-    // Restart-only liveness probe, for the one case the registry above genuinely cannot answer: a hard kill (kill -9 / taskkill /F) of the workbench leaves its generated JVMs running - they are ProcessBuilder children and do not die with the parent, and @PreDestroy never got to run - so the next workbench starts with an empty `running` map while those apps are still up and still holding their ports. Cleanup would then see "not running" and delete a live project's directory out from under it. Deliberately NOT consulted during normal operation. While the workbench is up, `running` is the single authority on liveness and a port probe could only disagree with it - a second, weaker source of truth is exactly the kind of thing that causes the bug it is meant to prevent. At startup there is nothing to disagree with: the map is empty by construction, so this only ever adds information. Fails closed on purpose. A listening port proves something is there, not that it is the generated app (the OS may have handed the port to an unrelated process since). Treating that as "may still be alive" over-retains a directory at worst, and over-retention is recoverable - the next regenerate or restart tries again - whereas deleting a running app's source is not. Uses the same loopback connect awaitReady already relies on, so it stays portable rather than shelling out to a platform-specific process lister.
+    // Restart-only probe for the one case the registry cannot answer: a hard kill leaves generated JVMs
+    // running and skips @PreDestroy, so the next workbench starts with an empty map while those apps
+    // still hold their ports - and cleanup would then delete a live project's directory.
+    // Deliberately not consulted during normal operation; while the workbench is up, `running` is
+    // authoritative.
     public boolean somethingIsListeningOn(int port) {
         if (port <= 0 || port > 65535) {
             return false;
@@ -245,12 +267,17 @@ public class SpringBootProjectLauncher {
         }
     }
 
-    // SERVER_PORT rather than a CLI argument - Spring Boot's relaxed environment-variable binding picks this up as server.port with no extra plumbing, and it keeps this launcher's own command simple enough that a test can stand in a trivial fake for the real "mvnw spring-boot:run" without having to reproduce Maven's own argument parsing. The wrapper script is referenced by its full absolute path, not the bare "mvnw.cmd" - found empirically, not assumed: on this machine cmd.exe's own bare-command lookup does not fall back to the current directory the way it normally would (some environments set NoDefaultCurrentDirectoryInExePath or an equivalent hardening policy for this), so "cmd /c mvnw.cmd" with -WorkingDirectory pointed at the right place still failed with "'mvnw.cmd' is not recognized" even though `dir` in that same process proved the file was right there. An absolute path sidesteps the lookup question entirely rather than depending on a machine- specific cmd.exe policy nobody would think to check.
+    // SERVER_PORT rather than a CLI argument: Spring's relaxed env binding picks it up as server.port,
+    // and it keeps the command simple enough for a test to substitute a fake for spring-boot:run.
+    // The wrapper is referenced by absolute path - a bare "mvnw.cmd" does not resolve from the current
+    // directory in every cmd.exe configuration.
     private Process startProcess(Path projectDir, int port, Map<String, String> extraEnv) {
         boolean windows = System.getProperty("os.name", "").toLowerCase().contains("win");
         String wrapper = projectDir.resolve(windows ? "mvnw.cmd" : "mvnw").toAbsolutePath().toString();
         boolean hasWrapper = Files.isRegularFile(Path.of(wrapper));
-        // RedCollarTP supplies Maven wrapper metadata but not the wrapper scripts.  Keep the normal wrapper path for templates that have it, and use the installed Maven executable for this otherwise-complete target platform template. Only this path also gets an explicit build step first (see runMavenInstall) - every wrapper-based template/test here already exercises 'mvnw spring-boot:run' on its own, which compiles as part of its own default lifecycle.
+        // RedCollarTP ships Maven wrapper metadata but not the wrapper scripts, so fall back to the installed
+        // Maven executable. Only this path needs the explicit build step below; wrapper-based templates
+        // compile as part of spring-boot:run's own lifecycle.
         if (!hasWrapper) {
             runMavenInstall(projectDir);
         }
@@ -266,7 +293,9 @@ public class SpringBootProjectLauncher {
                     .redirectErrorStream(true);
             builder.environment().put("SERVER_PORT", String.valueOf(port));
             builder.environment().putAll(extraEnv);
-            // Same relaxed-binding mechanism as SERVER_PORT above, and set for a security reason rather than a functional one: Spring Boot binds every interface by default, so a generated project - which ships with the template's permissive dev security config and a Camunda engine behind it - was reachable from anything on the same network the moment it launched. Confirmed with Get-NetTCPConnection against a real generated project launched from templates/camundademo, not assumed: the listener came up on ":::<port>" (the dual-stack wildcard, i.e. all interfaces) without this line and on "127.0.0.1:<port>" with it. Worth noting the wildcard shows up as "::" rather than "0.0.0.0" on this machine, so a check that only looked for 0.0.0.0 would have missed the problem entirely.
+            // Same relaxed binding as SERVER_PORT, set for security rather than function: Spring binds every
+            // interface by default, so a generated project with the template's permissive dev config and a
+            // Camunda engine behind it was reachable from anything on the same network.
             builder.environment().put("SERVER_ADDRESS", "127.0.0.1");
             return builder.start();
         } catch (IOException e) {
@@ -274,7 +303,8 @@ public class SpringBootProjectLauncher {
         }
     }
 
-    // Explicit build step, requested for the RedCollarTP-derived Target Platform launch flow: `mvn clean install -DskipTests` runs to completion BEFORE the run command starts, so a compile or dependency failure is reported here - plainly, with its own log - rather than only surfacing later as an opaque "never started listening on port N". Blocking, like the rest of startProcess's caller; launch() already treats the whole method as one unit of work.
+    // Build before run, so a compile or dependency failure is reported here with its own log rather than
+    // surfacing later as an opaque "never started listening on port N".
     private static final Duration BUILD_TIMEOUT = Duration.ofMinutes(5);
 
     private void runMavenInstall(Path projectDir) {
@@ -319,7 +349,9 @@ public class SpringBootProjectLauncher {
         return resolveMavenExecutable(System.getenv("MAVEN_HOME"), windows);
     }
 
-    // Split out from mavenExecutable() so a test can drive both branches without needing to fake the real environment - mavenExecutable() itself just reads System.getenv/getProperty and calls straight through. Confirmed by direct reproduction on Windows with MAVEN_HOME set to a real install: the old logic here looked for a file literally named "mvn" on every OS, including Windows - but Windows has no such launcher, only "mvn.cmd". The official distribution's zip ships an extensionless "mvn" in the same bin/ folder regardless of platform (the POSIX shell script, inert on Windows), and Files.isExecutable() has no POSIX-permission concept on Windows, so it reports that file as executable too - meaning MAVEN_HOME/bin/mvn was found and returned before MAVEN_HOME/bin/mvn.cmd was ever checked. ProcessBuilder then fails inside start() itself (CreateProcess error=193, "%1 is not a valid Win32 application") before any child process exists, which is why the resulting build.log/launch.log is empty rather than containing a Maven error - reproduced verbatim against this exact failure mode before this fix. mvn.cmd needs no special wrapping to run correctly via ProcessBuilder once it's the one actually resolved - confirmed directly, not assumed.
+    // Split out from mavenExecutable() so both branches are testable without faking the environment.
+    // Windows has no extensionless "mvn" launcher, only "mvn.cmd" - but the official distribution ships
+    // an inert POSIX "mvn" beside it on every platform, so the name alone is not enough to pick one.
     static String resolveMavenExecutable(String mavenHome, boolean windows) {
         String mvnName = windows ? "mvn.cmd" : "mvn";
         if (mavenHome != null && !mavenHome.isBlank()) {
@@ -335,7 +367,9 @@ public class SpringBootProjectLauncher {
         return mvnName;
     }
 
-    // polls rather than trusting a fixed sleep - a cold Maven dependency download takes nothing like a warm one, so a fixed wait would either be too slow for the common case or too short for the first run on a fresh machine Takes the Process because "not listening yet" and "already dead" are not the same thing, and this used to treat them identically: a generated project that failed to COMPILE - the single most likely failure in a live demo, since the delegates are generated from whatever the user modelled - exited within seconds, and the caller then sat here for the full readiness timeout before reporting anything that said why. Checking isAlive() each round turns that into an immediate failure carrying the exit code and the log to go read.
+    // Polls rather than sleeping a fixed time: a cold dependency download takes nothing like a warm one.
+    // Takes the Process because "not listening yet" and "already dead" are different - a project that
+    // fails to compile exits in seconds, and the caller should not wait out the full timeout for it.
     private static void awaitReady(Process process, Path projectDir, int port, Duration timeout) {
         Instant deadline = Instant.now().plus(timeout);
         while (Instant.now().isBefore(deadline)) {

@@ -12,7 +12,21 @@ const STATUS_WORD = {
     FAILED: "Failed",
 };
 
+// Runtime execution statuses are the backend's own (TwinActivityExecutionState), deliberately kept
+// separate from the MODEL/GENERATE/LAUNCH workflow vocabulary above - they describe different things
+// and must never be conflated. Anything unrecognised renders verbatim rather than being guessed at.
+const EXECUTION_ICON = { NOT_STARTED: "○", BOUND: "◐", EXECUTED: "✓", FAILED: "✕" };
+
 const formatTime = (isoTimestamp) => (isoTimestamp ? new Date(isoTimestamp).toLocaleTimeString() : null);
+
+// The executor writes its own timestamp into its output under a name it chooses (validatedAt,
+// assessedAt, enrichedAt, recommendedAt, notifiedAt, ...). Rather than hardcoding that list - which
+// would break for any future component - pick up whichever *At key the executor actually emitted.
+const executedAtFrom = (output) => {
+    if (!output) return null;
+    const key = Object.keys(output).find((k) => /At$/.test(k) && typeof output[k] === "string");
+    return key ? output[key] : null;
+};
 
 const formatDuration = (ms) => {
     if (ms < 1000) return `${ms}ms`;
@@ -32,9 +46,122 @@ const startOf = (history, stage) => {
     return null;
 };
 
-// Phase 3C: onGoToError is a synchronous (bpmnElementId) => boolean the caller supplies - true if the modeler found and selected the element. This component has no idea what a bpmn-js modeler is; it renders whatever structured error the backend sent (see StageError) and reports whether the click landed, so it can show the one required message if not.
-const WorkflowDetailsPanel = ({ workflowState, onClose, onGoToError }) => {
+// Renders ONLY what the runtime execution-state API reported. Every field below is read straight off
+// TwinActivityExecutionState - agentName, status, summary, output - with no inference: an activity is
+// never shown as EXECUTED because it was bound, reached, or recommended, only because the backend
+// itself said status === "EXECUTED". `execution` is null/undefined while nothing has been loaded yet,
+// carries an error flag when the API could not be reached, and holds an empty twins list when the
+// model genuinely has no twin with connected activities.
+const ExecutionSection = ({ execution, openOutputs, onToggleOutput }) => {
+    if (execution === null || execution === undefined) {
+        return null;
+    }
+
+    if (execution.error) {
+        return (
+            <>
+                <div className="workflow-details-eyebrow workflow-details-execution-heading">Execution</div>
+                <div className="workflow-details-empty">Execution state is currently unavailable.</div>
+            </>
+        );
+    }
+
+    const twins = execution.twins || [];
+    const hasAnyActivity = twins.some((twin) => (twin.activities || []).length > 0);
+
+    return (
+        <>
+            <div className="workflow-details-eyebrow workflow-details-execution-heading">Execution</div>
+            {!hasAnyActivity ? (
+                <div className="workflow-details-empty">No connected Twin activities yet.</div>
+            ) : (
+                twins.map((twin) => (
+                    <div key={twin.twinId} className="workflow-details-execution-twin">
+                        {twins.length > 1 && (
+                            <div className="workflow-details-execution-twinid" title={twin.twinId}>
+                                Twin {String(twin.twinId).slice(0, 8)}
+                                {twin.twinStatus ? ` · ${twin.twinStatus}` : ""}
+                            </div>
+                        )}
+                        {(twin.activities || []).map((activity) => {
+                            const state = activity.state || {};
+                            const status = activity.error ? "UNAVAILABLE" : state.status || "NOT_STARTED";
+                            const output = state.output || {};
+                            const outputKeys = Object.keys(output);
+                            const executedAt = executedAtFrom(output);
+                            const rowKey = `${twin.twinId}:${activity.activityId}`;
+                            const outputOpen = Boolean(openOutputs[rowKey]);
+
+                            return (
+                                <div
+                                    key={rowKey}
+                                    className={`workflow-details-stage workflow-details-execution-activity workflow-details-execution-${status.toLowerCase()}`}
+                                >
+                                    <div className="workflow-details-stage-title">
+                                        <span className="workflow-details-stage-icon">{EXECUTION_ICON[status] || "○"}</span>
+                                        <span className="workflow-details-execution-activityid" title={activity.activityId}>
+                                            {activity.activityId}
+                                        </span>
+                                        <span className="workflow-details-stage-status">{status}</span>
+                                    </div>
+
+                                    {activity.error ? (
+                                        <div className="workflow-details-stage-line">
+                                            Execution state could not be read for this activity.
+                                        </div>
+                                    ) : (
+                                        <>
+                                            {state.agentName && (
+                                                <div className="workflow-details-stage-line">Component: {state.agentName}</div>
+                                            )}
+                                            {output.executor && (
+                                                <div className="workflow-details-stage-line">Executor: {output.executor}</div>
+                                            )}
+                                            {executedAt && (
+                                                <div className="workflow-details-stage-line">
+                                                    Executed at: {formatTime(executedAt)}
+                                                </div>
+                                            )}
+                                            {state.summary && (
+                                                <div className="workflow-details-stage-line workflow-details-execution-summary">
+                                                    {state.summary}
+                                                </div>
+                                            )}
+                                            {outputKeys.length > 0 && (
+                                                <>
+                                                    <button
+                                                        type="button"
+                                                        className="workflow-details-output-toggle"
+                                                        onClick={() => onToggleOutput(rowKey)}
+                                                        aria-expanded={outputOpen}
+                                                    >
+                                                        Output {outputOpen ? "▴" : "▾"}
+                                                    </button>
+                                                    {outputOpen && (
+                                                        <pre className="workflow-details-output">
+                                                            {JSON.stringify(output, null, 2)}
+                                                        </pre>
+                                                    )}
+                                                </>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                ))
+            )}
+        </>
+    );
+};
+
+// onGoToError is a synchronous (bpmnElementId) => boolean supplied by the caller, true when the
+// modeler found and selected the element. This component knows nothing about bpmn-js: it renders the
+// structured error the backend sent and shows a message when the click did not land.
+const WorkflowDetailsPanel = ({ workflowState, onClose, onGoToError, execution }) => {
     const [notFoundElementId, setNotFoundElementId] = useState(null);
+    const [openOutputs, setOpenOutputs] = useState({});
 
     useEffect(() => {
         const onKeyDown = (e) => {
@@ -148,6 +275,12 @@ const WorkflowDetailsPanel = ({ workflowState, onClose, onGoToError }) => {
                         </div>
                     );
                 })}
+
+                <ExecutionSection
+                    execution={execution}
+                    openOutputs={openOutputs}
+                    onToggleOutput={(rowKey) => setOpenOutputs((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }))}
+                />
 
                 <div className="workflow-details-eyebrow workflow-details-history-heading">Event History</div>
                 {history.length === 0 ? (

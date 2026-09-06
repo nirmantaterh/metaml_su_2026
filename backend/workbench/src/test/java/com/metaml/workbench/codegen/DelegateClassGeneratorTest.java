@@ -25,7 +25,7 @@ class DelegateClassGeneratorTest {
         assertThat(delegate.beanName()).isEqualTo("calculateInterestService");
         assertThat(delegate.className()).isEqualTo("CalculateInterestService");
         assertThat(delegate.taskName()).isEqualTo("Calculate Interest");
-        // Phase 3B: the BPMN element id that produced this delegate, preserved through generation
+        // The BPMN element id that produced this delegate, preserved through generation
         assertThat(delegate.bpmnElementId()).isEqualTo("ServiceTask_1");
     }
 
@@ -61,7 +61,7 @@ class DelegateClassGeneratorTest {
 
         assertThat(generated).hasSize(1);
         assertThat(generated.get(0).beanName()).isEqualTo("sharedService");
-        // Phase 3B: Task_A and Task_B both point at this bean - neither one is honestly "the"
+        // Task_A and Task_B both point at this bean - neither one is honestly "the"
         // source, so bpmnElementId stays null rather than picking one of them
         assertThat(generated.get(0).bpmnElementId()).isNull();
     }
@@ -183,7 +183,7 @@ class DelegateClassGeneratorTest {
         assertThat(delegate.beanName()).isEqualTo("agentExecutionDelegate");
         assertThat(delegate.className()).isEqualTo("AgentExecutionDelegate");
         assertThat(delegate.kind()).isEqualTo(DelegateKind.TASK_LISTENER);
-        // Phase 3B: the userTask's own id, same chain as the serviceTask case above - a
+        // The userTask's own id, same chain as the serviceTask case above - a
         // taskListener's element id is the userTask that carries it, not the listener itself
         // (a <camunda:taskListener> has no id of its own in the BPMN)
         assertThat(delegate.bpmnElementId()).isEqualTo("Task_A");
@@ -223,7 +223,7 @@ class DelegateClassGeneratorTest {
                 .containsExactlyInAnyOrder(DelegateKind.SERVICE_TASK, DelegateKind.TASK_LISTENER);
     }
 
-    // real bug this closes: dedup used to be keyed on the raw bean name, so two DIFFERENT bean
+    // Dedup is keyed on the generated class name, not the raw bean name: two DIFFERENT bean
     // names that sanitize down to the same Java identifier (toClassName maps every illegal
     // character to '_') both survived as separate GeneratedDelegates - which then fought over the
     // same file the moment SpringBootProjectGenerator wrote them to disk, with whichever one got

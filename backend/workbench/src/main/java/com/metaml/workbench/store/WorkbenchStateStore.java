@@ -9,7 +9,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.metaml.workbench.model.ActivityLink;
-import com.metaml.workbench.model.ProcessModel;
 import com.metaml.workbench.model.TwinProcess;
 
 import java.io.IOException;
@@ -22,7 +21,17 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
-// keeps the workbench's own models/twins in a json file, since Camunda's own persistence doesn't know these maps exist. rewrites the whole file every time - fine at demo scale. never throws to the caller: a missing or corrupt file just starts empty instead of failing boot.
+// Keeps the workbench's own twin processes in a json file, since Camunda's own persistence doesn't
+// know that map exists - specifically, a twin's activityLinks (what connectActivity records) are
+// never written to Camunda at all, so nothing else can reconstruct them. Rewrites the whole file
+// every time - fine at demo scale. Never throws to the caller: a missing or corrupt file just
+// starts empty instead of failing boot.
+//
+// Process models are NOT persisted here. They live in the H2-backed ProcessModelArchiveStore, which
+// is and always was their real persistence; this file used to carry a redundant second copy of them
+// plus a restore-time fallback for models the archive had never seen. Both were removed - the
+// archive is the single authoritative source for models. An older file that still contains a
+// "models" key reads fine and is simply ignored (FAIL_ON_UNKNOWN_PROPERTIES is disabled below).
 @Component
 public class WorkbenchStateStore {
 
@@ -42,9 +51,9 @@ public class WorkbenchStateStore {
         this.enabled = enabled;
     }
 
-    public record Snapshot(List<ProcessModel> models, List<TwinProcess> twins) {
+    public record Snapshot(List<TwinProcess> twins) {
         static Snapshot empty() {
-            return new Snapshot(List.of(), List.of());
+            return new Snapshot(List.of());
         }
     }
 
@@ -53,23 +62,18 @@ public class WorkbenchStateStore {
             return Snapshot.empty();
         }
         if (!Files.isRegularFile(file)) {
-            logger.info("No workbench state file at {}, starting with no models or twins",
+            logger.info("No workbench state file at {}, starting with no twins",
                     file.toAbsolutePath());
             return Snapshot.empty();
         }
         try {
             StateDto dto = mapper.readValue(file.toFile(), StateDto.class);
-            List<ProcessModel> models = new ArrayList<>();
-            for (ProcessModelDto m : nullToEmpty(dto.models)) {
-                models.add(m.toModel());
-            }
             List<TwinProcess> twins = new ArrayList<>();
             for (TwinProcessDto t : nullToEmpty(dto.twins)) {
                 twins.add(t.toTwin());
             }
-            logger.info("Restored {} process model(s) and {} twin(s) from {}",
-                    models.size(), twins.size(), file.toAbsolutePath());
-            return new Snapshot(models, twins);
+            logger.info("Restored {} twin(s) from {}", twins.size(), file.toAbsolutePath());
+            return new Snapshot(twins);
         } catch (IOException | RuntimeException e) {
             logger.warn("Could not read workbench state from {}, carrying on with nothing restored: {}",
                     file.toAbsolutePath(), e.toString());
@@ -77,17 +81,15 @@ public class WorkbenchStateStore {
         }
     }
 
-    public void save(Collection<ProcessModel> models, Collection<TwinProcess> twins) {
+    public void save(Collection<TwinProcess> twins) {
         if (!enabled) {
             return;
         }
-        // Phase 9/10 red team finding: the DTO snapshot used to be built OUTSIDE this lock, so two concurrent persistState() calls could interleave such that the logically OLDER snapshot won the write lock LAST, silently overwriting a file that a moment earlier correctly held newer data - a pure lost update, reproduced empirically (two threads racing save() with a deliberately older and newer snapshot; the newer one's already-written change vanished). Snapshotting and writing now happen inside the same lock, so one caller's full save() always finishes - snapshot included - before the next one can start theirs.
+        // Snapshot and write inside the same lock. Built outside it, two concurrent saves could interleave so
+        // that the older snapshot won the lock last and silently overwrote newer data - a lost update,
+        // reproduced with two threads racing save().
         synchronized (writeLock) {
             StateDto dto = new StateDto();
-            dto.models = new ArrayList<>();
-            for (ProcessModel model : models) {
-                dto.models.add(ProcessModelDto.of(model));
-            }
             dto.twins = new ArrayList<>();
             for (TwinProcess twin : twins) {
                 dto.twins.add(TwinProcessDto.of(twin));
@@ -119,40 +121,11 @@ public class WorkbenchStateStore {
 
     // plain dtos instead of binding straight to the model classes - Jackson would replace TwinProcess's CopyOnWriteArrayList/newKeySet fields with plain ones and silently drop the thread safety the bridge's forwarded-set guard depends on
     static final class StateDto {
-        public List<ProcessModelDto> models;
         public List<TwinProcessDto> twins;
     }
 
-    static final class ProcessModelDto {
-        public String id;
-        public String name;
-        public String bpmnXml;
-        public Long createdAtEpochMillis;
-        public String processDefinitionId;
-        // absent entirely in any file written before Phase 1 - Jackson leaves this null when reading one of those, which toModel() below already treats as "unowned/legacy"
-        public String tenantId;
-
-        static ProcessModelDto of(ProcessModel model) {
-            ProcessModelDto dto = new ProcessModelDto();
-            dto.id = model.getId();
-            dto.name = model.getName();
-            dto.bpmnXml = model.getBpmnXml();
-            dto.createdAtEpochMillis = model.getCreatedAt() == null
-                    ? null
-                    : model.getCreatedAt().toEpochMilli();
-            dto.processDefinitionId = model.getProcessDefinitionId();
-            dto.tenantId = model.getTenantId();
-            return dto;
-        }
-
-        ProcessModel toModel() {
-            return new ProcessModel(id, name, bpmnXml,
-                    createdAtEpochMillis == null ? null : Instant.ofEpochMilli(createdAtEpochMillis),
-                    processDefinitionId, tenantId);
-        }
-    }
-
-    // TwinProcess no longer carries a forwardedBridgeActivities field to leave out here: the bridge dedupe guard now derives straight from the twin's own evolvedAgent_* runtime/history variables (see WorkbenchServiceImpl.alreadyEvolved), which already survive a restart on their own, so there was never anything to persist separately. Governance counters still don't survive a restart, but that isn't protecting a quota that still exists either.
+    // Nothing here for forwardedBridgeActivities: the bridge dedupe guard derives from the twin's own
+    // evolvedAgent_* history (see WorkbenchServiceImpl.alreadyEvolved), which already survives a restart.
     static final class TwinProcessDto {
         public String id;
         public String modelId;
@@ -161,7 +134,7 @@ public class WorkbenchStateStore {
         public String originalProcessId;
         public String twinProcessId;
         public String projectId;
-        // Phase 1 (tenant identity) - absent in any snapshot written before this phase, which toTwin() below already treats as "unowned/legacy", same as ProcessModelDto
+        // Absent in any snapshot written before tenant identity existed; toTwin() treats that as unowned.
         public String tenantId;
         public String status;
         public Long launchedAtEpochMillis;

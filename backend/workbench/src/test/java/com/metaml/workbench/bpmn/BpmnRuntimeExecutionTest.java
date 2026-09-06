@@ -23,7 +23,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-// Phase 9 Runtime Completion & End-to-End Proof Test Suite:
+// Runtime completion and end-to-end proof:
 // Exercises real, standalone Camunda process and DMN engines to prove runtime execution for:
 // 1. Script Task (JUEL expression execution & process variable setting)
 // 2. Embedded SubProcess (Twin generation, deployment, task completion, process completion)
@@ -31,7 +31,7 @@ import org.junit.jupiter.api.Test;
 // 4. Business Rule Task (DMN decision table deployment, execution, result variable setting)
 // 5. Intermediate Signal Catch Event (Signal event subscription & continuation)
 // 6. Multi-Instance User Task (Literal cardinality execution in twin)
-class Phase9RuntimeExecutionTest {
+class BpmnRuntimeExecutionTest {
 
     private final TwinModelGenerator generator = new TwinModelGenerator();
     private ProcessEngine engine;

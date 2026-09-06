@@ -289,7 +289,11 @@ public class SpringBootProjectGenerator {
         writeTargetPlatformSources(projectDir, proxy.sources());
         writeTargetPlatformSources(projectDir, twin.sources());
 
-        // A serviceTask with camunda:type="external" (RedCollar's own real BPMNs are built entirely from these - see ExternalTaskWorkerGenerator's own comment) is a wait state TargetPlatformSourceGenerator above never touches: it only recognises delegateExpression/class. Without a worker subscribed to its topic the token parks there forever and nothing - including every signal downstream of it - ever runs. ExternalTaskWorkerGenerator derives the GeneratedExternalTaskWorker import by stripping the LAST segment off packageName (see its own renderTwinWorkerSource comment) - so the worker package must be "<interface package>.<side>", not "<side>.worker", to actually land one level under where writeWorkerInterface below puts the interface itself.
+        // A serviceTask with camunda:type="external" is a wait state TargetPlatformSourceGenerator never
+        // touches - it only recognises delegateExpression/class - so without a worker on its topic the token
+        // parks there forever and nothing downstream of it ever runs.
+        // The worker package must be "<interface package>.<side>": ExternalTaskWorkerGenerator derives its
+        // GeneratedExternalTaskWorker import by stripping the last segment off packageName.
         List<GeneratedWorker> proxyWorkers = externalTaskWorkerGenerator.generate(proxyBpmnXml,
                 TARGET_PLATFORM_BASE_PACKAGE_LITERAL + ".worker.proxy", false);
         List<GeneratedWorker> twinWorkers = externalTaskWorkerGenerator.generate(twinBpmnXml,
@@ -484,7 +488,10 @@ public class SpringBootProjectGenerator {
 
     // NotificationBridge ships with the template alongside the messaging package - where the professor said RabbitMQ belongs: "we'll add the rabbit in Q to the template repository. And then that becomes your updated generated set." copyTemplate() + rewritePackage() handle the rest; nothing is generated here.
 
-    // Human-readable on disk (slug of the process display name, falling back to processKey when there is no display name), with a numeric suffix only when that name is already taken - re-Generating the same process, or two different processes sharing a display name, are both "cosmetic" collisions here, never an identity problem: projectId (always a freshly minted UUID) stays the real identity everywhere else (generatedProjects map key, RabbitMQ messagingNamespace, persisted workflow history), recorded inside PROJECT_METADATA_FILE - see writeProjectMetadata/findProjectDirectoryById, which is how delete()/scanExisting() find the right directory again without the folder name having to equal projectId any more.
+    // Human-readable directory name (slug of the display name, falling back to the process key), with a
+    // numeric suffix when that name is already taken. Collisions here are cosmetic: projectId stays the
+    // real identity everywhere else, and PROJECT_METADATA_FILE records it so the directory can be found
+    // again without the folder name having to equal it.
     private Path resolveProjectDirectory(String projectId, String label) {
         Path root = outputDirectory.toAbsolutePath().normalize();
         String base = slugify(label);
@@ -500,7 +507,7 @@ public class SpringBootProjectGenerator {
         return candidate;
     }
 
-    // label is a human display name - user input, unlike the old bare-UUID folder name - so it is never trusted as a raw path segment. Strips anything outside the safe charset, then strips leading dots/hyphens too so a label that would otherwise slugify to ".." (or "-", "-2", ...) can never be mistaken for a filesystem special segment; safeChildOf below is the second, independent check on the same risk.
+    // label is a human display name and therefore user input, so it is never trusted as a raw path segment. Strips anything outside the safe charset, then strips leading dots/hyphens too so a label that would otherwise slugify to ".." (or "-", "-2", ...) can never be mistaken for a filesystem special segment; safeChildOf below is the second, independent check on the same risk.
     private static String slugify(String raw) {
         if (raw == null) {
             return "";
@@ -627,7 +634,9 @@ public class SpringBootProjectGenerator {
         return resolved;
     }
 
-    // Reconstructs the in-memory registry from disk rather than a separate store that could drift. Directories without exactly one non-twin .bpmn file are skipped, not guessed at. projectId comes from the directory's own declared identity (PROJECT_METADATA_FILE) now that the folder name is a human label, not the id itself - falls back to the folder name only for a directory generated before that field existed, whose folder name still literally IS its id.
+    // Rebuilt from disk rather than a separate store that could drift. Directories without exactly one
+    // non-twin .bpmn are skipped, not guessed at. projectId comes from PROJECT_METADATA_FILE now that the
+    // folder name is a human label, falling back to the folder name for directories predating that field.
     public List<GeneratedProject> scanExisting() {
         if (!Files.isDirectory(outputDirectory)) {
             // nothing has ever been generated against this output directory - a fresh install, or one still on defaults, not an error
@@ -656,7 +665,9 @@ public class SpringBootProjectGenerator {
         return found;
     }
 
-    // Directory lookup by declared identity now that the folder name is a human label rather than the projectId itself (see resolveProjectDirectory) - mirrors scanExisting()'s own fallback to the folder name for a directory generated before PROJECT_METADATA_FILE carried a projectId. Only ever returns a direct child of outputDirectory (Files.list never descends), so callers inherit the same path-traversal guarantee the old bare root.resolve(projectId) had.
+    // Lookup by declared identity, since the folder name is now a human label rather than the projectId.
+    // Only ever returns a direct child of outputDirectory, keeping the path-traversal guarantee the old
+    // root.resolve(projectId) had.
     Path findProjectDirectoryById(String projectId) {
         Path root = outputDirectory.toAbsolutePath().normalize();
         if (!Files.isDirectory(root)) {
@@ -730,7 +741,12 @@ public class SpringBootProjectGenerator {
         }
     }
 
-    // Prefers the project's own declared identity (PROJECT_METADATA_FILE) over guessing from the .bpmn files under processes/, so this works the same for one BPMN, two authored BPMNs, or any future generation mode without a mode-specific filename rule here. A declared key is only trusted when its own processes/<key>.bpmn file is actually still there - a directory whose real artifact was deleted or corrupted out from under it must still read as unrecoverable, not be taken on the metadata's word alone. This also means a second (or third) .bpmn file sitting alongside the declared one - exactly what generateWithAuthoredTwin produces - is no longer an "ambiguous" shape the way it was for the old file-counting heuristic: the metadata already resolves which file is the project's own identity, so an additional file is just not a question this method needs to answer. Falls back to the older "exactly one non-twin .bpmn file" heuristic only for a project directory generated before this metadata file existed - preserving discoverability for already-generated projects rather than orphaning them.
+    // Prefers the project's declared identity over guessing from the .bpmn files under processes/, so one
+    // BPMN, two authored BPMNs and any future mode all work without a mode-specific filename rule.
+    // A declared key is only trusted when its own processes/<key>.bpmn is still present - a directory
+    // whose real artifact was deleted must still read as unrecoverable.
+    // Falls back to the older "exactly one non-twin .bpmn" heuristic for projects generated before this
+    // metadata existed, rather than orphaning them.
     private static String findProcessKey(Path projectDir) {
         String declared = readDeclaredProcessKey(projectDir);
         if (declared != null) {
@@ -893,13 +909,18 @@ public class SpringBootProjectGenerator {
     }
 
     private void writeWorkers(Path projectDir, List<GeneratedWorker> workers) {
+        Set<Path> writtenFiles = new LinkedHashSet<>();
         for (GeneratedWorker worker : workers) {
             // Each worker's sourceCode contains a package declaration whose path we derive here
             String packageLine = worker.sourceCode().lines()
                     .filter(l -> l.startsWith("package ")).findFirst().orElse("");
             String packageName = packageLine.replace("package ", "").replace(";", "").trim();
             Path packageDir = projectDir.resolve("src/main/java").resolve(packageName.replace('.', '/'));
-            writeFile(packageDir.resolve(worker.className() + ".java"), worker.sourceCode());
+            Path targetFile = packageDir.resolve(worker.className() + ".java");
+            if (!writtenFiles.add(targetFile.toAbsolutePath().normalize())) {
+                throw new IllegalStateException("Duplicate worker file path would overwrite existing worker: " + targetFile);
+            }
+            writeFile(targetFile, worker.sourceCode());
         }
     }
 
@@ -943,7 +964,12 @@ public class SpringBootProjectGenerator {
         return slug.length() > 60 ? slug.substring(0, 60) : slug;
     }
 
-    // Maps each BPMN signal name to the Twin external-task topic its catch event gates entry into - which Twin activity a given signal's release is actually permission to run. Neither supplied process model has a signal throw event (see SignalBroadcaster's own comment), so a signal catch event's own outgoing sequence flow to an external-task service task is the only place this relationship is expressed in the BPMN itself. Used only to choose which activity's task/response queue pair a signal's REQUEST/RESPONSE handoff routes through (see writeSignalBroadcaster's deliverTo) - the signal remains the mechanism that decides WHEN a handoff happens, unchanged. Scans every SequenceFlow in the model for one whose sourceRef is this catch event, rather than calling catchEvent.getOutgoing() - that convenience method only returns flows listed in an explicit <bpmn2:outgoing> child element, which Camunda Modeler always writes but a BPMN authored (or generated) without that redundant, optional hint - relying only on sequenceFlow's own sourceRef/targetRef attributes, exactly as the BPMN 2.0 spec allows - would silently produce zero matches. Reading sourceRef/targetRef directly is what actually works for any conformant BPMN, not just the shape one particular tool happens to export.
+    // Maps each BPMN signal name to the Twin external-task topic its catch event gates entry into.
+    // Neither model has a signal throw event, so the catch event's outgoing flow into an external-task
+    // service task is the only place that relationship is expressed in the BPMN at all.
+    // Scans every SequenceFlow's sourceRef rather than calling getOutgoing(), which only returns flows
+    // listed in an explicit <outgoing> child - optional per the spec, so a conformant BPMN written
+    // without it would silently match nothing.
     private static Map<String, String> mapSignalToGatedTwinTopic(BpmnModelInstance twinModel) {
         Map<String, String> result = new LinkedHashMap<>();
         for (IntermediateCatchEvent catchEvent : twinModel.getModelElementsByType(IntermediateCatchEvent.class)) {
@@ -974,7 +1000,9 @@ public class SpringBootProjectGenerator {
         return result;
     }
 
-    // One task queue + one response queue per Main<->Twin communication activity (a Twin external-task topic) - "N communication activities x 2 queues = 2N total", per Joanna's explicit requirement. Scoped by messagingNamespace (this generation's own process-key slug plus its own generated projectId - both already-existing identity concepts, reused rather than invented) so two independently generated projects can never physically share a queue even with identically-named BPMN activities.
+    // One task queue plus one response queue per Main<->Twin communication activity. Scoped by
+    // messagingNamespace (process-key slug plus generated projectId) so two independently generated
+    // projects can never share a queue even with identically named activities.
     private record ActivityQueueIdentity(String topic, String taskQueueName, String taskRoutingKey,
             String responseQueueName, String responseRoutingKey, String javaIdentifier) {
     }
@@ -1000,7 +1028,12 @@ public class SpringBootProjectGenerator {
         return identities;
     }
 
-    // Generates this platform's RabbitMQ messaging layer as separate, readable Java source files (not embedded string literals a developer has to dig for): one task queue plus one response queue per Main<->Twin communication activity - a Twin external-task topic. Five pieces, generated together, one class per responsibility: - RabbitMqConfig: connection/topology metadata, exchange, and one queue+binding pair per Twin activity, gated on metaml.messaging.enabled=true. - TaskQueuePublisher / TaskQueueListener: Main asks Twin to run an activity (publish), and the real consumer that performs the actual Camunda signal delivery releasing Twin's waiting execution (listen). - ResponseQueuePublisher / ResponseQueueListener: Twin reports an activity's completion back to Main (publish), and the real consumer that releases Main's waiting execution (listen). SignalBroadcaster (unchanged) still decides WHEN a handoff happens - REQUEST routes through the gated activity's task queue, RESPONSE through its response queue (see mapSignalToGatedTwinTopic and deliverTo). Every Twin activity gets a queue pair regardless of whether a shared signal happens to gate it, so the topology itself is always complete and inspectable at the broker even where a signal never resolves for a particular activity.
+    // Generates the RabbitMQ messaging layer as readable Java source rather than embedded string
+    // literals: RabbitMqConfig for topology, plus task- and response-queue publisher/listener pairs.
+    // SignalBroadcaster still decides WHEN a handoff happens - REQUEST routes through the gated
+    // activity's task queue, RESPONSE through its response queue.
+    // Every Twin activity gets a queue pair whether or not a signal gates it, so the topology is always
+    // complete and inspectable at the broker.
     private void writeRabbitMqMessaging(Path projectDir, String basePackage, String messagingNamespace,
             List<String> twinTopics, Map<String, String> signalToGatedTwinTopic) {
         String subPackage = basePackage + ".messaging";
@@ -1533,7 +1566,9 @@ public class SpringBootProjectGenerator {
         writeFile(packageDir.resolve("SignalBroadcaster.java"), source);
     }
 
-    // Generic Main/Twin pairing metadata, keyed only by the caller-supplied business key every generated /start endpoint already accepts - no BPMN- or process-specific knowledge. The first process instance to register a given business key is classified "initiator" (the caller-facing sense of "Main" in this generated platform); the next instance to register the SAME key is classified "responder" ("Twin"). A business key is pairing/correlation data only - it is not itself the communication mechanism. See SignalBroadcaster for how these roles turn each shared signal into a real, targeted Main -> Twin -> Main handoff rather than an undifferentiated broadcast. Generated unconditionally (every controller depends on it), even for a single-process project where pairing never actually happens.
+    // Generic Main/Twin pairing keyed only on the caller-supplied business key every generated /start
+    // endpoint already accepts - no process-specific knowledge. The first instance to register a key is
+    // the initiator, the next one to register the same key is the responder.
     private void writePairRegistry(Path projectDir, String basePackage) {
         String subPackage = basePackage + ".coordination";
         String source = """
@@ -1623,7 +1658,11 @@ public class SpringBootProjectGenerator {
         writeFile(packageDir.resolve("GeneratedExternalTaskWorker.java"), source);
     }
 
-    // Generates the pluggable decision boundary every Twin worker calls instead of hardcoding a simulation inline (see ExternalTaskWorkerGenerator.renderTwinWorkerSource). Lands in the SAME package as the twin workers themselves (twinWorkerPackage - not basePackage, which is one level up) so the generated worker source needs no import for it. Deliberately NOT paired with a @ConditionalOnMissingBean default @Component: that combination looks reasonable but silently fails to register at all - @ConditionalOnMissingBean is only reliably honored inside @Configuration/@AutoConfiguration classes, not on arbitrary component-scanned beans, so with zero other implementations on the classpath the "fallback" bean never gets created and every Twin worker's constructor injection fails at startup (found this the hard way: GenericPlatformMechanismsEndToEndTest/RabbitMqStress30ActivityTest failing with "No qualifying bean of type TwinDecisionAgent available"). The worker instead takes an ObjectProvider<TwinDecisionAgent> and calls getIfAvailable() - see renderTwinWorkerSource - which returns null cleanly with zero implementations registered and the single implementation the moment a real @Component providing one exists. No generated code to touch either way.
+    // The pluggable decision boundary every Twin worker calls instead of hardcoding a simulation inline.
+    // Lands in the twin workers' own package so the generated worker needs no import for it.
+    // Deliberately not a @ConditionalOnMissingBean default @Component: that is only honoured reliably
+    // inside @Configuration classes, so on a component-scanned bean the fallback never registers at all
+    // and the generated app fails to start.
     private void writeTwinDecisionAgentInterface(Path projectDir, String twinWorkerPackage) {
         String interfaceSource = """
                 package %1$s;
@@ -1726,7 +1765,9 @@ public class SpringBootProjectGenerator {
         writeFile(packageDir.resolve("ExternalTaskPoller.java"), source);
     }
 
-    // Enables Spring scheduling generically for the whole generated platform, and gives it a small configurable thread pool instead of Spring Boot's default single-thread scheduler. With one thread, ExternalTaskPoller (polling N topics) and SignalBroadcaster (when present) serialize on the same background thread, so a slow or blocked worker for one topic can delay every other topic's polling and all signal broadcasting. Pool size is small and configurable (metaml.scheduling.pool-size, default 4) - this is not a distributed task framework, just enough headroom that unrelated scheduled work does not queue behind one slow worker. Deliberately generated unconditionally (see generateWithAuthoredTwin) rather than folded into SignalBroadcaster: a BPMN pair with external tasks but no signals must still get a working ExternalTaskPoller, and @EnableScheduling must not depend on whether signals happen to exist.
+    // Enables scheduling for the generated platform with a small configurable pool (metaml.scheduling.
+    // pool-size) rather than Spring's default single thread - otherwise ExternalTaskPoller and
+    // SignalBroadcaster serialise, and one slow topic delays every other topic and all broadcasting.
     private void writeSchedulingConfig(Path projectDir, String basePackage) {
         String workerPackage = basePackage + ".worker";
         String source = """
@@ -1757,7 +1798,9 @@ public class SpringBootProjectGenerator {
         writeFile(packageDir.resolve("SchedulingConfig.java"), source);
     }
 
-    // Generic, read-only introspection endpoint for ANY process instance in the generated platform's engine - not tied to Manufacturing, Twin, or any particular BPMN shape. Exists so tests (and any real caller) can assert against the engine's own actual runtime state - active activity ids and process variables straight from RuntimeService - instead of only ever having log text to check. Generated once per project (not once per authored BPMN), since it takes a processInstanceId at call time and works the same regardless of which deployed process that instance belongs to.
+    // Read-only introspection for any process instance in the generated engine, so tests and callers can
+    // assert against real runtime state - active activity ids and variables from RuntimeService - rather
+    // than log text. Generated once per project, since it takes a processInstanceId at call time.
     private void writeProcessStatusController(Path projectDir, String basePackage) {
         String source = """
                 package %1$s.status;

@@ -17,7 +17,16 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
-// Auto-derives a Twin BPMN for the RedCollarTP/TargetPlatform pipeline by mirroring the proxy's own graph, rather than TwinModelGenerator's rewrite into receiveTask/serviceTask pairs waiting on ${twinAutomationDelegate} - a bean that belongs to the older camundademo-based governance/ evolve twin workflow and does not exist in a generated Target Platform. A real, hand-authored RedCollar Twin (Twin-camunda.bpmn) turns out to already BE this: the same signal catch events (same signalRef, so the shared name SignalBroadcaster matches on is preserved) and the same external-task activities, just under their own topic names. Two things change, everything else is copied verbatim: - the process element's own id/name get a "_twin" / " (twin)" suffix - it has to be a distinct process definition, not a second copy of the same one - every camunda:topic gets a "Twin" suffix - external-task topics are a GLOBAL subscription namespace in one Camunda engine (see ExternalTaskPoller), so proxy and twin would otherwise both answer to the identical topic and each other's workers signalRef / signal names are deliberately left untouched - that shared name is the entire mechanism SignalBroadcaster/PairRegistry use to recognize proxy and twin as synchronizing on the same point (see TargetPlatformMessagingGenerator). Activity ids are also left untouched: they only need to be unique within one process definition, not across two.
+// Derives a Target Platform Twin BPMN by mirroring the proxy's graph verbatim, except for two
+// things. TwinModelGenerator's receiveTask/serviceTask rewrite is not used here: it waits on
+// ${twinAutomationDelegate}, a bean a generated Target Platform does not have.
+//
+// - process id/name get a "_twin" suffix, so it is a distinct process definition
+// - every camunda:topic gets a "Twin" suffix, because external-task topics are global to the engine
+//   and proxy and twin would otherwise steal each other's tasks
+//
+// Signal names and activity ids are deliberately left alone: the shared signal name is how
+// SignalBroadcaster/PairRegistry recognise proxy and twin as synchronising on the same point.
 @Component
 public class TargetPlatformTwinMirrorGenerator {
 

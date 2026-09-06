@@ -1,8 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Col, Row, Button, Card, ListGroup, Container } from "react-bootstrap";
 
-
-import { WorkbenchRoutes } from "../../routes";
 import { getSample } from "../../services/workbench/WorkbenchService";
 
 const SamplPage = () => {

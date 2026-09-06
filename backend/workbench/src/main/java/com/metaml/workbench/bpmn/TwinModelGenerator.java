@@ -63,6 +63,7 @@ public class TwinModelGenerator {
     private static final Logger logger = LoggerFactory.getLogger(TwinModelGenerator.class);
 
     private static final String CAMUNDA_NS = "http://camunda.org/schema/1.0/bpmn";
+    private static final String BPMN_PREFIX = "bpmn";
     private static final String METAML_NAMESPACE = "http://metaml.com/schema/bpmn/metaml";
     private static final String METAML_PREFIX = "metaml";
     private static final String EXTENSION_ELEMENTS_NAME = "extensionElements";
@@ -129,6 +130,9 @@ public class TwinModelGenerator {
         cursor = copyGraph(cursor, flows, copied, process.getId(), subProcessWrappedActivityIds(process));
 
         BpmnModelInstance twin = cursor.done();
+        twin.getDocument().registerNamespace(
+                BPMN_PREFIX,
+                org.camunda.bpm.model.bpmn.impl.BpmnModelConstants.BPMN20_NS);
         twin.getDocument().registerNamespace(METAML_PREFIX, METAML_NAMESPACE);
         twin.getDefinitions().setId(DEFINITIONS_ID_PREFIX + twinProcessId(process));
         stabilizeMessageIds(twin);
@@ -414,7 +418,10 @@ public class TwinModelGenerator {
         if (node instanceof ScriptTask) {
             return at.scriptTask(id);
         }
-        if (node instanceof BusinessRuleTask) {
+        if (node instanceof BusinessRuleTask rule) {
+            if (isBareBusinessRuleTask(rule)) {
+                return appendSyncThenAutomate(at, id);
+            }
             return at.businessRuleTask(id);
         }
         if (node instanceof CallActivity) {
@@ -446,6 +453,34 @@ public class TwinModelGenerator {
                 .sequenceFlowId(flowToAutomationId(id))
                 .serviceTask(automationTaskId(id))
                 .camundaDelegateExpression(TWIN_DELEGATE_EXPRESSION);
+    }
+
+    private static boolean isBareBusinessRuleTask(BusinessRuleTask rule) {
+        String decisionRef = rule.getCamundaDecisionRef();
+        if (isBlank(decisionRef)) {
+            decisionRef = rule.getAttributeValue("decisionRef");
+        }
+        String delegateExpr = rule.getCamundaDelegateExpression();
+        if (isBlank(delegateExpr)) {
+            delegateExpr = rule.getAttributeValue("delegateExpression");
+        }
+        String cls = rule.getCamundaClass();
+        if (isBlank(cls)) {
+            cls = rule.getAttributeValue("class");
+        }
+        String expr = rule.getCamundaExpression();
+        if (isBlank(expr)) {
+            expr = rule.getAttributeValue("expression");
+        }
+        String type = rule.getCamundaType();
+        if (isBlank(type)) {
+            type = rule.getAttributeValue("type");
+        }
+        String topic = rule.getCamundaTopic();
+        if (isBlank(topic)) {
+            topic = rule.getAttributeValue("topic");
+        }
+        return isBlank(decisionRef) && isBlank(delegateExpr) && isBlank(cls) && isBlank(expr) && isBlank(type) && isBlank(topic);
     }
 
     private static final java.util.regex.Pattern LITERAL_CARDINALITY = java.util.regex.Pattern.compile("\\d+");
@@ -630,8 +665,9 @@ public class TwinModelGenerator {
                 }
             }
 
-            // Copy Business Rule Task attributes (decisionRef, decisionBinding, etc.)
+            // Copy Business Rule Task attributes (Case A: DMN, Case B: explicit Camunda implementation)
             if (source instanceof BusinessRuleTask && target instanceof BusinessRuleTask targetRule) {
+                // Case A: DMN configuration
                 String decisionRef = sourceEl.getAttributeNS(CAMUNDA_NS, "decisionRef");
                 if (isBlank(decisionRef)) {
                     decisionRef = sourceEl.getAttribute("decisionRef");
@@ -639,13 +675,63 @@ public class TwinModelGenerator {
                 if (!isBlank(decisionRef)) {
                     targetRule.setCamundaDecisionRef(decisionRef);
                 }
-                String binding = sourceEl.getAttributeNS(CAMUNDA_NS, "decisionBinding");
+                String binding = sourceEl.getAttributeNS(CAMUNDA_NS, "decisionRefBinding");
+                if (isBlank(binding)) {
+                    binding = sourceEl.getAttributeNS(CAMUNDA_NS, "decisionBinding");
+                }
+                if (isBlank(binding)) {
+                    binding = sourceEl.getAttribute("decisionRefBinding");
+                }
+                if (isBlank(binding)) {
+                    binding = sourceEl.getAttribute("decisionBinding");
+                }
                 if (!isBlank(binding)) {
                     targetRule.setCamundaDecisionRefBinding(binding);
                 }
                 String resultVar = sourceEl.getAttributeNS(CAMUNDA_NS, "resultVariable");
                 if (!isBlank(resultVar)) {
                     targetRule.setCamundaResultVariable(resultVar);
+                }
+                String mapDecisionResult = sourceEl.getAttributeNS(CAMUNDA_NS, "mapDecisionResult");
+                if (!isBlank(mapDecisionResult)) {
+                    targetRule.setCamundaMapDecisionResult(mapDecisionResult);
+                }
+
+                // Case B: Explicit Camunda implementation
+                String delegateExpr = sourceEl.getAttributeNS(CAMUNDA_NS, "delegateExpression");
+                if (isBlank(delegateExpr)) {
+                    delegateExpr = sourceEl.getAttribute("delegateExpression");
+                }
+                if (!isBlank(delegateExpr)) {
+                    targetRule.setCamundaDelegateExpression(delegateExpr);
+                }
+                String cls = sourceEl.getAttributeNS(CAMUNDA_NS, "class");
+                if (isBlank(cls)) {
+                    cls = sourceEl.getAttribute("class");
+                }
+                if (!isBlank(cls)) {
+                    targetRule.setCamundaClass(cls);
+                }
+                String expr = sourceEl.getAttributeNS(CAMUNDA_NS, "expression");
+                if (isBlank(expr)) {
+                    expr = sourceEl.getAttribute("expression");
+                }
+                if (!isBlank(expr)) {
+                    targetRule.setCamundaExpression(expr);
+                }
+                String type = sourceEl.getAttributeNS(CAMUNDA_NS, "type");
+                if (isBlank(type)) {
+                    type = sourceEl.getAttribute("type");
+                }
+                if (!isBlank(type)) {
+                    targetRule.setCamundaType(type);
+                }
+                String topic = sourceEl.getAttributeNS(CAMUNDA_NS, "topic");
+                if (isBlank(topic)) {
+                    topic = sourceEl.getAttribute("topic");
+                }
+                if (!isBlank(topic)) {
+                    targetRule.setCamundaTopic(topic);
                 }
             }
 

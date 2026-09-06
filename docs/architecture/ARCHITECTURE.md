@@ -1,10 +1,10 @@
 # Digital Twin Runtime Architecture — Version 1.0
 
-**Status:** Version 1.0 (converged after Phase 7.5)
+**Status:** Version 1.0
 **Scope:** `backend/workbench` (domain/runtime logic) and `backend/wbapi` (Spring Boot host, REST API, embedded Camunda 7.22.0 engine)
 **Companion documents:** [Architecture Decision Records](adr/) · [Evolution Timeline](EVOLUTION_TIMELINE.md) · [Runtime Diagrams](DIAGRAMS.md)
 
-This document is the permanent architectural record for the MetaML Workbench Digital Twin runtime. It describes the system exactly as implemented as of Phase 7.5's completion — no proposed changes, no alternative designs, no aspirational future state. Every claim below is backed by either source code (cited by file and method) or an empirical investigation recorded in the [Evolution Timeline](EVOLUTION_TIMELINE.md).
+This document is the permanent architectural record for the MetaML Workbench Digital Twin runtime. It describes the system exactly as implemented — no proposed changes, no alternative designs, no aspirational future state. Every claim below is backed by either source code (cited by file and method) or an empirical investigation recorded in the [Evolution Timeline](EVOLUTION_TIMELINE.md).
 
 ---
 
@@ -17,14 +17,14 @@ A "digital twin" of a running business process is not useful if it only records 
 ### Goals
 
 - The twin's execution token advances the moment the original commits a step, not on a delay and not on a poll.
-- Synchronization uses a standard Camunda mechanism, proven empirically rather than assumed, and never couples to or reconfigures the global Job Executor (an earlier attempt that disabled it broke boundary timers and history cleanup — see [ADR-009](adr/ADR-009-no-job-executor-workarounds.md)).
+- Synchronization uses a standard Camunda mechanism and never couples to or reconfigures the global Job Executor (an earlier attempt that disabled it broke boundary timers and history cleanup — see [ADR-009](adr/ADR-009-no-job-executor-workarounds.md)).
 - One Camunda engine, one shared H2 datasource, is the single source of truth for both instances' runtime state.
 - The Original process is always authoritative; the Twin observes and automates but never drives the Original.
 - Every architectural claim is backed by empirical proof (a written probe, a passing/failing test, or a direct API inspection via `javap`), not by assumption about how Camunda behaves.
 
 ### Philosophy
 
-Recorded as the standing engineering discipline for this entire build and reaffirmed for every correction made in Phase 7.5:
+The standing engineering discipline for this build:
 
 - **Derive, don't duplicate.** State that Camunda's own runtime or history tables already contain is read from there, not shadowed in a second, app-owned structure that can drift or fail to survive a restart.
 - **Recomputation over persistence.** The only persisted cross-reference this system keeps is the Original-activity-id ↔ Twin-activity-id link ([ADR-006](adr/ADR-006-runtime-derived-execution-identity.md)); everything else about "which visit, which execution, which loop iteration" is recomputed fresh from Camunda's runtime tables on every synchronization event.
@@ -84,7 +84,7 @@ Full detail in [Section 8](#8-component-responsibilities); summarized here for o
 | `TwinAutomationDelegate` | Runs as the Twin's generated Service Task; dispatches to the configured `ProjectAutomationService`. |
 | `AgentExecutionDelegate` | Runs as an optional listener on the Original's own task; copies the Twin's chosen agent and outputs back onto the Original. |
 | `GovernanceServiceImpl` | Two independent, race-safe quotas: evolutions per twin, twin-execution steps per twin. |
-| `WorkbenchStateStore` | The app's own JSON persistence for `ProcessModel`/`TwinProcess` records — explicitly *not* Camunda's engine state. |
+| `WorkbenchStateStore` | The app's own JSON persistence for `TwinProcess` records — explicitly *not* Camunda's engine state. (`ProcessModel` is persisted by the H2-backed `ProcessModelArchiveStore`, not here.) |
 | `NodeManagerClient` | HTTP client to the external (stub) agent catalog. |
 
 ---
@@ -93,7 +93,7 @@ Full detail in [Section 8](#8-component-responsibilities); summarized here for o
 
 **Startup → Launch → Generate Twin → Deploy → Execute → Sync → Automate → Complete → Restart → Recover**
 
-1. **Startup.** Spring Boot boots; the Camunda engine initializes against the H2 file datasource (`jdbc:h2:file:./data/camunda`, or an in-memory URL under test); the Job Executor starts completely unmodified, exactly as Camunda ships it. `WorkbenchServiceImpl.restoreState()` (`@PostConstruct`) loads any previously saved `ProcessModel`/`TwinProcess` records from `WorkbenchStateStore`'s JSON snapshot into in-memory maps.
+1. **Startup.** Spring Boot boots; the Camunda engine initializes against the H2 file datasource (`jdbc:h2:file:./data/camunda`, or an in-memory URL under test); the Job Executor starts completely unmodified, exactly as Camunda ships it. `WorkbenchServiceImpl.restoreState()` (`@PostConstruct`) loads previously saved `ProcessModel` records from the H2-backed `ProcessModelArchiveStore` and previously saved `TwinProcess` records from `WorkbenchStateStore`'s JSON snapshot, into in-memory maps.
 2. **Launch.** `POST /api/v1/wb/transmute/launch` → `WorkbenchServiceImpl.launchProcess(modelId)`.
 3. **Generate Twin.** `deployTwinDefinition` calls `TwinModelGenerator.generate()` against the Original's *deployed* `BpmnModelInstance` (never the stored XML directly, so the Twin can never drift from what the Original is actually running).
 4. **Deploy.** The generated Twin model is deployed under a deployment name derived from the model id, with `enableDuplicateFiltering(true)`; because generation is deterministic (Section 5), relaunching the same model reuses the existing Twin definition instead of accumulating a new version on every launch.
@@ -101,7 +101,7 @@ Full detail in [Section 8](#8-component-responsibilities); summarized here for o
 6. **Sync.** As the Original's token moves, `AutoBridgeTrigger.onActivityStarted` fires once per activity-start event, after the Original's own commit, and calls `WorkbenchServiceImpl.bridgeActivityEvent`.
 7. **Automate.** Inside that same call, `advanceTwinActivity` correlates the message the Twin's matching Receive Task is waiting on; `TwinAutomationDelegate.execute()` runs synchronously immediately afterward, in the same Camunda command, with no async marker anywhere in the path.
 8. **Complete.** The Original reaches its own end event on its own schedule (human-paced); the Twin typically reaches its end event first, since it has no user tasks and no boundary timers to wait out.
-9. **Restart.** An app restart reloads `ProcessModel`/`TwinProcess` bookkeeping from the JSON snapshot; Camunda's own runtime and history tables in the H2 file database are untouched by the restart and remain authoritative for anything execution-related (Section 6, Section 7).
+9. **Restart.** An app restart reloads `ProcessModel` bookkeeping from the H2 archive and `TwinProcess` bookkeeping from the JSON snapshot; Camunda's own runtime and history tables in the H2 file database are untouched by the restart and remain authoritative for anything execution-related (Section 6, Section 7).
 10. **Recover.** An automation failure leaves a Camunda Incident against the Twin's stalled execution; an operator resolves it by re-invoking the bridge for that activity, which is safe to repeat because the dedup guard is derived from Camunda's own state, not from anything the restart could have reset (Section 7, [ADR-012](adr/ADR-012-restart-and-recovery-philosophy.md)).
 
 See [Runtime Sequence Diagram](DIAGRAMS.md#2-runtime-sequence-diagram).
@@ -152,7 +152,7 @@ See [Runtime Sequence Diagram](DIAGRAMS.md#2-runtime-sequence-diagram) and [Sync
 | User Task, Multi-Instance, non-literal (variable/collection) cardinality | Falls back to a single Receive/Service pair, logged | ⚠ Explicitly Unsupported (degrades safely, does not fail generation) |
 | Exclusive Gateway | Copied as-is, including its default flow | ✅ Fully Supported |
 | Parallel Gateway | Copied as-is | ✅ Fully Supported |
-| Inclusive Gateway | Copied as-is, including its default flow | ✅ Fully Supported *(closed in Phase 7.5, [ADR-011](adr/ADR-011-unsupported-bpmn-construct-policy.md))* |
+| Inclusive Gateway | Copied as-is, including its default flow | ✅ Fully Supported *([ADR-011](adr/ADR-011-unsupported-bpmn-construct-policy.md))* |
 | Plain End Event (no event definitions) | Copied as-is | ✅ Fully Supported |
 | Boundary Event and its outgoing flow | Dropped; the Original's own timeout/escalation is bridged over as an ordinary activity like any other the Original reaches | ⚠ Explicitly Unsupported (deliberate — see rationale below) |
 | End Event with an error/escalation/terminate definition | Generation fails with a precise diagnostic | ❌ Implementation Gap |
@@ -164,7 +164,7 @@ See [Runtime Sequence Diagram](DIAGRAMS.md#2-runtime-sequence-diagram) and [Sync
 
 **Why Boundary Events are dropped rather than supported or fail-fast:** the Twin's copy of an activity now genuinely finishes inside one job (Section 4); a boundary timer on it would fire on the Twin's own clock, sending the Twin down an escalation branch independently of the Original — the exact divergence the whole architecture exists to prevent. The Original's real timeout is still bridged, just as an ordinary activity like any other it reaches.
 
-**Why the rest of the unsupported set fails generation rather than degrading:** an earlier version of this generator silently dropped anything it didn't recognize (a `logger.warn` and continue) — a Twin could deploy with entire branches missing and nothing would tell the developer. Phase 7.5 ([ADR-011](adr/ADR-011-unsupported-bpmn-construct-policy.md)) replaced that with a thrown `IllegalArgumentException` naming the process, the specific activity id, and its element type. Traced and confirmed the throw always fires before any deployment or persistence, so a rejected model never leaves partial state behind.
+**Why the rest of the unsupported set fails generation rather than degrading:** Silently dropping an unrecognized construct (a `logger.warn` and continue) would let a Twin deploy with entire branches missing and nothing to tell the developer. ([ADR-011](adr/ADR-011-unsupported-bpmn-construct-policy.md)) replaced that with a thrown `IllegalArgumentException` naming the process, the specific activity id, and its element type. Traced and confirmed the throw always fires before any deployment or persistence, so a rejected model never leaves partial state behind.
 
 ### Determinism
 
@@ -182,7 +182,7 @@ See [BPMN Transformation Diagram](DIAGRAMS.md#4-bpmn-transformation-diagram) and
 
 ### The One Persisted Identity
 
-`ActivityLink` (`originalActivityId` ↔ `twinActivityId`), held in `TwinProcess.activityLinks`, created by `connectActivity`. This is deliberately the *only* piece of cross-process identity this system ever persists. As of Phase 7.5 ([ADR-014](adr/ADR-014-one-to-one-activity-link-mapping.md)), the mapping is enforced as a true bijection among connected activities: one original activity links to exactly one twin activity, and one twin activity is claimed by at most one original activity at a time, with the check-then-mutate sequence made atomic (`synchronized (twin)`) after an adversarial review found the unsynchronized version allowed two concurrent links to both succeed.
+`ActivityLink` (`originalActivityId` ↔ `twinActivityId`), held in `TwinProcess.activityLinks`, created by `connectActivity`. This is deliberately the *only* piece of cross-process identity this system ever persists. ([ADR-014](adr/ADR-014-one-to-one-activity-link-mapping.md)) The mapping is enforced as a true bijection among connected activities: one original activity links to exactly one twin activity, and one twin activity is claimed by at most one original activity at a time, with the check-then-mutate sequence made atomic (`synchronized (twin)`) because an unsynchronized version allows two concurrent links to both succeed.
 
 ### Everything Else Is Recomputed, Never Cached
 
@@ -195,9 +195,9 @@ See [BPMN Transformation Diagram](DIAGRAMS.md#4-bpmn-transformation-diagram) and
 | `loopCounter` (Twin side) | Read **non-locally** (`getVariable`, not `getVariableLocal`) — it lives one scope level above the event-subscribed execution | `resolveParallelSibling` |
 | `loopCounter` (Original side) | Read **locally** (`getVariableLocal`) directly off the "start" event's own execution | `loopCounterOf` |
 
-The non-local/local asymmetry above was proven empirically with a throwaway probe (three parallel siblings, each released individually by execution id) before being relied upon — it is not derivable from documentation alone and would silently return `null` if assumed symmetric.
+The non-local/local asymmetry above is not derivable from Camunda's documentation and would silently return `null` if assumed symmetric.
 
-### The Narrower, Second Form of Derived Identity (Phase 7.5, W4)
+### The Narrower, Second Form of Derived Identity
 
 For a *plain* (non-multi-instance) activity that a token can revisit more than once through an ordinary loop-back gateway, there is no `loopCounter` to disambiguate visits by name. `alreadyEvolved` (`WorkbenchServiceImpl`) instead compares **ordinal position** — which numbered visit (by start time) this `activityInstanceId` is on the Original side, read from `historyService.createHistoricActivityInstanceQuery()` — against **how many times** `evolvedAgent_<twinActivityId>` has actually been *set*, read from `historyService.createHistoricDetailQuery().variableUpdates()` (which records every individual write, unlike `HistoricVariableInstance`, which only ever holds the current value). Both numbers come from Camunda's own history; nothing new is persisted. This still assumes visits are strictly sequential in wall-clock time, which holds for an ordinary loop-back (a single token going around a cycle) but not for two genuinely concurrent tokens re-entering the same plain activity — a documented residual gap, not a silently assumed guarantee (Section 9).
 
@@ -245,7 +245,7 @@ See [Failure Recovery Diagram](DIAGRAMS.md#6-failure-recovery-diagram).
 | `AgentExecutionDelegate` | `delegate/AgentExecutionDelegate.java` | Optional `camunda:taskListener` on the Original's own user task (`event="complete"`); copies the Twin's evolved agent and its outputs back onto the Original as `agentExecuted_*`/`agentOutput_*`, including the generalized `riskFlagged` convention. Deliberately no `try/catch` — an earlier one bought nothing, since the transaction is already rollback-only by the time a listener sees the exception. |
 | `ProjectAutomationService` / `DefaultProjectAutomationService` | `automation/*.java` | The pluggable per-project automation extension point. Spring collects every bean of this type into a `Map<String, ProjectAutomationService>` keyed by bean name; a twin's `projectId` selects which one runs. Exactly one real implementation exists (`"default"`), intentionally — enough to prove the extension point works without inventing requirements for hypothetical other projects. |
 | `GovernanceServiceImpl` | `service/GovernanceServiceImpl.java` | Two independent quotas — evolutions per twin (agent requests) and twin-execution steps per twin (every activity the Twin's own token passes through) — both using increment-then-rollback `AtomicInteger`s for race safety, never a separate check-then-increment. |
-| `WorkbenchStateStore` | `store/WorkbenchStateStore.java` | The app's own JSON persistence for `ProcessModel`/`TwinProcess` bookkeeping. Explicitly **not** where Camunda's own runtime state lives — rewrites the whole file on every mutation, deliberately excludes anything Camunda's own tables already make durable (Section 6, Section 9). |
+| `WorkbenchStateStore` | `store/WorkbenchStateStore.java` | The app's own JSON persistence for `TwinProcess` bookkeeping — a twin's `activityLinks` are the one thing Camunda has no concept of, so nothing else can reconstruct them. `ProcessModel` is **not** persisted here; the H2-backed `ProcessModelArchiveStore` is its single authoritative store. Explicitly **not** where Camunda's own runtime state lives — rewrites the whole file on every mutation, deliberately excludes anything Camunda's own tables already make durable (Section 6, Section 9). |
 | `NodeManagerClient` | `client/NodeManagerClient.java` | HTTP client to the external agent-catalog stub, with tight timeouts (1s connect / 2s read) so a stuck external call can never stall the single-threaded auto-bridge worker. |
 | `AgentOutputDeclarations` | `bpmn/AgentOutputDeclarations.java` | Reads `metaml:agentOutputs` extension elements off a deployed definition, letting a model author republish a named agent output under a variable name of their choosing. |
 | `WorkbenchController` / `GovernanceController` | `wbapi/controller/workbench/*.java` | REST surface (`/api/v1/wb/*`, `/api/v1/governance/*`) — thin, exception-to-HTTP-status translation only, no business logic. |
@@ -254,19 +254,19 @@ See [Failure Recovery Diagram](DIAGRAMS.md#6-failure-recovery-diagram).
 
 ## 9. Known Limitations
 
-Classified per the same standard used throughout Phase 7's review: **Architectural Decision** (deliberate, would not change even with more time), **Implementation Gap** (could be closed with standard Camunda mechanisms, currently isn't), **Camunda Limitation** (genuinely not buildable with the bundled library), **Future Enhancement** (out of scope for V1.0 by choice, not by necessity).
+Classified as: **Architectural Decision** (deliberate, would not change even with more time), **Implementation Gap** (could be closed with standard Camunda mechanisms, currently isn't), **Camunda Limitation** (genuinely not buildable with the bundled library), **Future Enhancement** (out of scope for V1.0 by choice, not by necessity).
 
 | Limitation | Classification | Notes |
 |---|---|---|
 | Boundary Events dropped from the Twin | Architectural Decision | See Section 5's rationale; supporting them would reintroduce the exact divergence the architecture exists to prevent. |
 | Event-Based Gateway, Call Activity, Sub-Processes, pre-existing automated task types | Implementation Gap | Now fails generation explicitly rather than silently dropping ([ADR-011](adr/ADR-011-unsupported-bpmn-construct-policy.md)); closing the gap itself is future work. |
 | `AdHocSubProcess` | Camunda Limitation | Confirmed absent from `camunda-bpmn-model` 7.22.0 via direct `javap` inspection of the jar — not an oversight, not implementable with the current library version at all. |
-| Two concurrent tokens re-entering the same plain activity (e.g. an Inclusive Gateway split looping back into it) | Implementation Gap (narrow, residual) | W4's ordinal-by-start-time disambiguation assumes strictly sequential visits, which an ordinary single-token loop-back guarantees but a genuinely concurrent re-entry would not. Not exercised by any current model or test; documented rather than silently assumed away. |
-| `runEvolution` can report `approved=true` after a partial write (agent variable set, some output writes lost) | Implementation Gap (Phase 7 finding W3, open) | Deferred past Phase 7.5's scope by explicit instruction; not fixed in this pass. |
-| `AutoBridgeTrigger` shutdown has a submit-vs-shutdown race | Implementation Gap (Phase 7 finding W5, open) | Logged at `debug`, not `warn`; deferred. |
-| No optimistic-lock handling on concurrent `TwinProcess` mutation outside the paths this build's own concurrency tests cover | Implementation Gap (Phase 7 finding W6, open) | Deferred. |
-| Unbounded twin event-log growth | Implementation Gap (Phase 7 finding W7, open) | `WorkbenchStateStore` rewrites the whole file on every mutation; a long-running twin's event log has no cap. Deferred. |
-| Unbounded governance counter maps | Implementation Gap (Phase 7 finding W8, open) | `GovernanceServiceImpl`'s own `TODO` comment: nothing ever removes a twin's counters once created. Pre-existing, deferred. |
+| Two concurrent tokens re-entering the same plain activity (e.g. an Inclusive Gateway split looping back into it) | Implementation Gap (narrow, residual) | The ordinal-by-start-time disambiguation assumes strictly sequential visits, which an ordinary single-token loop-back guarantees but a genuinely concurrent re-entry would not. Not exercised by any current model or test; documented rather than silently assumed away. |
+| `runEvolution` can report `approved=true` after a partial write (agent variable set, some output writes lost) | Implementation Gap (open) | Deferred past this build's scope by explicit instruction; not fixed in this pass. |
+| `AutoBridgeTrigger` shutdown has a submit-vs-shutdown race | Implementation Gap (open) | Logged at `debug`, not `warn`; deferred. |
+| No optimistic-lock handling on concurrent `TwinProcess` mutation outside the paths this build's own concurrency tests cover | Implementation Gap (open) | Deferred. |
+| Unbounded twin event-log growth | Implementation Gap (open) | `WorkbenchStateStore` rewrites the whole file on every mutation; a long-running twin's event log has no cap. Deferred. |
+| Unbounded governance counter maps | Implementation Gap (open) | `GovernanceServiceImpl`'s own `TODO` comment: nothing ever removes a twin's counters once created. Pre-existing, deferred. |
 | Governance quotas do not survive an app restart | Architectural Decision (accepted, lower severity) | Unlike the bridge dedup guard (now fully restart-safe, [ADR-012](adr/ADR-012-restart-and-recovery-philosophy.md)), a reset quota is not a correctness violation — it is a budget resetting, not state corrupting. |
 | No authentication; loopback-only, `permitAll`, CSRF disabled | Architectural Decision | `WebSecurityConfig`'s own comment is explicit: anyone who can reach this API can deploy arbitrary BPMN with a `camunda:delegateExpression`/`camunda:class` and run code in this JVM. Acceptable only because `server.address=127.0.0.1`; would need real authentication before ever listening on anything else. |
 
@@ -274,7 +274,7 @@ Classified per the same standard used throughout Phase 7's review: **Architectur
 
 ## 10. Future Work
 
-**Near-term** — close the deferred Phase 7 findings in priority order: W3 (partial-write false-success in `runEvolution`), W5 (`AutoBridgeTrigger` shutdown race), W6–W8 (optimistic locking, event-log bounding, governance-counter cleanup).
+**Near-term** — close the open implementation gaps in priority order: partial-write false-success in `runEvolution`, the `AutoBridgeTrigger` shutdown race, then optimistic locking, event-log bounding and governance-counter cleanup).
 
 **Long-term** — real `ProjectAutomationService` implementations beyond the one demonstration default; a real node manager replacing the stub catalog; closing the narrow concurrent-loop-back identity gap (Section 6, Section 9) if a model ever actually needs it.
 
@@ -290,13 +290,8 @@ Classified per the same standard used throughout Phase 7's review: **Architectur
 
 ## 11. Verification Summary
 
-**Independent reviews conducted:**
-- Fourth/fifth round adversarial reviews of the Receive/Service Task split and parallel Multi-Instance support (pre–Phase 7).
-- Phase 7: a three-way parallel independent red-team review across Runtime, Synchronization, Execution Identity, BPMN Coverage, Failure Recovery, Performance, and Maintainability — 8 findings (W1–W8) plus the confirmed `AdHocSubProcess` limitation.
-- Phase 7.5: implementation of the three highest-priority findings (W1, W2, W4), each followed by its own independent adversarial review — which found and required fixing a real concurrency race in W1's first fix, and two successive wrong turns in W4's dedup-derivation logic before the corrected version held.
+**Key empirical investigations** (recorded in the [Evolution Timeline](EVOLUTION_TIMELINE.md)): message-correlation disambiguation options for parallel Multi-Instance; the non-local/local `loopCounter` scope asymmetry; `createIncident`'s leaf-execution requirement; `HistoricDetail.variableUpdates()` vs `HistoricVariableInstance` behavior; and a cosmetic `ProcessDefinition.getId()` formatting quirk that is functionally irrelevant.
 
-**Key empirical investigations** (recorded in the [Evolution Timeline](EVOLUTION_TIMELINE.md)): message-correlation disambiguation options for parallel Multi-Instance; the non-local/local `loopCounter` scope asymmetry; `createIncident`'s leaf-execution requirement; `HistoricDetail.variableUpdates()` vs `HistoricVariableInstance` behavior; a cosmetic `ProcessDefinition.getId()` formatting quirk found and ruled functionally irrelevant during Phase 7.5's final validation pass.
+**Regression coverage:** every corrected defect has a dedicated test proving the specific behaviour it closes. The full backend suite (`wbapi` + `nodemanager`) passed clean, twice consecutively, as of the last change described in this document.
 
-**Regression coverage:** every corrected finding has a dedicated test proving the specific defect it closes, confirmed to fail against the pre-fix code before the fix was written. The full backend suite (`wbapi` + `nodemanager`) passed clean, twice consecutively, as of the last change described in this document.
-
-**Basis for calling this Version 1.0:** all three Phase 7 high-priority findings are closed and independently re-verified; the working tree matches the expected set of changed/new files exactly (confirmed via `git status --short`); no invariant outside W1/W2/W4's scope changed during their correction (confirmed by a dedicated scope-diff audit — see the [Evolution Timeline](EVOLUTION_TIMELINE.md) for the one methodological caveat on that audit's own findings).
+**Basis for calling this Version 1.0:** every high-priority finding from the architecture review is closed and independently re-verified, and the twin generator's synchronization, execution-identity and failure-recovery behaviour are each covered by dedicated regression tests.

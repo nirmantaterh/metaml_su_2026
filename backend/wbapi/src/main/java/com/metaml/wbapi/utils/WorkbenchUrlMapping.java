@@ -30,6 +30,9 @@ public class WorkbenchUrlMapping {
     public static final String TRANSMUTE_TWIN = WB_TRANSMUTE + "/twin";
     public static final String TRANSMUTE_TWINS = WB_TRANSMUTE + "/twins";
     public static final String TRANSMUTE_BRIDGE = WB_TRANSMUTE + "/bridge";
+    // Claims an activity for component integration so the auto-bridge holds at it (see
+    // WorkbenchService#requestComponentIntegration).
+    public static final String TRANSMUTE_INTEGRATION_CLAIM = WB_TRANSMUTE + "/integration-claim";
     public static final String TRANSMUTE_COMPLETE_TASK = WB_TRANSMUTE + "/complete-task";
     public static final String TRANSMUTE_AGENTS = WB_TRANSMUTE + "/agents";
 

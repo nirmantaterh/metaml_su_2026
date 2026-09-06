@@ -86,7 +86,7 @@ class FilePersistenceRestartRecoveryTest {
         String processInstanceId;
 
         // ==========================================
-        // PHASE 1: First launch - create runtime state
+        // First launch - create runtime state
         // ==========================================
         LaunchedProject launched1 = launcher.launch(project, phase1Env);
         try {
@@ -130,7 +130,7 @@ class FilePersistenceRestartRecoveryTest {
         System.out.println("H2 DB file size after first shutdown: " + dbFileSize + " bytes");
 
         // ==========================================
-        // PHASE 2: Second launch - recover runtime state
+        // Second launch - recover runtime state
         // ==========================================
         LaunchedProject launched2 = launcher.launch(project, phase2Env);
         try {

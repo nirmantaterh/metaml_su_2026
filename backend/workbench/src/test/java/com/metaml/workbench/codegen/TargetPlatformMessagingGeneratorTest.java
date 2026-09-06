@@ -96,7 +96,7 @@ class TargetPlatformMessagingGeneratorTest {
                 .contains("pairRegistry.registerAndClassify");
     }
 
-    // Reliability hardening (Pass 1): the generator, not just a hand-edited generated project,
+    // The generator, not just a hand-edited generated project,
     // must be the source of the new persistence/confirm/DLQ/duplicate-handling code - these
     // assertions catch a regression where a future change edits generated output by hand instead
     // of through TargetPlatformMessagingGenerator itself.

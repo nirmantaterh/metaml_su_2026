@@ -8,7 +8,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-// The catalog used to be a Map.of() in the service, which meant every project attaching its own agent types needed this module recompiled and redeployed. Config instead, keyed by agent type.
+// Catalog lives in configuration, keyed by agent type, so a project can add its own agent types
+// without this module being recompiled.
 @Data
 @ConfigurationProperties(prefix = "nodemanager")
 public class NodeManagerProperties {

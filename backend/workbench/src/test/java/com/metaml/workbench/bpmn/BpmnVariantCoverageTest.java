@@ -22,13 +22,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-// Phase 15: Final Untested BPMN Variants Test Suite
+// BPMN variant coverage
 // Verifies:
 // 1. Non-interrupting Event SubProcess (isInterrupting="false")
 // 2. Link Events (intermediate throw/catch link pairs)
 // 3. Multiple Catch Events (message + signal definitions)
 // 4. Non-interrupting Boundary Events (cancelActivity="false")
-class Phase15UntestedVariantsTest {
+class BpmnVariantCoverageTest {
 
     private final TwinModelGenerator generator = new TwinModelGenerator();
     private ProcessEngine engine;

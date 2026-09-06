@@ -14,7 +14,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.metaml.workbench.model.ProcessModel;
 import com.metaml.workbench.model.TwinProcess;
 
 class WorkbenchStateStoreTest {
@@ -22,8 +21,11 @@ class WorkbenchStateStoreTest {
     @TempDir
     Path tempDir;
 
-    // Phase 1 (tenant identity): a snapshot written before ProcessModel/TwinProcess had a
-    // tenantId field must still restore cleanly - null tenantId, not a read failure.
+    // A snapshot written before TwinProcess had a tenantId field must
+    // still restore cleanly - null tenantId, not a read failure. The fixture below deliberately
+    // still carries the "models" key that older files (written when this store also persisted
+    // process models) contain, which doubles as the proof that such a file is still read without
+    // error now that models have been removed from this store - the key is simply ignored.
     @Test
     void olderSnapshotsWithoutTenantIdStillRestoreAsUnownedNotAsAnError() throws Exception {
         Path stateFile = tempDir.resolve("workbench-state.json");
@@ -56,29 +58,24 @@ class WorkbenchStateStoreTest {
 
         WorkbenchStateStore.Snapshot snapshot = store.load();
 
-        assertThat(snapshot.models()).hasSize(1);
-        assertThat(snapshot.models().get(0).getTenantId()).isNull();
         assertThat(snapshot.twins()).hasSize(1);
         assertThat(snapshot.twins().get(0).getTenantId()).isNull();
     }
 
-    // the same field round-trips for a model/twin that DOES have a tenant, not just null
+    // the same field round-trips for a twin that DOES have a tenant, not just null
     @Test
-    void tenantIdRoundTripsForModelsAndTwinsThatHaveOne() {
+    void tenantIdRoundTripsForTwinsThatHaveOne() {
         Path stateFile = tempDir.resolve("workbench-state.json");
         WorkbenchStateStore store = new WorkbenchStateStore(stateFile.toString(), true);
 
-        ProcessModel model = new ProcessModel("model-1", "tenant's model", "<bpmn/>",
-                java.time.Instant.now(), "def-1", "tenant-abc");
         TwinProcess twin = new TwinProcess();
         twin.setId("twin-1");
         twin.setModelId("model-1");
         twin.setTenantId("tenant-abc");
 
-        store.save(List.of(model), List.of(twin));
+        store.save(List.of(twin));
         WorkbenchStateStore.Snapshot snapshot = store.load();
 
-        assertThat(snapshot.models().get(0).getTenantId()).isEqualTo("tenant-abc");
         assertThat(snapshot.twins().get(0).getTenantId()).isEqualTo("tenant-abc");
     }
 
@@ -111,7 +108,7 @@ class WorkbenchStateStoreTest {
         assertThat(snapshot.twins().get(0).getTwinProcessDefinitionId()).isEqualTo("original-def");
     }
 
-    // Phase 9/10 red team finding: save() used to build its DTO snapshot from the live models/twins
+    // Save() used to build its DTO snapshot from the live twins
     // collections OUTSIDE the write lock, only synchronizing the actual file write. Since
     // WorkbenchServiceImpl always passes the SAME live, mutable collections on every call (not a
     // frozen copy per call), two concurrent persistState() calls could interleave their
@@ -146,7 +143,7 @@ class WorkbenchStateStoreTest {
             for (int i = 0; i < threadCount; i++) {
                 futures.add(pool.submit(() -> {
                     sharedTwin.getEventLog().add("entry-" + nextEntry.getAndIncrement());
-                    store.save(List.of(), List.of(sharedTwin));
+                    store.save(List.of(sharedTwin));
                 }));
             }
             for (java.util.concurrent.Future<?> future : futures) {

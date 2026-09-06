@@ -13,7 +13,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 
-// Writes each saved model's raw BPMN as its own .bpmn file on the server filesystem, one file per model id. This is separate from WorkbenchStateStore, which already embeds the same XML as a string field inside its own shared workbench-state.json - that file is a restart-recovery cache for the workbench's own bookkeeping, not something meant to be opened or copied as a standalone file. The Spring Boot generation step needs an actual .bpmn file it can copy into a generated project's resources, and that's what this class exists to provide. Unlike WorkbenchStateStore, a write failure here is NOT swallowed - the generation step depends on this file actually existing, so a caller needs to know if it didn't get written.
+// Writes each saved model's BPMN as a real .bpmn file, one per model id, because the generation step
+// needs a file it can copy into a generated project - not just the XML embedded in a state snapshot.
+// Unlike WorkbenchStateStore, a write failure here is thrown rather than swallowed: the caller cannot
+// continue without the file.
 @Component
 public class ProcessModelFileStore {
 
@@ -56,7 +59,9 @@ public class ProcessModelFileStore {
         }
     }
 
-    // WorkbenchServiceImpl already rejects a client-supplied id that isn't [A-Za-z0-9_-]+, but this class is a plain @Component anything can call, and its whole job is turning a string into a filesystem path - it shouldn't be the caller's business to have got that right first. A modelId of "../../evil" or "C:/Windows/evil" resolves cleanly to somewhere outside the configured models directory, and nothing in save() below would have noticed. Normalising and re-checking containment is the cheap way to make that structurally impossible rather than conventionally unlikely.
+    // Path containment is re-checked here rather than trusted from the caller: this is a plain @Component
+    // whose whole job is turning a string into a filesystem path, and a modelId of "../../evil" resolves
+    // cleanly to somewhere outside the models directory.
     public Path pathFor(String modelId) {
         if (modelId == null || modelId.isBlank()) {
             throw new IllegalArgumentException("modelId must not be blank");
@@ -92,7 +97,8 @@ public class ProcessModelFileStore {
         return resolved;
     }
 
-    // Deleting a model's BPMN artifact(s). Unlike save() above, a failure here is logged rather than thrown, and that asymmetry is deliberate: save()'s caller genuinely cannot continue without the file (the generation step reads it), whereas delete()'s caller is removing the model outright - a .bpmn file left behind is inert, referenced by nothing, and not worth failing a deletion that has otherwise fully succeeded. pathFor() supplies the same containment check every other method here relies on, so a hostile id cannot reach outside the models directory. The twin file's own deleteIfExists is a no-op for a model that never had one, so this stays safe to call unconditionally regardless of which kind of model modelId names.
+    // Failure is logged rather than thrown, unlike save(): the caller is removing the model outright, and
+    // a leftover .bpmn file is inert and referenced by nothing - not worth failing a deletion over.
     public boolean delete(String modelId) {
         boolean deleted = deleteIfExists(pathFor(modelId), modelId);
         deleteIfExists(pathForTwin(modelId), modelId);

@@ -1,7 +1,7 @@
 # MetaML Workbench — Project Status
 
 **Last updated:** 2026-08-12
-**Purpose:** hand this file to a fresh Claude Code session so it can pick up cold, with zero prior chat history. Say: *"Read PROJECT_STATUS.md and continue from there."*
+**Purpose:** a cold-start summary of where the project stands - architecture, current state, and what is still open - for anyone picking it up without prior context.
 
 ---
 
@@ -49,7 +49,7 @@ Connect / Evolve / Bridge  →  Governance  →  real side effect
 ```
 
 **Persistence (all file-backed, atomic write, survive real restart):**
-- `WorkbenchStateStore` → models, twins
+- `WorkbenchStateStore` → twins (models are persisted by the H2-backed `ProcessModelArchiveStore`, not here)
 - `TenantPolicyStore` → tenants, policies, versions, rules
 - `ApprovalStore` → approvals
 - `WorkflowEventStore` → Model→Generate→Launch pipeline history
@@ -58,7 +58,7 @@ Connect / Evolve / Bridge  →  Governance  →  real side effect
 
 **Trust boundary, unchanged since day one:** `tenantId` is caller-supplied, never authenticated. Every governance UI explicitly labels this ("Acting as tenant (not authenticated)").
 
-## 3. What's been done this session (chronological, all verified live + tested)
+## 3. Recent work
 
 1. **Governance frontend audit + Approvals UI** — built `GovernanceApprovalsPage.js` on the existing backend (Policy/Approval endpoints already existed). Live-verified approve/reject/history/tenant-isolation through the real UI.
 2. **BPMN activity → REST endpoint generation, generalized** — moved from "one endpoint per user task" to "one endpoint per activity whose execution semantics require external triggering" (`BpmnActivities.Trigger`: `USER_TASK`, `RECEIVE_TASK`, `EXTERNAL_TASK`). File: `backend/workbench/.../generation/BpmnActivities.java` (new), `SpringBootProjectGenerator.java`.
@@ -78,75 +78,37 @@ Connect / Evolve / Bridge  →  Governance  →  real side effect
 "Known limitation — Go to error" section, which claimed the loop could not be demonstrated from a
 BPMN fixture, was **wrong after the collision work** and has been replaced with the verified flow.
 
-## 4. Uncommitted files (nothing has been pushed since commit `d952feb`)
+## 4. Working-tree state
 
-**Backend:**
-```
-M  backend/wbapi/.../controller/workbench/WorkbenchController.java
-M  backend/wbapi/.../payload/request/SaveProcessModelRequest.java
-M  backend/wbapi/.../utils/WorkbenchUrlMapping.java
-M  backend/wbapi/.../test/.../WireTransferWalkthroughTest.java
-M  backend/workbench/.../generation/SpringBootProjectGenerator.java
-M  backend/workbench/.../generation/SpringBootProjectLauncher.java
-M  backend/workbench/.../model/AgentDecision.java
-M  backend/workbench/.../service/WorkbenchService.java
-M  backend/workbench/.../service/WorkbenchServiceImpl.java
-M  backend/workbench/.../test/.../SpringBootProjectGeneratorTest.java
-M  backend/workbench/.../test/.../SpringBootProjectLauncherTest.java
-?? backend/wbapi/.../payload/request/ResolveApprovalRequest.java
-?? backend/workbench/.../generation/BpmnActivities.java
-?? backend/workbench/.../governance/Approval.java
-?? backend/workbench/.../governance/ApprovalService.java
-?? backend/workbench/.../governance/ApprovalStatus.java
-?? backend/workbench/.../governance/ApprovalStore.java
-```
+Last commit on `master`: `582a284` (2026-08-31). The Scope 6 work sits in the working tree and is
+not yet committed. Run `git status --short` for the current list rather than relying on a snapshot
+recorded here.
 
-**Frontend:**
-```
-M  frontend/src/Navigation.js
-M  frontend/src/components/toolbars/Header.js
-M  frontend/src/pages/workbench/ModelPage.js
-M  frontend/src/routes.js
-M  frontend/src/services/workbench/WorkbenchService.js
-?? frontend/src/components/modals/ApprovalActionConfirmationModal.js
-?? frontend/src/pages/workbench/GovernanceApprovalsPage.js
-?? frontend/src/pages/workbench/GovernancePoliciesPage.js
-```
+## 5. Test status
 
-Since that list was written, the element-aware diagnostics work additionally touched:
+Measured 2026-09-03:
 
-```
-M  backend/workbench/.../codegen/DelegateClassGenerator.java        (collision check)
-M  backend/workbench/.../test/.../DelegateClassGeneratorTest.java   (14 tests, was 13)
-?? backend/workbench/.../codegen/InvalidDelegateExpressionException.java
-M  frontend/src/pages/workbench/ModelPage.js                        (dropped redundant generateDelegates call)
-?? demo/settlement-collision.bpmn
-M  demo/DEMO_PROTOCOL.md
-```
+| Suite | Result |
+|---|---|
+| `workbench` | 346 run, 2 failures, 7 skipped |
+| `wbapi` | 117 / 117 |
+| `nodemanager` | 7 / 7 |
+| VS Code plugin | 102 / 102, `tsc --noEmit` clean |
+| Frontend | 44 passed / 2 failed of 46; production build compiles |
 
-Re-run `git status --short backend/ frontend/ demo/` in a fresh session to confirm this is still current before trusting it.
-
-## 5. Test status (last confirmed)
-
-Full backend suite: **299 tests, 1 failure** (216 `workbench`, 77 `wbapi`, 6 `nodemanager`), re-measured
-2026-08-24. The `workbench` count excludes 17 additional `@Tag("slow")` tests (real Maven
-builds/JVM launches) not re-run for this measurement. The 1 failure
-(`SpringBootProjectLauncherMavenInstallTest`) is environment-dependent (no system-wide `mvn` on this
-machine) and unrelated to product code.
-Real dev data unchanged by a full run: 70 models, 33 twins, 70 workflow histories, 0 orphaned histories.
-Frontend: no new automated tests added (existing baseline lint/build failures are pre-existing, unrelated — confirmed via `git stash` comparison in an earlier phase).
+The two `workbench` failures are both in `generation.RedCollarEndToEndTest`, which builds and
+launches a real Maven subprocess; they are timing-dependent and unrelated to the Twin runtime.
+The two frontend failures are stale assertions in `ModelPage.test.js` and
+`GenerateProjectListPage.test.js` that have not caught up with current UI copy.
 
 ## 6. Known limitations (evidence-backed, not fixed, not urgent)
 
-- Generated-project directories are never deleted — unbounded disk growth (~68 dirs / 8M at last check). No cleanup mechanism exists. Explicitly deferred, not this session's scope.
+- Generated-project directories are never deleted — unbounded disk growth (~68 dirs / 8M at last check). No cleanup mechanism exists. Explicitly deferred.
 - `stopGeneratedProject` on an already-externally-dead project now correctly returns 404/false instead of a misleading 200/true (an intended side effect of the liveness fix).
 - No authentication anywhere — `tenantId` remains caller-supplied by design; this is documented everywhere it matters, not a bug.
 
-## 7. How to resume in a fresh session
+## 7. Picking the project back up
 
-1. Open a new Claude Code session in this repo.
-2. Say: *"Read PROJECT_STATUS.md and continue from there"* (or paste the specific next task).
-3. If backend verification is needed, the standard restart sequence used throughout this project is: `cd backend && ./mvnw -pl workbench install -DskipTests` (if workbench module changed) then `nohup ./mvnw -pl wbapi spring-boot:run &`, poll `http://localhost:8082/api/v1/governance/tenants` until 200.
-4. Update this file (Section 3 + 4 + 5) at the end of the next meaningful chunk of work, so the next handoff stays accurate.
-
-**When starting a new chunk of unrelated work, update this file first**, then start the fresh session — don't let it go stale.
+1. Read this file, then the relevant section of [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md).
+2. To verify the backend, restart it with `cd backend && ./mvnw -pl workbench install -DskipTests` (only if the workbench module changed), then `./mvnw -pl wbapi spring-boot:run`, and poll `http://localhost:8082/api/v1/governance/tenants` until it returns 200.
+3. Update Sections 3–5 of this file at the end of each meaningful chunk of work so it does not go stale.

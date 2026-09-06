@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 import org.camunda.bpm.engine.HistoryService;
 import org.camunda.bpm.engine.RepositoryService;
 import org.camunda.bpm.engine.RuntimeService;
+import org.camunda.bpm.engine.ExternalTaskService;
 import org.camunda.bpm.engine.TaskService;
 import org.camunda.bpm.engine.repository.Deployment;
 import org.camunda.bpm.engine.repository.ProcessDefinition;
@@ -118,7 +119,7 @@ class ModelDeletionTest {
             List<TwinProcess> twins) {
         stateStore = mock(WorkbenchStateStore.class);
         approvalService = mock(ApprovalService.class);
-        when(stateStore.load()).thenReturn(new WorkbenchStateStore.Snapshot(models, twins));
+        when(stateStore.load()).thenReturn(new WorkbenchStateStore.Snapshot(twins));
         processModelArchiveStore = mock(ProcessModelArchiveStore.class);
         when(processModelArchiveStore.findAll()).thenReturn(models);
         when(approvalService.listAllApproved()).thenReturn(List.of());
@@ -139,7 +140,7 @@ class ModelDeletionTest {
 
         return new WorkbenchServiceImpl(mock(NodeManagerClient.class), mock(GovernanceService.class),
                 mock(PolicyDecisionEngine.class), approvalService, runtimeService, repositoryService,
-                mock(HistoryService.class), mock(TaskService.class), mock(TwinModelGenerator.class), stateStore,
+                mock(HistoryService.class), mock(TaskService.class), mock(ExternalTaskService.class), mock(TwinModelGenerator.class), stateStore,
                 modelFileStore, processModelArchiveStore, delegateClassGenerator, generator, launcher, tracker);
     }
 

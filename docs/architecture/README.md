@@ -1,6 +1,6 @@
 # Digital Twin Runtime Architecture — Documentation Index
 
-Permanent architectural record for the MetaML Workbench Digital Twin runtime, Version 1.0, produced in Phase 8 per the four required deliverables:
+Permanent architectural record for the MetaML Workbench Digital Twin runtime, Version 1.0. Four deliverables:
 
 1. **[Architecture Specification](ARCHITECTURE.md)** — the complete 11-section specification: executive summary, runtime architecture, system lifecycle, synchronization architecture, BPMN transformation rules, execution identity model, failure semantics, component responsibilities, known limitations, future work, and verification summary.
 2. **[Architecture Decision Records](adr/)** — 15 ADRs, each with status, context, decision, alternatives investigated, evidence, trade-offs, consequences, and future reconsideration.

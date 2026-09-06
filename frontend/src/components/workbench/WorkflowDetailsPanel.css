@@ -172,3 +172,71 @@
     color: #9aa5ad;
     font-size: 0.75rem;
 }
+
+/* Execution evidence. Reuses the stage row's own box/typography so the runtime section reads as
+   part of the same panel rather than a second UI; only the additions below are new. */
+.workflow-details-execution-heading {
+    margin-top: 14px;
+}
+
+.workflow-details-execution-twin {
+    margin-bottom: 4px;
+}
+
+.workflow-details-execution-twinid {
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    opacity: 0.55;
+    margin: 6px 0 2px;
+}
+
+/* BPMN activity ids are opaque and can be long (a generated GUID-style id is ~36 chars). Let the
+   id itself take the slack and ellipsize, so a long id never widens the panel into a horizontal
+   scrollbar - min-width:0 is what actually lets a flex child shrink below its content width. */
+.workflow-details-execution-activity .workflow-details-stage-title {
+    min-width: 0;
+}
+
+.workflow-details-execution-activityid {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+/* The executor writes its own summary and embeds the raw activity id in it, which is one long
+   unbreakable token - without this it forces the whole panel to scroll sideways. */
+.workflow-details-execution-summary {
+    opacity: 0.75;
+    overflow-wrap: anywhere;
+}
+
+.workflow-details-output-toggle {
+    background: none;
+    border: none;
+    padding: 2px 0 0;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0.8;
+    text-decoration: underline;
+}
+
+.workflow-details-output-toggle:hover {
+    opacity: 1;
+}
+
+.workflow-details-output {
+    margin: 4px 0 0;
+    padding: 6px 8px;
+    max-height: 160px;
+    overflow: auto;
+    font-size: 11px;
+    line-height: 1.45;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.05);
+    white-space: pre-wrap;
+    word-break: break-word;
+}

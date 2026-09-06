@@ -13,7 +13,11 @@ public class TargetPlatformMessagingGenerator {
 
     public record GeneratedSource(String relativeDirectory, String className, String source) { }
 
-    // messagingNamespace scopes queue/exchange names so two independently generated projects can never physically share a queue even with identical signal names (mirrors the older pipeline's own messagingNamespace = process-key-slug + generated projectId). sharedSignalNames: present in BOTH proxy and twin - real Main<->Twin sync points, each gets its own task+response queue pair. allSignalNames: every signal named in EITHER BPMN - SignalBroadcaster polls all of them; one declared on only one side (RedCollar's own Manuf-only orderVerifySignal) simply has no partner and falls back to direct delivery, same as the older pipeline's own fallback.
+    // messagingNamespace scopes queue and exchange names so two independently generated projects can never
+    // share a queue even with identical signal names.
+    // sharedSignalNames are present in BOTH proxy and twin - real sync points, each getting a task+response
+    // queue pair. allSignalNames is every signal in either BPMN: SignalBroadcaster polls them all, and one
+    // declared on only one side simply has no partner and falls back to direct delivery.
     public List<GeneratedSource> generate(String messagingNamespace, Set<String> sharedSignalNames,
             Set<String> allSignalNames, String proxyProcessKey, String twinProcessKey) {
         List<GeneratedSource> sources = new ArrayList<>();
@@ -29,7 +33,9 @@ public class TargetPlatformMessagingGenerator {
         return raw.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    // Same kebab-case convention the older pipeline's own queue names use, restricted to safe RabbitMQ identifier characters - see SpringBootProjectGenerator's own two sibling helpers of the same name for the reasoning; this is a direct copy since signal names are exactly the same kind of author-controlled BPMN identifier those methods were written to sanitize.
+    // Same kebab-case queue-name convention as SpringBootProjectGenerator's sibling helpers, restricted
+    // to safe RabbitMQ identifier characters. Signal names are the same kind of author-controlled BPMN
+    // identifier, so the same sanitisation applies.
     private static String slug(String raw) {
         String withHyphens = raw
                 .replaceAll("([a-z0-9])([A-Z])", "$1-$2")
@@ -594,7 +600,7 @@ public class TargetPlatformMessagingGenerator {
                 new GeneratedSource("messaging", "ResponseQueuePublisher", responsePublisherSource),
                 new GeneratedSource("messaging", "ResponseQueueListener", responseListenerSource)));
 
-        // Reliability hardening (Pass 1): makes a dead-lettered TASK/RESPONSE message observable in the application log itself, not only via broker inspection (RabbitMQ management API/UI) - only generated when there is at least one shared signal, matching the DLX/DLQ topology above, which is itself only declared in that same case.
+        // Makes a dead-lettered TASK/RESPONSE message observable in the application log itself, not only via broker inspection (RabbitMQ management API/UI) - only generated when there is at least one shared signal, matching the DLX/DLQ topology above, which is itself only declared in that same case.
         if (hasQueuesForDlq) {
             String dlqListenerSource = """
                     package com.tp.TargetPlatform.messaging;
@@ -835,7 +841,9 @@ public class TargetPlatformMessagingGenerator {
         return new GeneratedSource("signal", "SignalBroadcaster", source);
     }
 
-    // Overwrites the template's placeholder ProxyProcessController (health-check only) with a real /start (registers with PairRegistry so SignalBroadcaster can pair it with its twin) and /instances listing - the prerequisite for there being anything to synchronize or watch in Cockpit at all. processKey is baked in as a literal because this generated project deploys exactly one proxy definition per generation (see SpringBootProjectGenerator.generateTargetPlatform).
+    // Replaces the template's placeholder ProxyProcessController with a real /start (registering with
+    // PairRegistry so SignalBroadcaster can pair it with its twin) and an /instances listing.
+    // processKey is baked in as a literal because a generated project deploys exactly one proxy definition.
     private GeneratedSource proxyController(String processKey) {
         return sideController("proxy", "ProxyProcessController", "/api/proxy", processKey);
     }

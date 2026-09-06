@@ -168,7 +168,7 @@ generated-target-platforms/      completed, standalone generated Target Platform
 demo/                 fixtures + DEMO_PROTOCOL.md (regression script) + REDCOLLAR_ACCEPTANCE.md
 examples/             citibank-wire-transfer.bpmn, grad-admission-review.bpmn
 docs/architecture/    ARCHITECTURE.md, DIAGRAMS.md, EVOLUTION_TIMELINE.md, 15 ADRs
-PROJECT_STATUS.md     cross-session status — read this first when picking the repo up cold
+PROJECT_STATUS.md     current project status — read this first when picking the repo up cold
 PLATFORM_CONTEXT.md   scope and ownership: what this team built vs. what MetaML is
 ```
 
@@ -234,9 +234,11 @@ Code extension on top of the REST API above: Target Platform discovery/lifecycle
 discovery, and AI-driven Twin evolution — natural-language intent → local Ollama recommendation →
 this Workbench's own authoritative Node Manager catalog → human confirmation → governance → binding
 → plugin-triggered bridge → real `ComponentExecutor` execution → real output, readable back through
-the plugin. It introduces no new runtime; the only additions on this side are two REST endpoints on
-`wbapi`: `POST /api/v1/wb/transmute/bridge/{twinId}/{activityId}` and
-`GET /api/v1/wb/transmute/twin/{id}/activity/{activityId}/execution`. See that repository's own
+the plugin. It introduces no new runtime; the additions on this side are three REST endpoints on
+`wbapi` — `POST /api/v1/wb/transmute/bridge/{twinId}/{activityId}`,
+`GET /api/v1/wb/transmute/twin/{id}/activity/{activityId}/execution` and
+`POST /api/v1/wb/transmute/integration-claim` — plus an optional `activityInstanceId` on the existing
+evolve request, which targets one runtime instance of a parallel or multi-instance activity. See that repository's own
 README.md for setup and the exact plugin-side workflow. A twin must currently be launched from
 **this** Workbench's frontend (Evolve → Twin Workflow) before the plugin can discover it — the
 plugin does not itself create twins.
@@ -245,7 +247,7 @@ plugin does not itself create twins.
 
 ## Further reading
 
-- [PROJECT_STATUS.md](PROJECT_STATUS.md) — current state, session-to-session handoff
+- [PROJECT_STATUS.md](PROJECT_STATUS.md) — current state and open work
 - [PLATFORM_CONTEXT.md](PLATFORM_CONTEXT.md) — scope, ownership, and future work
 - [TEAM_DEMO_GUIDE.md](TEAM_DEMO_GUIDE.md) — the full click-by-click demo transcripts
 - [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) and the

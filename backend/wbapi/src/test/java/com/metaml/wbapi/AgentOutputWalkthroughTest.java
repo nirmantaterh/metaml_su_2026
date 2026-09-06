@@ -159,7 +159,7 @@ class AgentOutputWalkthroughTest {
         assertThat(originalVariable(twin, "holdCount")).isNull();
     }
 
-    // Phase 9/10 red team finding: riskFlagged used to reach the original as agentFlaggedRisk
+    // RiskFlagged used to reach the original as agentFlaggedRisk
     // unconditionally, on any activity, in any project, purely because an output happened to be
     // named "riskFlagged" - the one Twin-to-Original write-back that wasn't gated by the
     // activity's own metaml:agentOutputs declaration the way every other output already is.

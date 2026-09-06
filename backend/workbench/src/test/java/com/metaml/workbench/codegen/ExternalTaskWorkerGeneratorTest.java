@@ -115,10 +115,15 @@ class ExternalTaskWorkerGeneratorTest {
         // VerifyOrder immediately precedes the gateway checking ${orderApproved}
         GeneratedWorker verifyOrder = workers.stream().filter(w -> w.topic().equals("VerifyOrder")).findFirst()
                 .orElseThrow();
+        // Generated workers fail explicitly when gateway variables have no
+        // legitimate producer — no Math.random(), no Boolean.TRUE, no fabricated state.
         assertThat(verifyOrder.sourceCode())
-                .contains("variables.put(\"orderApproved\"")
-                .contains("Math.random()")
-                .contains("externalTaskService.complete(task.getId(), \"generated-worker\", variables)")
+                .contains("Gateway variable 'orderApproved' must be set by a legitimate producer")
+                .contains("throw new IllegalStateException")
+                .contains("if (!variables.containsKey(\"orderApproved\"))")
+                .contains("externalTaskService.complete") // reachable after conditional throw
+                .doesNotContain("Math.random()")
+                .doesNotContain("Boolean.TRUE")
                 .doesNotContain("\"PASS\"")
                 .doesNotContain("\"FAIL\"");
 
@@ -126,9 +131,9 @@ class ExternalTaskWorkerGeneratorTest {
         GeneratedWorker checking = workers.stream().filter(w -> w.topic().equals("Checking")).findFirst()
                 .orElseThrow();
         assertThat(checking.sourceCode())
-                .contains("variables.put(\"qualityPassed\"")
-                .contains("Math.random()")
-                .contains("externalTaskService.complete(task.getId(), \"generated-worker\", variables)");
+                .contains("Gateway variable 'qualityPassed' must be set by a legitimate producer")
+                .contains("throw new IllegalStateException")
+                .doesNotContain("Math.random()");
     }
 
     @Test
@@ -197,14 +202,16 @@ class ExternalTaskWorkerGeneratorTest {
 
         GeneratedWorker verifyOrderTwin = workers.stream().filter(w -> w.topic().equals("VerifyOrderTwin"))
                 .findFirst().orElseThrow();
+        // Twin worker fails explicitly when TwinDecisionAgent doesn't set the
+        // gateway variable — no Math.random() fallback. The containsKey check remains; the
+        // fallback now throws instead of fabricating a random business decision.
         assertThat(verifyOrderTwin.sourceCode())
                 .contains("[Twin] Invoking decision agent")
                 .contains("agent.decide(\"VerifyOrderTwin\", task)")
-                // The fallback only fires when the agent itself didn't set the variable - a real
-                // TwinDecisionAgent implementation that DOES return "orderApproved" has that value
-                // win, since containsKey is false only when the agent left it out.
                 .contains("if (!variables.containsKey(\"orderApproved\")) {")
-                .contains("variables.put(\"orderApproved\", Math.random() > 0.5);")
+                .contains("Gateway variable 'orderApproved' was not set by TwinDecisionAgent")
+                .contains("throw new IllegalStateException")
+                .doesNotContain("Math.random()")
                 .contains("externalTaskService.complete(task.getId(), \"generated-worker\", variables)");
     }
 
@@ -218,5 +225,268 @@ class ExternalTaskWorkerGeneratorTest {
         Map<String, Set<String>> gatewayVars = ExternalTaskWorkerGenerator.detectGatewayVariables(model);
 
         assertThat(gatewayVars).isEmpty();
+    }
+
+    // ---- detectGatewayVariablesByActivityId tests ----
+
+    // Maps by BPMN element ID rather than topic, covering any activity type.
+    // Verifies that the Workbench simulation can use an activity's element ID
+    // (from ExternalTask.getActivityId() or a TwinProcess activity link) to
+    // determine which gateway variables to set as explicit process variables.
+    @Test
+    void detectsByActivityIdMapsElementIdToConditionVariables() {
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+                  <bpmn2:process id="proc" isExecutable="true">
+                    <bpmn2:startEvent id="Start" />
+                    <bpmn2:sequenceFlow id="f1" sourceRef="Start" targetRef="Activity_Check" />
+                    <bpmn2:serviceTask id="Activity_Check" name="Check"
+                        camunda:type="external" camunda:topic="Checking" />
+                    <bpmn2:sequenceFlow id="f2" sourceRef="Activity_Check" targetRef="GW1" />
+                    <bpmn2:exclusiveGateway id="GW1">
+                      <bpmn2:incoming>f2</bpmn2:incoming>
+                      <bpmn2:outgoing>f3</bpmn2:outgoing>
+                      <bpmn2:outgoing>f4</bpmn2:outgoing>
+                    </bpmn2:exclusiveGateway>
+                    <bpmn2:sequenceFlow id="f3" sourceRef="GW1" targetRef="End1">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${qualityPassed}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:sequenceFlow id="f4" sourceRef="GW1" targetRef="End2">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${!qualityPassed}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:endEvent id="End1" />
+                    <bpmn2:endEvent id="End2" />
+                  </bpmn2:process>
+                </bpmn2:definitions>
+                """;
+
+        BpmnModelInstance model = Bpmn.readModelFromStream(
+                new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+
+        Map<String, Set<String>> byId = ExternalTaskWorkerGenerator.detectGatewayVariablesByActivityId(model);
+
+        // keyed by element ID, not topic
+        assertThat(byId).containsKey("Activity_Check");
+        assertThat(byId.get("Activity_Check")).containsExactly("qualityPassed");
+        assertThat(byId).doesNotContainKey("Checking"); // topic is NOT a key here
+    }
+
+    @Test
+    void detectsByActivityIdReturnsEmptyForNoGateways() {
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                    id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+                  <bpmn2:process id="proc" isExecutable="true">
+                    <bpmn2:startEvent id="Start" />
+                    <bpmn2:sequenceFlow id="f1" sourceRef="Start" targetRef="Task1" />
+                    <bpmn2:serviceTask id="Task1" name="Do work"
+                        camunda:type="external" camunda:topic="Work" />
+                    <bpmn2:sequenceFlow id="f2" sourceRef="Task1" targetRef="End" />
+                    <bpmn2:endEvent id="End" />
+                  </bpmn2:process>
+                </bpmn2:definitions>
+                """;
+
+        BpmnModelInstance model = Bpmn.readModelFromStream(
+                new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+
+        Map<String, Set<String>> byId = ExternalTaskWorkerGenerator.detectGatewayVariablesByActivityId(model);
+
+        assertThat(byId).isEmpty();
+    }
+
+    @Test
+    void detectsByActivityIdHandlesNonExternalActivities() {
+        // User task (not external task) preceding a gateway — the by-activity-ID method
+        // covers ANY activity type, not just external tasks.
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+                  <bpmn2:process id="proc" isExecutable="true">
+                    <bpmn2:startEvent id="Start" />
+                    <bpmn2:sequenceFlow id="f1" sourceRef="Start" targetRef="UserTask_Review" />
+                    <bpmn2:userTask id="UserTask_Review" name="Review" />
+                    <bpmn2:sequenceFlow id="f2" sourceRef="UserTask_Review" targetRef="GW" />
+                    <bpmn2:exclusiveGateway id="GW">
+                      <bpmn2:incoming>f2</bpmn2:incoming>
+                      <bpmn2:outgoing>f3</bpmn2:outgoing>
+                      <bpmn2:outgoing>f4</bpmn2:outgoing>
+                    </bpmn2:exclusiveGateway>
+                    <bpmn2:sequenceFlow id="f3" sourceRef="GW" targetRef="End1">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${approved}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:sequenceFlow id="f4" sourceRef="GW" targetRef="End2">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${!approved}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:endEvent id="End1" />
+                    <bpmn2:endEvent id="End2" />
+                  </bpmn2:process>
+                </bpmn2:definitions>
+                """;
+
+        BpmnModelInstance model = Bpmn.readModelFromStream(
+                new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+
+        Map<String, Set<String>> byId = ExternalTaskWorkerGenerator.detectGatewayVariablesByActivityId(model);
+
+        assertThat(byId).containsKey("UserTask_Review");
+        assertThat(byId.get("UserTask_Review")).containsExactly("approved");
+    }
+
+    @Test
+    void detectsByActivityIdFromRealManufBpmn() throws Exception {
+        assumeFixturesPresent();
+        String manufBpmn = Files.readString(REPO_ROOT.resolve("Manuf-camunda.bpmn"));
+        BpmnModelInstance model = Bpmn.readModelFromStream(
+                new ByteArrayInputStream(manufBpmn.getBytes(StandardCharsets.UTF_8)));
+
+        Map<String, Set<String>> byId = ExternalTaskWorkerGenerator.detectGatewayVariablesByActivityId(model);
+
+        // At least one activity element ID maps to a gateway variable — we don't hardcode
+        // the element IDs (they're UUIDs), but verify the mapping is non-empty and the
+        // values contain the known condition variables.
+        assertThat(byId).isNotEmpty();
+        assertThat(byId.values().stream().flatMap(Set::stream).toList())
+                .contains("orderApproved", "qualityPassed");
+    }
+
+    @Test
+    void elReservedWordsAreNotTreatedAsVariables() {
+        // ${false} is an EL literal, not a variable reference. The WireTransfer BPMN uses
+        // ${false} as a dead-path condition and ${execution.getVariable('agentFlaggedRisk') == true}
+        // for the risk path. Neither should produce a "variable" in the detection result.
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+                  <bpmn2:process id="proc" isExecutable="true">
+                    <bpmn2:startEvent id="Start" />
+                    <bpmn2:sequenceFlow id="f1" sourceRef="Start" targetRef="Task_A" />
+                    <bpmn2:serviceTask id="Task_A" name="A" />
+                    <bpmn2:sequenceFlow id="f2" sourceRef="Task_A" targetRef="GW" />
+                    <bpmn2:exclusiveGateway id="GW">
+                      <bpmn2:incoming>f2</bpmn2:incoming>
+                      <bpmn2:outgoing>f3</bpmn2:outgoing>
+                      <bpmn2:outgoing>f4</bpmn2:outgoing>
+                      <bpmn2:outgoing>f5</bpmn2:outgoing>
+                    </bpmn2:exclusiveGateway>
+                    <bpmn2:sequenceFlow id="f3" sourceRef="GW" targetRef="End1">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${false}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:sequenceFlow id="f4" sourceRef="GW" targetRef="End2">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${true}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:sequenceFlow id="f5" sourceRef="GW" targetRef="End3">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${null}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:endEvent id="End1" />
+                    <bpmn2:endEvent id="End2" />
+                    <bpmn2:endEvent id="End3" />
+                  </bpmn2:process>
+                </bpmn2:definitions>
+                """;
+
+        BpmnModelInstance model = Bpmn.readModelFromStream(
+                new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+
+        // Neither detectGatewayVariables (by topic) nor detectGatewayVariablesByActivityId
+        // should return false/true/null as variable names.
+        assertThat(ExternalTaskWorkerGenerator.detectGatewayVariables(model)).isEmpty();
+        assertThat(ExternalTaskWorkerGenerator.detectGatewayVariablesByActivityId(model)).isEmpty();
+    }
+
+    // Complex gateway expressions. ${execution.getVariable('agentFlaggedRisk') == true}
+    // is a null-safe getter pattern that WireTransfer uses for the risk gateway. The variable name
+    // ('agentFlaggedRisk') must be extracted so the simulation can set it before the gateway evaluates.
+    @Test
+    void complexGetterExpressionVariablesAreDetected() {
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+                  <bpmn2:process id="proc" isExecutable="true">
+                    <bpmn2:startEvent id="Start" />
+                    <bpmn2:sequenceFlow id="f1" sourceRef="Start" targetRef="Task_Risk" />
+                    <bpmn2:serviceTask id="Task_Risk" name="Risk Check"
+                        camunda:type="external" camunda:topic="RiskCheck" />
+                    <bpmn2:sequenceFlow id="f2" sourceRef="Task_Risk" targetRef="GW_Risk" />
+                    <bpmn2:exclusiveGateway id="GW_Risk">
+                      <bpmn2:incoming>f2</bpmn2:incoming>
+                      <bpmn2:outgoing>f3</bpmn2:outgoing>
+                      <bpmn2:outgoing>f4</bpmn2:outgoing>
+                    </bpmn2:exclusiveGateway>
+                    <bpmn2:sequenceFlow id="f3" sourceRef="GW_Risk" targetRef="End1">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${execution.getVariable('agentFlaggedRisk') == true}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:sequenceFlow id="f4" sourceRef="GW_Risk" targetRef="End2">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${false}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:endEvent id="End1" />
+                    <bpmn2:endEvent id="End2" />
+                  </bpmn2:process>
+                </bpmn2:definitions>
+                """;
+
+        BpmnModelInstance model = Bpmn.readModelFromStream(
+                new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+
+        // by-topic: RiskCheck topic feeds GW_Risk, should detect agentFlaggedRisk
+        Map<String, Set<String>> byTopic = ExternalTaskWorkerGenerator.detectGatewayVariables(model);
+        assertThat(byTopic).containsKey("RiskCheck");
+        assertThat(byTopic.get("RiskCheck")).containsExactly("agentFlaggedRisk");
+
+        // by-activity-id: Task_Risk feeds GW_Risk
+        Map<String, Set<String>> byActivity = ExternalTaskWorkerGenerator.detectGatewayVariablesByActivityId(model);
+        assertThat(byActivity).containsKey("Task_Risk");
+        assertThat(byActivity.get("Task_Risk")).containsExactly("agentFlaggedRisk");
+    }
+
+    // Both simple ${varName} and complex ${execution.getVariable('var')} in the same gateway
+    @Test
+    void mixedSimpleAndComplexExpressionsDetectAllVariables() {
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+                  <bpmn2:process id="proc" isExecutable="true">
+                    <bpmn2:startEvent id="Start" />
+                    <bpmn2:sequenceFlow id="f1" sourceRef="Start" targetRef="Task_A" />
+                    <bpmn2:serviceTask id="Task_A" name="A" />
+                    <bpmn2:sequenceFlow id="f2" sourceRef="Task_A" targetRef="GW" />
+                    <bpmn2:exclusiveGateway id="GW">
+                      <bpmn2:incoming>f2</bpmn2:incoming>
+                      <bpmn2:outgoing>f3</bpmn2:outgoing>
+                      <bpmn2:outgoing>f4</bpmn2:outgoing>
+                    </bpmn2:exclusiveGateway>
+                    <bpmn2:sequenceFlow id="f3" sourceRef="GW" targetRef="End1">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${qualityPassed}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:sequenceFlow id="f4" sourceRef="GW" targetRef="End2">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${execution.getVariable("riskLevel") == true}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:endEvent id="End1" />
+                    <bpmn2:endEvent id="End2" />
+                  </bpmn2:process>
+                </bpmn2:definitions>
+                """;
+
+        BpmnModelInstance model = Bpmn.readModelFromStream(
+                new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+
+        Map<String, Set<String>> byActivity = ExternalTaskWorkerGenerator.detectGatewayVariablesByActivityId(model);
+        assertThat(byActivity).containsKey("Task_A");
+        assertThat(byActivity.get("Task_A")).containsExactlyInAnyOrder("qualityPassed", "riskLevel");
     }
 }

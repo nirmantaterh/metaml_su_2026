@@ -284,7 +284,7 @@ class SpringBootProjectGeneratorTest {
         assertThat(readString(written)).doesNotContain(SpringBootProjectGenerator.DELEGATE_PACKAGE);
     }
 
-    // Phase 3C: proves DelegateWriteException actually carries which BPMN element a failed
+    // Proves DelegateWriteException actually carries which BPMN element a failed
     // delegate write was for, using a deterministic, OS-permission-free trigger - a directory
     // already sitting where the delegate's own file needs to go, copied in from the template, so
     // Files.writeString fails every time with no reliance on filesystem ACLs

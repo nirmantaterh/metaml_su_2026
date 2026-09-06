@@ -19,13 +19,37 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-// Generates one external-task worker per camunda:topic, the counterpart to DelegateClassGenerator for delegateExpression tasks. A serviceTask carrying camunda:type="external" is a wait state the engine never runs on its own (see BpmnActivities); without a worker subscribed to its topic the token parks there forever. RedCollar's processes are built entirely from external tasks, so with no worker generation the generated platform deploys but nothing executes. Workers use the embedded engine's ExternalTaskService API directly (fetchAndLock + complete), not the external-task client Spring Boot starter, because the client starter depends on the Camunda REST starter which requires Jersey — incompatible with Spring Boot 4.x. In-process workers are also simpler and faster: no HTTP round-trip, no port configuration, no startup race between server and client. simulateMlAgent decides whether the worker delegates its decision to a TwinDecisionAgent bean (see SpringBootProjectGenerator.writeTwinDecisionAgentInterface) instead of just logging and completing. Every generated Twin worker takes one in its constructor and calls decide(topic, task) for its completion variables - which is what makes the twin side pluggable: register your own @Component implementing TwinDecisionAgent (a real risk model, an ML call, whatever the twin should be mirroring) and Spring wires it in ahead of the generated fallback with no generated code to touch. Manufacturing (proxy) workers just log execution and complete - they're driven by the real business systems the process already targets, not by a pluggable decision boundary. Neither is RedCollar-specific: both read topics straight from the model, and the flag is the caller's. Gateway variable detection: when an external task immediately precedes an exclusive gateway whose condition references a process variable, the generated worker must set that variable or the gateway throws PropertyNotFoundException. The value is non-deterministic (Math.random()), not a predetermined business outcome.
+// Generates one external-task worker per camunda:topic - the counterpart to DelegateClassGenerator for
+// delegateExpression tasks. A serviceTask with camunda:type="external" is a wait state the engine
+// never runs on its own, so without a worker on its topic the token parks there forever.
+// Uses the embedded engine's ExternalTaskService directly (fetchAndLock + complete) rather than the
+// external-task client starter, which pulls in the Camunda REST starter and its Jersey dependency.
+// simulateMlAgent decides whether the worker delegates its completion variables to a TwinDecisionAgent
+// bean instead of just logging and completing - that is what makes the twin side pluggable. Proxy
+// workers only log and complete; they are driven by the real business systems the process targets.
+// Gateway variables: when an external task immediately precedes an exclusive gateway whose condition
+// reads a process variable, the worker must set it or the gateway throws PropertyNotFoundException.
+// Generated workers fail explicitly when no legitimate producer exists - replace the generated throw
+// with real business logic in the target project.
 @Component
 public class ExternalTaskWorkerGenerator {
 
     private static final String CAMUNDA_NS = "http://camunda.org/schema/1.0/bpmn";
     private static final String EXTERNAL_IMPLEMENTATION = "external";
+    // Simple variable references: ${varName} or ${!varName}
     private static final Pattern CONDITION_VAR_PATTERN = Pattern.compile("\\$\\{!?(\\w+)\\}");
+    // Complex expressions: ${execution.getVariable('varName') == value}
+    // Extracts the variable name from getVariable('...') or getVariable("...") calls.
+    // Deliberately narrow: only the exact forms that can be safely and deterministically
+    // understood, not a general EL parser.
+    private static final Pattern GETTER_VAR_PATTERN =
+            Pattern.compile("execution\\.getVariable\\(['\"]([^'\"]+)['\"]\\)");
+    // EL reserved words that the regex may capture from literal expressions like ${false}.
+    // These are not process variables and must not be treated as such.
+    private static final Set<String> EL_RESERVED = Set.of(
+            "true", "false", "null", "empty",
+            "not", "and", "or", "eq", "ne", "lt", "gt", "le", "ge",
+            "instanceof", "div", "mod");
 
     // One worker per unique topic, in document order. Two tasks sharing a topic share the one subscription at runtime, so generating two classes for it would just be two beans fighting over the same topic - deduped by topic for the same reason DelegateClassGenerator dedups by className.
     public List<GeneratedWorker> generate(String bpmnXml, String packageName, boolean simulateMlAgent) {
@@ -34,6 +58,7 @@ public class ExternalTaskWorkerGenerator {
 
         Map<String, Set<String>> gatewayVarsByTopic = detectGatewayVariables(model);
 
+        Set<String> usedClassNames = new LinkedHashSet<>();
         Map<String, GeneratedWorker> byTopic = new LinkedHashMap<>();
         for (Activity element : model.getModelElementsByType(Activity.class)) {
             if (!EXTERNAL_IMPLEMENTATION.equals(element.getAttributeValueNs(CAMUNDA_NS, "type"))) {
@@ -43,7 +68,7 @@ public class ExternalTaskWorkerGenerator {
             if (topic == null || topic.isBlank() || byTopic.containsKey(topic)) {
                 continue;
             }
-            String className = toClassName(topic);
+            String className = disambiguateClassName(toClassName(topic), usedClassNames);
             String label = element.getName() == null || element.getName().isBlank()
                     ? topic
                     : sanitizeForComment(element.getName());
@@ -55,21 +80,10 @@ public class ExternalTaskWorkerGenerator {
     }
 
     // Finds process variables referenced in exclusive-gateway conditions and maps them back to the external-task topic whose worker must set them. Only direct predecessors are traced: if the incoming flow's source is an external-task activity, its topic gets the variable. Intermediate elements (catches, other tasks) are not followed — gateway variables in those cases need different handling anyway.
-    static Map<String, Set<String>> detectGatewayVariables(BpmnModelInstance model) {
+    public static Map<String, Set<String>> detectGatewayVariables(BpmnModelInstance model) {
         Map<String, Set<String>> result = new LinkedHashMap<>();
         for (ExclusiveGateway gw : model.getModelElementsByType(ExclusiveGateway.class)) {
-            Set<String> varNames = new LinkedHashSet<>();
-            for (SequenceFlow outgoing : gw.getOutgoing()) {
-                if (outgoing.getConditionExpression() != null) {
-                    String expr = outgoing.getConditionExpression().getTextContent();
-                    if (expr != null) {
-                        Matcher m = CONDITION_VAR_PATTERN.matcher(expr);
-                        while (m.find()) {
-                            varNames.add(m.group(1));
-                        }
-                    }
-                }
-            }
+            Set<String> varNames = extractConditionVariables(gw);
             if (varNames.isEmpty()) {
                 continue;
             }
@@ -87,6 +101,53 @@ public class ExternalTaskWorkerGenerator {
         return result;
     }
 
+    // Like detectGatewayVariables but keyed by BPMN activity element ID rather than external-task
+    // topic, and covering ANY activity type. Used by the Workbench simulation to determine which
+    // gateway variables an activity feeds regardless of whether it is an external task, user task,
+    // or service task. Lets the Workbench set explicit simulation values on a process instance
+    // before the gateway evaluates, instead of relying on an EL-resolver fallback.
+    public static Map<String, Set<String>> detectGatewayVariablesByActivityId(BpmnModelInstance model) {
+        Map<String, Set<String>> result = new LinkedHashMap<>();
+        for (ExclusiveGateway gw : model.getModelElementsByType(ExclusiveGateway.class)) {
+            Set<String> varNames = extractConditionVariables(gw);
+            if (varNames.isEmpty()) {
+                continue;
+            }
+            for (SequenceFlow incoming : gw.getIncoming()) {
+                FlowNode source = incoming.getSource();
+                if (source instanceof Activity) {
+                    result.computeIfAbsent(source.getId(), k -> new LinkedHashSet<>()).addAll(varNames);
+                }
+            }
+        }
+        return result;
+    }
+
+    private static Set<String> extractConditionVariables(ExclusiveGateway gw) {
+        Set<String> varNames = new LinkedHashSet<>();
+        for (SequenceFlow outgoing : gw.getOutgoing()) {
+            if (outgoing.getConditionExpression() != null) {
+                String expr = outgoing.getConditionExpression().getTextContent();
+                if (expr != null) {
+                    // Simple variable references: ${varName}, ${!varName}
+                    Matcher m = CONDITION_VAR_PATTERN.matcher(expr);
+                    while (m.find()) {
+                        String name = m.group(1);
+                        if (!EL_RESERVED.contains(name)) {
+                            varNames.add(name);
+                        }
+                    }
+                    // Complex expressions: execution.getVariable('varName')
+                    Matcher g = GETTER_VAR_PATTERN.matcher(expr);
+                    while (g.find()) {
+                        varNames.add(g.group(1));
+                    }
+                }
+            }
+        }
+        return varNames;
+    }
+
     // topics are conventionally already valid Java identifiers (e.g. SamplingTwin), but this is user-authored BPMN - a stray character shouldn't produce a .java file that fails to compile.
     private static String toClassName(String topic) {
         StringBuilder sanitized = new StringBuilder(topic.length());
@@ -102,6 +163,26 @@ public class ExternalTaskWorkerGenerator {
         return sanitized.append("Worker").toString();
     }
 
+    // Resolves collisions where distinct external-task topics sanitize to the same base Java class name
+    // (e.g. "Foo-Bar" and "Foo_Bar" both sanitize to "Foo_BarWorker"). Disambiguates by appending a numeric
+    // suffix in document order, preserving stability for non-colliding names while preventing overwrite.
+    private static String disambiguateClassName(String baseClassName, Set<String> usedClassNames) {
+        if (usedClassNames.add(baseClassName)) {
+            return baseClassName;
+        }
+        String prefix = baseClassName.endsWith("Worker")
+                ? baseClassName.substring(0, baseClassName.length() - "Worker".length())
+                : baseClassName;
+        int suffix = 2;
+        while (true) {
+            String candidate = prefix + "_" + suffix + "Worker";
+            if (usedClassNames.add(candidate)) {
+                return candidate;
+            }
+            suffix++;
+        }
+    }
+
     private static String sanitizeForComment(String label) {
         return label.replaceAll("\\s+", " ").trim();
     }
@@ -113,16 +194,30 @@ public class ExternalTaskWorkerGenerator {
                 : renderPlainWorkerSource(packageName, className, topic, label, gatewayVars);
     }
 
-    // Twin workers delegate their completion variables to an OPTIONALLY injected TwinDecisionAgent (see SpringBootProjectGenerator.writeTwinDecisionAgentInterface) - the pluggable boundary a real model/agent implementation attaches to. ObjectProvider (not a directly injected TwinDecisionAgent, and deliberately not a second @ConditionalOnMissingBean fallback @Component either - that combination silently fails to register: @ConditionalOnMissingBean is only reliably honored inside @Configuration/@AutoConfiguration classes, not on arbitrary component-scanned beans, so with no other implementation on the classpath the "fallback" bean never gets created at all and the app fails to start) is what makes this pluggable AND safe with zero implementations registered: getIfAvailable() returns null cleanly when nobody has wired one in, and returns the single implementation the moment a real @Component providing one exists - no generated code to touch either way. If this topic's activity directly precedes an exclusive gateway (see detectGatewayVariables), the gateway's condition variables must ALSO land in the completion map - the twin side runs its own copy of the same BPMN structure, so the same PropertyNotFoundException risk applies here exactly as it does to the plain (proxy) worker. Rather than require every TwinDecisionAgent implementation to know which topics feed which gateways, the worker itself fills in any gateway variable that's still missing after either path runs, with the same non-deterministic fallback the proxy side uses - a real agent that DOES set the variable simply has that value win.
+    // Twin workers delegate their completion variables to an optionally injected TwinDecisionAgent - the
+    // boundary a real model or agent attaches to.
+    // ObjectProvider rather than a direct injection or a @ConditionalOnMissingBean fallback bean: that
+    // annotation is only honoured reliably inside @Configuration classes, so as a component-scanned bean
+    // the fallback never registers and the app fails to start. getIfAvailable() returns null cleanly with
+    // nothing wired in, and the real implementation the moment one exists.
+    // Gateway variables this topic feeds must also land in the completion map, so the worker fills in
+    // anything still missing after either path runs rather than requiring every TwinDecisionAgent to know
+    // which topics feed which gateways. A real agent that does set the variable simply wins.
     private static String renderTwinWorkerSource(String packageName, String className, String topic, String label,
             Set<String> gatewayVars) {
         // Derive the worker base package for the GeneratedExternalTaskWorker import
         String workerBasePackage = packageName.substring(0, packageName.lastIndexOf('.'));
+        // Gateway variable fallback throws IllegalStateException instead of
+        // Math.random() or Boolean.TRUE. A real TwinDecisionAgent implementation must
+        // provide legitimate business logic. The absence of a required variable is a
+        // missing-state condition — fail explicitly rather than fabricate a decision.
         StringBuilder fallbackLines = new StringBuilder();
         for (String varName : gatewayVars) {
             fallbackLines.append("            if (!variables.containsKey(\"").append(varName).append("\")) {\n")
-                    .append("                variables.put(\"").append(varName)
-                    .append("\", Math.random() > 0.5);\n            }\n");
+                    .append("                // TODO: replace with real business logic from TwinDecisionAgent\n")
+                    .append("                throw new IllegalStateException(\"Gateway variable '")
+                    .append(varName).append("' was not set by TwinDecisionAgent — register a @Component ")
+                    .append("implementing TwinDecisionAgent to provide real business decisions\");\n            }\n");
         }
         return """
                 package %1$s;
@@ -218,11 +313,17 @@ public class ExternalTaskWorkerGenerator {
                     """.formatted(packageName, topic, label, className, workerBasePackage);
         }
 
-        // Workers that precede exclusive gateways must set the condition variables or the gateway throws PropertyNotFoundException. Values are non-deterministic (Math.random), not a predetermined business outcome — the BPMN responds to whatever the runtime produces, and the process may take either branch on any given execution.
+        // Generated workers that precede gateways must fail explicitly when the
+        // gateway variable has no legitimate producer. The generated code throws rather than
+        // fabricating a random business decision. Replace the throw with real business logic
+        // (a service call, a rule engine, an ML model inference, etc.) in the generated project.
         StringBuilder varLines = new StringBuilder();
         for (String varName : gatewayVars) {
-            varLines.append("            variables.put(\"").append(varName)
-                    .append("\", Math.random() > 0.5);\n");
+            varLines.append("            if (!variables.containsKey(\"").append(varName).append("\")) {\n")
+                    .append("                // TODO: replace with real business logic\n")
+                    .append("                throw new IllegalStateException(\"Gateway variable '")
+                    .append(varName).append("' must be set by a legitimate producer — ")
+                    .append("implement business logic in this worker\");\n            }\n");
         }
 
         String body = "            logger.info(\"Executing generated external-task worker for activity \\\""

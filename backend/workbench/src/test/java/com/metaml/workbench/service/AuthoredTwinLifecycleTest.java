@@ -16,6 +16,7 @@ import java.util.List;
 import org.camunda.bpm.engine.HistoryService;
 import org.camunda.bpm.engine.RepositoryService;
 import org.camunda.bpm.engine.RuntimeService;
+import org.camunda.bpm.engine.ExternalTaskService;
 import org.camunda.bpm.engine.TaskService;
 import org.camunda.bpm.engine.repository.Deployment;
 import org.camunda.bpm.engine.repository.ProcessDefinition;
@@ -86,7 +87,7 @@ class AuthoredTwinLifecycleTest {
 
         WorkbenchStateStore stateStore = mock(WorkbenchStateStore.class);
         ApprovalService approvalService = mock(ApprovalService.class);
-        when(stateStore.load()).thenReturn(new WorkbenchStateStore.Snapshot(List.of(), List.of()));
+        when(stateStore.load()).thenReturn(new WorkbenchStateStore.Snapshot(List.of()));
         when(approvalService.listAllApproved()).thenReturn(List.of());
 
         processModelArchiveStore = mock(ProcessModelArchiveStore.class);
@@ -108,7 +109,7 @@ class AuthoredTwinLifecycleTest {
 
         return new WorkbenchServiceImpl(mock(NodeManagerClient.class), mock(GovernanceService.class),
                 mock(PolicyDecisionEngine.class), approvalService, runtimeService, repositoryService,
-                mock(HistoryService.class), mock(TaskService.class), mock(TwinModelGenerator.class), stateStore,
+                mock(HistoryService.class), mock(TaskService.class), mock(ExternalTaskService.class), mock(TwinModelGenerator.class), stateStore,
                 modelFileStore, processModelArchiveStore, delegateClassGenerator, generator,
                 new SpringBootProjectLauncher(), tracker);
     }

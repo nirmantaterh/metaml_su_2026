@@ -3,7 +3,9 @@ package com.metaml.workbench.generation;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 
-// One specific generated delegate's own file failed to write - carries which one, since that's already known right there in SpringBootProjectGenerator.writeDelegates' own loop and would otherwise be lost the moment it's wrapped in a bare UncheckedIOException the way every other file write in that class is. This is the one point in the whole generate pipeline that's genuinely scoped to a single BPMN element rather than the operation as a whole - a missing template directory or an unparsable BPMN document isn't attributable to one delegate, but a failure writing THIS delegate's file, mid-loop, is. Extends UncheckedIOException so nothing downstream that only expects that type breaks.
+// A single generated delegate's file failed to write. The only failure in the generate pipeline
+// attributable to one BPMN element, so it carries which one instead of being flattened into a bare
+// UncheckedIOException like every other write in SpringBootProjectGenerator.
 public class DelegateWriteException extends UncheckedIOException {
 
     private final String beanName;
@@ -19,7 +21,7 @@ public class DelegateWriteException extends UncheckedIOException {
         return beanName;
     }
 
-    // null when the delegate that failed to write is itself shared by more than one BPMN element (see GeneratedDelegate's own comment on why that's left null there) - not decided here, just carried through unchanged from the GeneratedDelegate that failed
+    // Null when the failed delegate is shared by several BPMN elements - see GeneratedDelegate.
     public String bpmnElementId() {
         return bpmnElementId;
     }

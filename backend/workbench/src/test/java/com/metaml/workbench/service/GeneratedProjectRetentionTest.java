@@ -18,6 +18,7 @@ import java.util.NoSuchElementException;
 import org.camunda.bpm.engine.HistoryService;
 import org.camunda.bpm.engine.RepositoryService;
 import org.camunda.bpm.engine.RuntimeService;
+import org.camunda.bpm.engine.ExternalTaskService;
 import org.camunda.bpm.engine.TaskService;
 import org.camunda.bpm.engine.repository.Deployment;
 import org.camunda.bpm.engine.repository.ProcessDefinition;
@@ -109,7 +110,7 @@ class GeneratedProjectRetentionTest {
     private WorkbenchServiceImpl newService(WorkflowStateTracker tracker) {
         stateStore = mock(WorkbenchStateStore.class);
         approvalService = mock(ApprovalService.class);
-        when(stateStore.load()).thenReturn(new WorkbenchStateStore.Snapshot(List.of(), List.of()));
+        when(stateStore.load()).thenReturn(new WorkbenchStateStore.Snapshot(List.of()));
         processModelArchiveStore = mock(ProcessModelArchiveStore.class);
         when(processModelArchiveStore.findAll()).thenReturn(List.of());
         when(approvalService.listAllApproved()).thenReturn(List.of());
@@ -129,7 +130,7 @@ class GeneratedProjectRetentionTest {
 
         return new WorkbenchServiceImpl(mock(NodeManagerClient.class), mock(GovernanceService.class),
                 mock(PolicyDecisionEngine.class), approvalService, mock(RuntimeService.class), repositoryService,
-                mock(HistoryService.class), mock(TaskService.class), mock(TwinModelGenerator.class), stateStore,
+                mock(HistoryService.class), mock(TaskService.class), mock(ExternalTaskService.class), mock(TwinModelGenerator.class), stateStore,
                 mock(ProcessModelFileStore.class), processModelArchiveStore, delegateClassGenerator, generator,
                 launcher, tracker);
     }
@@ -162,7 +163,7 @@ class GeneratedProjectRetentionTest {
     }
 
     // "the directory still exists" is NOT enough to claim a project was retained, and this was
-    // found the hard way: with the idle gate deliberately disabled, cleanup on Windows deletes
+    // With the idle gate deliberately disabled, cleanup on Windows deletes
     // everything inside a running project's directory and then fails on launch.log, which the
     // running process holds open - leaving a gutted directory that still passes an exists() check.
     // On a filesystem that allows deleting open files it would have vanished outright. So retention

@@ -9,13 +9,20 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-// Scope item 4: the generated app used to expose one generic completion endpoint that every activity went through. Joanna confirmed it has to be one endpoint per activity instead, so something has to answer "which activities does this BPMN actually have". The first cut of this class answered that with "user tasks". That was a type list, and a type list is the wrong abstraction - it says nothing about why a user task qualified. The real question is about execution semantics, not element type: an activity is eligible when the engine parks the token there and will never move it on its own, so something outside the process has to trigger it That is what an endpoint can honestly represent. Everything else either runs on arrival or is driven by the engine, and an endpoint for it would be an endpoint that cannot do anything. This distinction cuts across element types rather than along them, which is the point: a serviceTask carrying camunda:type="external" is eligible, while a serviceTask carrying a delegateExpression is not. Same element type, opposite answers, decided by configuration. Deliberately NOT merged with DelegateClassGenerator's traversal even though both read the same file. That one answers "which delegate beans must exist", keyed on delegateExpression and deduped by class name; two activities sharing one delegateExpression correctly produce one class. Endpoints are the opposite: those same two activities must produce two endpoints.
+// Which activities the generated app needs a completion endpoint for.
+// Eligibility is about execution semantics, not element type: an activity qualifies when the engine
+// parks the token there and will never move it on its own. So a serviceTask with
+// camunda:type="external" is eligible while one with a delegateExpression is not - same element
+// type, opposite answers.
+// Deliberately not merged with DelegateClassGenerator's traversal: that one dedupes by
+// delegateExpression, while two activities sharing an expression still need two endpoints.
 public final class BpmnActivities {
 
     private static final String CAMUNDA_NS = "http://camunda.org/schema/1.0/bpmn";
     private static final String EXTERNAL_IMPLEMENTATION = "external";
 
-    // How the generated app has to talk to the engine to move this activity along. The endpoint layer stays uniform - one URL per activity, always /<activity>/complete - and this is the only thing that differs underneath, which is what keeps the generator generic while the execution stays faithful to what the activity actually is.
+    // How the endpoint must move this activity along. The URL shape stays uniform
+    // (/<activity>/complete); only this differs underneath.
     public enum Trigger {
         // a real human task the engine created; TaskService completes it
         USER_TASK,
@@ -49,7 +56,11 @@ public final class BpmnActivities {
         return activities;
     }
 
-    // null means "the engine handles this one, an endpoint would be a lie". camunda:type is read as a raw namespaced attribute rather than through ServiceTask's own getCamundaType(), because the external implementation is equally legal on a sendTask or a businessRuleTask - going through the typed getter would mean re-listing exactly the element types this is trying not to depend on. Checked before the element types below because "external" overrides whatever the element would otherwise do: a serviceTask marked external is a wait state, not an inline call.
+    // Null means the engine handles this one and an endpoint would be a lie.
+    // camunda:type is read as a raw namespaced attribute rather than through getCamundaType(), because the
+    // external implementation is equally legal on a sendTask or businessRuleTask - the typed getter would
+    // mean re-listing exactly the element types this avoids depending on.
+    // Checked first because "external" overrides whatever the element would otherwise do.
     private static Trigger triggerFor(org.camunda.bpm.model.bpmn.instance.Activity element) {
         if (EXTERNAL_IMPLEMENTATION.equals(element.getAttributeValueNs(CAMUNDA_NS, "type"))) {
             return Trigger.EXTERNAL_TASK;
@@ -74,7 +85,10 @@ public final class BpmnActivities {
         return fromId.isEmpty() ? "activity" : fromId;
     }
 
-    // ASCII letters and digits only. Character.toLowerCase(char) rather than String.toLowerCase(), which is locale-sensitive and would quietly produce a different URL under a Turkish default locale - the same trap GovernanceServiceImpl already pins with Locale.ROOT. Non-ASCII letters are dropped rather than transliterated: guessing that "ü" means "u" is a judgement call this has no business making, and the id fallback above already covers a name that disappears entirely.
+    // ASCII letters and digits only. Character.toLowerCase(char), not String.toLowerCase(), which is
+    // locale-sensitive and would produce a different URL under a Turkish default locale.
+    // Non-ASCII letters are dropped rather than transliterated - the id fallback above covers a name that
+    // disappears entirely.
     private static String slugify(String raw) {
         if (raw == null) {
             return "";

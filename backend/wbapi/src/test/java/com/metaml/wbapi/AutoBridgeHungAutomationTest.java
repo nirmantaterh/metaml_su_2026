@@ -26,7 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 
-// Phase 9/10 red team finding: TwinAutomationDelegate had no timeout around
+// TwinAutomationDelegate had no timeout around
 // ProjectAutomationService.execute(), and AutoBridgeTrigger's single-thread executor never
 // recovered from a call that blocked past its own wait - one hung automation call wedged the
 // executor's only thread forever, so every OTHER twin's auto-bridge queued behind it and silently

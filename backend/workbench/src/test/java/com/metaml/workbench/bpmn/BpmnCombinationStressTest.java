@@ -29,10 +29,10 @@ import com.metaml.workbench.codegen.GeneratedDelegate;
 import com.metaml.workbench.generation.GeneratedProject;
 import com.metaml.workbench.generation.SpringBootProjectGenerator;
 
-// Phase 10: Adversarial BPMN and Proxy/Twin Completeness Test Suite
+// BPMN construct combinations and Proxy/Twin completeness
 // Verifies complex construct combinations, fresh generation, runtime execution in Camunda 7.22,
 // semantic preservation between original and twin, and loud fail-fast negative testing.
-class AdversarialBpmnCombinationsTest {
+class BpmnCombinationStressTest {
 
     private final TwinModelGenerator generator = new TwinModelGenerator();
     private ProcessEngine engine;

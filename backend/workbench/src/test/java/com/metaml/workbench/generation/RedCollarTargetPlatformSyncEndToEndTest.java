@@ -264,7 +264,7 @@ class RedCollarTargetPlatformSyncEndToEndTest {
         }
     }
 
-    // Reliability hardening (Pass 1) regression: proves a genuine RabbitMQ redelivery of an
+    // Proves a genuine RabbitMQ redelivery of an
     // already-consumed TASK message does not double-advance the Twin. Rather than relying on
     // AMQP's own natural redelivery (which needs a crash or a nack to trigger and would make this
     // test flaky), the exact payload the generated app already published is captured from its own
