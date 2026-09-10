@@ -10,10 +10,7 @@ import java.lang.annotation.Target;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * Isolates full-context tests from the development data directory.
- *
- * <p>All file-backed stores must use test paths; {@code @TestPropertySource} can override them.
- * Tests using {@code @TempDir} stores are already isolated.
+ * Isolates full-context tests from development data directories by routing stores to test paths.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)

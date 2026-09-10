@@ -7,7 +7,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-// Publishes "proxy is ready to advance past this signal" to that signal's own dedicated task queue. TaskQueueListener performs the actual Camunda signal delivery that releases twin's waiting execution, on consume. Always present as a bean, but isEnabled() is false unless metaml.messaging.enabled=true. Reliability hardening (Pass 1): publish() now blocks on a publisher confirm (rabbitTemplate.invoke + waitForConfirmsOrDie, which requires spring.rabbitmq.publisher-confirm-type=simple - see this project's application.properties) before returning or logging success. SignalBroadcaster.deliverTo() only marks a signal as everDelivered AFTER publish() returns normally, so a NACKed or unconfirmed publish throws here, deliverTo() never marks it delivered, and the next broadcaster tick simply retries - this preserves the existing "safe to re-attempt" behavior rather than adding a second, separate retry mechanism on top of it.
+// Publishes proxy advance notification, awaiting broker confirmation before returning.
 @Component
 public class TaskQueuePublisher {
 

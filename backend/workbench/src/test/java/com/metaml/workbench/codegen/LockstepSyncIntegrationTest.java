@@ -13,14 +13,7 @@ import org.junit.jupiter.api.Test;
 import com.metaml.workbench.bpmn.TwinModelGenerator;
 
 /**
- * Proves that the lockstep synchronization mechanism correctly transforms both
- * proxy and twin BPMNs for delegate-expression workflows (the Fried Rice case):
- *
- *   1. Proxy BPMN: signal catch events inserted after each serviceTask
- *   2. Twin BPMN: receiveTask elements replaced by signal catch events
- *   3. Same signal names on both sides (sync_<activityId>)
- *   4. TwinAdvance_ message declarations removed from twin
- *   5. Signal declarations added to both BPMNs
+ * Tests BPMN transformations for lockstep synchronization across proxy and twin models.
  */
 class LockstepSyncIntegrationTest {
 
@@ -68,11 +61,7 @@ class LockstepSyncIntegrationTest {
         assertThat(result.syncActivityIds())
                 .containsExactlyInAnyOrder("taskA", "taskB", "taskC");
 
-        // The XSD-ordering bugs found during manual runtime validation (incoming/outgoing vs.
-        // signalEventDefinition; signal vs. BPMNDiagram) were both invisible to the string-contains
-        // assertions below - only a real schema-validating parse ever caught them. Re-parsing the
-        // transformed output through Camunda's own BPMN parser here means a THIRD such regression
-        // fails this test instead of only surfacing at deployment time.
+        // Verify schema validity by parsing transformed output through Camunda.
         BpmnModelInstance parsedProxy = Bpmn.readModelFromStream(
                 new ByteArrayInputStream(result.bpmnXml().getBytes(StandardCharsets.UTF_8)));
         assertThat(parsedProxy).as("transformed proxy BPMN must remain valid, parseable Camunda BPMN").isNotNull();
@@ -114,9 +103,7 @@ class LockstepSyncIntegrationTest {
         TargetPlatformSourceGenerator.Result twinResult = generator.generate(
                 twinBpmn, true, proxyResult.syncActivityIds());
 
-        // Same schema-validity guard as the proxy side above - the twin transformation does its own
-        // independent element-ordering surgery (replacing receiveTask with intermediateCatchEvent)
-        // and deserves the same regression net.
+        // Verify schema validity of the transformed twin BPMN.
         BpmnModelInstance parsedTwin = Bpmn.readModelFromStream(
                 new ByteArrayInputStream(twinResult.bpmnXml().getBytes(StandardCharsets.UTF_8)));
         assertThat(parsedTwin).as("transformed twin BPMN must remain valid, parseable Camunda BPMN").isNotNull();
@@ -150,7 +137,7 @@ class LockstepSyncIntegrationTest {
         TargetPlatformSourceGenerator.Result twinResult = generator.generate(
                 twinBpmn, true, proxyResult.syncActivityIds());
 
-        // The entire point: both sides use the exact same signal names
+        // Both sides must use the exact same signal names.
         assertThat(proxyResult.syncSignalNames()).isEqualTo(twinResult.syncSignalNames());
     }
 
@@ -161,7 +148,7 @@ class LockstepSyncIntegrationTest {
                 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
                     xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
                     id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
-                  <bpmn:process id="P1" isExecutable="true">
+                  <bpmn:process id="Process_ExternalTask" isExecutable="true">
                     <bpmn:startEvent id="S" />
                     <bpmn:serviceTask id="ExtTask" camunda:type="external" camunda:topic="myTopic" />
                     <bpmn:endEvent id="E" />

@@ -5,7 +5,7 @@ import { listModelSummaries, generateProject } from "../../services/workbench/Wo
 import ProcessSpinner from "../../components/common/ProcessSpinner";
 import NoDataAvailable from "../../components/common/NoDataAvailable";
 
-// Transmute > Generate: every saved process, across every project, one row each - clone the RedCollarTP Target Platform template (portal + proxy + twin), scan both BPMNs for delegates (activities) and events, and generate the matching Java classes. Picking a process here is the whole point of this page; Model itself never triggers this anymore (see ModelPage's own comment) since Generate has nothing to do until there's a full catalogue to choose from.
+// Transmute > Generate: lists saved process models across projects, allowing users to generate Target Platform projects from BPMN definitions.
 const GenerateProjectListPage = () => {
     const [processes, setProcesses] = useState([]);
     const [loading, setLoading] = useState(true);

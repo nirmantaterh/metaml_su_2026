@@ -7,7 +7,9 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-// Publishes "twin has advanced past this signal" to that signal's own dedicated response queue. ResponseQueueListener performs the actual Camunda signal delivery that releases proxy's waiting execution, on consume. Reliability hardening (Pass 1): see TaskQueuePublisher's own comment - identical publisher-confirm + explicit-persistence treatment, for the same reason.
+// Publishes "twin has advanced past this signal" to that signal's dedicated response queue.
+// ResponseQueueListener performs Camunda signal delivery upon message consumption.
+// Uses synchronous publisher confirmation and persistent message delivery matching TaskQueuePublisher.
 @Component
 public class ResponseQueuePublisher {
 

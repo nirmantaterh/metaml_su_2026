@@ -13,11 +13,8 @@ public class TargetPlatformMessagingGenerator {
 
     public record GeneratedSource(String relativeDirectory, String className, String source) { }
 
-    // messagingNamespace scopes queue and exchange names so two independently generated projects can never
-    // share a queue even with identical signal names.
-    // sharedSignalNames are present in BOTH proxy and twin - real sync points, each getting a task+response
-    // queue pair. allSignalNames is every signal in either BPMN: SignalBroadcaster polls them all, and one
-    // declared on only one side simply has no partner and falls back to direct delivery.
+    // messagingNamespace isolates AMQP queues across projects with identical signal names.
+    // Shared signals receive queue pairs, while unilateral signals deliver directly.
     public List<GeneratedSource> generate(String messagingNamespace, Set<String> sharedSignalNames,
             Set<String> allSignalNames, String proxyProcessKey, String twinProcessKey) {
         List<GeneratedSource> sources = new ArrayList<>();
@@ -33,9 +30,7 @@ public class TargetPlatformMessagingGenerator {
         return raw.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    // Same kebab-case queue-name convention as SpringBootProjectGenerator's sibling helpers, restricted
-    // to safe RabbitMQ identifier characters. Signal names are the same kind of author-controlled BPMN
-    // identifier, so the same sanitisation applies.
+    // Kebab-case queue naming convention for RabbitMQ queue identifier sanitization.
     private static String slug(String raw) {
         String withHyphens = raw
                 .replaceAll("([a-z0-9])([A-Z])", "$1-$2")
@@ -59,14 +54,14 @@ public class TargetPlatformMessagingGenerator {
 
                 import org.springframework.stereotype.Component;
 
-                // Pairs a proxy instance with its twin by the caller-supplied business key both /start endpoints accept - no BPMN-specific knowledge. The first process instance to register a given business key is the "initiator" (proxy, in this generated platform's own usage); the next instance to register the SAME key is the "responder" (twin). A business key is pairing/correlation data only, not the communication mechanism itself - see SignalBroadcaster for how these roles turn each shared signal into a real, targeted proxy -> twin -> proxy handoff instead of an undifferentiated broadcast.
+                // Pairs proxy and twin process instances by shared businessKey correlation identifier.
                 @Component
                 public class PairRegistry {
 
                     private final ConcurrentMap<String, String> initiators = new ConcurrentHashMap<>();
                     private final ConcurrentMap<String, String> responders = new ConcurrentHashMap<>();
 
-                    // Returns "initiator" for the first instance registered under businessKey, "responder" for the second, and null for a blank key or a third-or-later instance sharing an already-claimed key - unpaired, callers fall back to their own default behavior.
+                    // Classifies process instance as initiator (first) or responder (second) for the businessKey.
                     public String registerAndClassify(String businessKey, String processInstanceId) {
                         if (businessKey == null || businessKey.isBlank()) {
                             return null;
@@ -160,7 +155,7 @@ public class TargetPlatformMessagingGenerator {
                 .map(q -> "Map.entry(\"" + escapeJavaStringLiteral(q.signal()) + "\", \"" + q.responseRoutingKey()
                         + "\")")
                 .collect(Collectors.joining(",\n            "));
-        // Every task/response queue is dead-letter-wired to this project's own DLX (see dlxExchangeName above) and declared as a RabbitMQ quorum queue (x-queue-type=quorum) for high availability across broker clusters.
+        // Quorum queues wired with dead-letter exchange (DLX) routing.
         String queueBeans = queues.stream()
                 .map(q -> """
 
@@ -195,7 +190,7 @@ public class TargetPlatformMessagingGenerator {
                         q.responseRoutingKey()))
                 .collect(Collectors.joining());
 
-        // DLX + the two shared DLQs (one for TASK messages, one for RESPONSE messages) - declared as quorum queues for HA replication.
+        // Dead-letter exchange and shared DLQ definitions for task and response messages.
         String dlqSection = hasQueuesForDlq ? """
 
                 @Bean
@@ -255,7 +250,7 @@ public class TargetPlatformMessagingGenerator {
                 import org.springframework.context.annotation.Bean;
                 import org.springframework.context.annotation.Configuration;
 
-                // RabbitMQ topology for this generated platform's proxy<->twin synchronization: one task queue and one response queue per shared BPMN signal (see TargetPlatformMessagingGenerator.assignSignalQueues), scoped to this generated project so two independently generated platforms can never physically share a queue. Enabled only with metaml.messaging.enabled=true. Reliability hardening (Pass 1): every task/response queue dead-letters to this project's own DLX (see DLX_EXCHANGE) instead of a message that exhausts consumer retries (spring.rabbitmq.listener.simple.retry.* in this project's application.properties) silently vanishing. The RabbitTemplate wiring below (mandatory + a returns callback) is configured exactly once here, not per-publisher, since TaskQueuePublisher and ResponseQueuePublisher share the one autoconfigured RabbitTemplate bean - setting it in more than one place would just have the last constructor to run silently win.
+                // Configures RabbitMQ topology, dead-letter routing, and confirms for proxy-twin synchronization.
                 @Configuration
                 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
                 public class RabbitMqConfig {
@@ -282,7 +277,7 @@ public class TargetPlatformMessagingGenerator {
                             %s
                     );
 
-                    // mandatory=true is what makes the broker return (rather than silently drop) a message this exchange/routing-key combination cannot route to any queue - shouldn't happen with this project's own fixed topology, but a returned message is NOT the same failure a publisher confirm NACK catches (a NACK is the broker failing to accept the message at all; a return is the broker accepting it and then finding nowhere to route it), so both are wired here for the same reason: neither must fail silently.
+                    // mandatory=true ensures unroutable messages trigger returnsCallback rather than being silently dropped.
                     public RabbitMqConfig(RabbitTemplate rabbitTemplate) {
                         rabbitTemplate.setMandatory(true);
                         rabbitTemplate.setReturnsCallback(returned -> logger.error(
@@ -312,13 +307,13 @@ public class TargetPlatformMessagingGenerator {
                 import org.springframework.beans.factory.annotation.Value;
                 import org.springframework.stereotype.Component;
 
-                // Publishes "proxy is ready to advance past this signal" to that signal's own dedicated task queue. TaskQueueListener performs the actual Camunda signal delivery that releases twin's waiting execution, on consume. Always present as a bean, but isEnabled() is false unless metaml.messaging.enabled=true. Reliability hardening (Pass 1): publish() now blocks on a publisher confirm (rabbitTemplate.invoke + waitForConfirmsOrDie, which requires spring.rabbitmq.publisher-confirm-type=simple - see this project's application.properties) before returning or logging success. SignalBroadcaster.deliverTo() only marks a signal as everDelivered AFTER publish() returns normally, so a NACKed or unconfirmed publish throws here, deliverTo() never marks it delivered, and the next broadcaster tick simply retries - this preserves the existing "safe to re-attempt" behavior rather than adding a second, separate retry mechanism on top of it.
+                // Publishes proxy advance notification and waits for publisher confirm before marking delivery.
                 @Component
                 public class TaskQueuePublisher {
 
                     private static final Logger logger = LoggerFactory.getLogger(TaskQueuePublisher.class);
 
-                    // Long enough for a broker under normal load to ack/nack; short enough that a genuinely unreachable broker fails this attempt and lets the next broadcaster tick (1s later) retry, rather than blocking the single-threaded scheduler indefinitely.
+                    // Timeout for broker publisher confirmation before retry on next broadcaster tick.
                     private static final long CONFIRM_TIMEOUT_MS = 5000L;
 
                     private final RabbitTemplate rabbitTemplate;
@@ -381,7 +376,9 @@ public class TargetPlatformMessagingGenerator {
                 import org.springframework.beans.factory.annotation.Value;
                 import org.springframework.stereotype.Component;
 
-                // Publishes "twin has advanced past this signal" to that signal's own dedicated response queue. ResponseQueueListener performs the actual Camunda signal delivery that releases proxy's waiting execution, on consume. Reliability hardening (Pass 1): see TaskQueuePublisher's own comment - identical publisher-confirm + explicit-persistence treatment, for the same reason.
+                // Publishes "twin has advanced past this signal" to that signal's dedicated response queue.
+                // ResponseQueueListener performs Camunda signal delivery upon message consumption.
+                // Uses synchronous publisher confirmation and persistent message delivery matching TaskQueuePublisher.
                 @Component
                 public class ResponseQueuePublisher {
 
@@ -468,7 +465,7 @@ public class TargetPlatformMessagingGenerator {
                                 this.runtimeService = runtimeService;
                             }
 
-                            // Reliability hardening (Pass 1): a malformed payload used to be logged and silently dropped (acked as if processed). It now throws instead, so spring.rabbitmq.listener.simple.retry.* retries it (pointlessly, since a malformed payload never becomes valid, but consistently with every other failure path below) and then dead-letters it to RabbitMqConfig.DLQ_TASKS_QUEUE once retries are exhausted - observable there and in this log line, rather than disappearing.
+                            // A malformed payload throws an exception to trigger configured listener retries and dead-letter routing to DLQ_TASKS_QUEUE.
                             @RabbitListener(queues = { %s })
                             public void onTaskMessage(String payload) {
                                 String[] parts = payload.split("\\\\|", -1);
@@ -488,7 +485,7 @@ public class TargetPlatformMessagingGenerator {
                                             + "businessKey={}) via RabbitMQ", signalName, executionId,
                                             processInstanceId, businessKey);
                                 } catch (ProcessEngineException e) {
-                                    // Reliability hardening (Pass 1): distinguishes the expected, harmless cases - this execution already advanced past signalName (still active, but subscribed to something else now: "has not subscribed") or has completed/gone entirely (execution id no longer exists at all: "cannot find execution") - a genuine redelivery of an already-consumed message, or a rework-loop revisit, either way - from every other Camunda failure, which must NOT be swallowed the same way. Camunda has no single dedicated exception subtype covering both; message text is the only signal for either, same as the pre-hardening code relied on implicitly via a blanket catch.
+                                    // Distinguishes expected advancement states (execution already advanced or already completed) from unexpected engine failures, which are rethrown for retry handling.
                                     if (isAlreadyAdvanced(e)) {
                                         logger.info("TASK: signal '{}' delivery to execution {} skipped - "
                                                 + "already advanced past this signal (processInstanceId={}, "
@@ -523,7 +520,7 @@ public class TargetPlatformMessagingGenerator {
                                 this.runtimeService = runtimeService;
                             }
 
-                            // Reliability hardening (Pass 1): see TaskQueueListener's own comment - identical malformed-payload and already-advanced-vs-genuine-failure treatment.
+                            // Validates message payload and routes to DLQ on failure, handling idempotent delivery states consistently with TaskQueueListener.
                             @RabbitListener(queues = { %s })
                             public void onResponseMessage(String payload) {
                                 String[] parts = payload.split("\\\\|", -1);
@@ -571,7 +568,7 @@ public class TargetPlatformMessagingGenerator {
                 package com.tp.TargetPlatform.messaging;
 
                 %s
-                // The real consumer for task messages - the Camunda signal delivery that releases twin's waiting execution happens here, triggered by consuming the message. Enabled only with metaml.messaging.enabled=true; when disabled, SignalBroadcaster delivers signals directly instead.
+                // Consumes task messages from RabbitMQ to deliver Camunda signals releasing waiting twin executions.
                 @Component
                 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
                 public class TaskQueueListener {
@@ -584,7 +581,7 @@ public class TargetPlatformMessagingGenerator {
                 package com.tp.TargetPlatform.messaging;
 
                 %s
-                // The real consumer for response messages - the Camunda signal delivery that releases proxy's waiting execution happens here, triggered by consuming the message.
+                // Consumes response messages from RabbitMQ to deliver Camunda signals releasing waiting proxy executions.
                 @Component
                 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
                 public class ResponseQueueListener {
@@ -600,7 +597,7 @@ public class TargetPlatformMessagingGenerator {
                 new GeneratedSource("messaging", "ResponseQueuePublisher", responsePublisherSource),
                 new GeneratedSource("messaging", "ResponseQueueListener", responseListenerSource)));
 
-        // Makes a dead-lettered TASK/RESPONSE message observable in the application log itself, not only via broker inspection (RabbitMQ management API/UI) - only generated when there is at least one shared signal, matching the DLX/DLQ topology above, which is itself only declared in that same case.
+        // Generates DLQ listener when shared signals exist to log dead-lettered messages.
         if (hasQueuesForDlq) {
             String dlqListenerSource = """
                     package com.tp.TargetPlatform.messaging;
@@ -611,7 +608,7 @@ public class TargetPlatformMessagingGenerator {
                     import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
                     import org.springframework.stereotype.Component;
 
-                    // Consumes both project-scoped DLQs purely to surface a dead-lettered TASK/RESPONSE message in this application's own log - the message itself is already durably held in RabbitMqConfig.DLQ_TASKS_QUEUE / DLQ_RESPONSES_QUEUE and inspectable via the broker's management API regardless of whether anything ever consumes it here.
+                    // Consumes project-scoped dead-letter queues to log unprocessable task and response messages.
                     @Component
                     @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
                     public class DeadLetterQueueListener {
@@ -662,7 +659,7 @@ public class TargetPlatformMessagingGenerator {
                 import com.tp.TargetPlatform.messaging.TaskQueuePublisher;
                 import com.tp.TargetPlatform.messaging.ResponseQueuePublisher;
 
-                // Delivers BPMN-defined signals to the specific executions currently waiting on each one, so proxy's and twin's signal catch events can both advance. Neither throws its own signals, so delivery has to happen externally - this is that external driver. Ported from the equivalent mechanism in the older camundademo-based Target Harness Platform (see SpringBootProjectGenerator.writeSignalBroadcaster's own, more detailed comment) with one simplification: RedCollarTP has no external-task topic to route through, so a shared signal's own name is directly what RabbitMqConfig's queues are keyed by. For a paired proxy+twin (same business key - see PairRegistry and the generated /start endpoints), each shared signal becomes a genuine two-step, targeted handoff instead of an undifferentiated broadcast: 1. REQUEST (proxy -> twin): once both sides of a pair are simultaneously waiting on the same signal, only twin's execution is released. 2. RESPONSE (twin -> proxy): proxy's execution is deliberately left waiting until twin is observed to have moved on - subscribed to a different signal, or completed entirely - proving its gated activity actually ran, not merely that the signal arrived. Only then is proxy's execution released. A signal declared on only one side, or whose partner is not currently waiting on it (unpaired, or a rework-loop revisit), is delivered to immediately instead - this is what lets a lone proxy instance (no twin started) still run to completion.
+                // Coordinates delivery of BPMN signal events between paired Proxy and Twin process executions.
                 @Component
                 public class SignalBroadcaster {
 
@@ -677,7 +674,7 @@ public class TargetPlatformMessagingGenerator {
                     private final Set<String> everDelivered = ConcurrentHashMap.newKeySet();
                     private final Map<String, Integer> partnerArrivalTicks = new ConcurrentHashMap<>();
                     private static final int MAX_PARTNER_ARRIVAL_TICKS = 5;
-                    // Reliability hardening (Pass 2): handoffKeys already logged as stuck-on-a-failed- partner, so the ERROR log below fires once per stuck period rather than once per second for as long as the incident is open. Cleared alongside awaitingResponse's own removal (whether the eventual outcome is a genuine advance or the handoff simply ending some other way) so a LATER stall on the same handoffKey logs again.
+                    // Tracks handoffKeys logged as stalled on an incident so error logging occurs once per stall period rather than repeatedly on every tick.
                     private final Set<String> stuckOnIncidentLogged = ConcurrentHashMap.newKeySet();
 
                     public SignalBroadcaster(RuntimeService runtimeService, PairRegistry pairRegistry,
@@ -734,11 +731,11 @@ public class TargetPlatformMessagingGenerator {
                                 stuckOnIncidentLogged.remove(handoffKey);
                                 deliverTo(signalName, subscription, businessKey, "RESPONSE");
                             } else {
-                                // Reliability hardening (Pass 2): unlike partnerNotComing (bounded, self-releasing - the responder legitimately may not have arrived yet), this wait has no such bound, because there is no safe fallback here - the Twin's gated activity may genuinely still be running, and releasing the Proxy without proof it finished is exactly the "pretend completion" this broadcaster must never do. What CAN be told apart, using real Camunda state rather than an invented timeout, is "still legitimately in progress" from "provably stuck" - a Camunda incident (job retries exhausted, or a failed external task) on the responder's own process instance means it will NOT resolve on its own. Logging that once makes an otherwise silent, indefinite wait observable instead of indistinguishable from a merely slow partner; the proxy still does not advance - only a genuine, later responderHasAdvancedPast()==true (the incident gets resolved and the responder's execution actually moves on) does that.
+                                // Checks whether the partner instance has an active Camunda incident blocking advancement.
                                 boolean partnerHasOpenIncident = runtimeService.createIncidentQuery()
                                         .processInstanceId(partnerInstanceId).count() > 0;
                                 if (partnerHasOpenIncident) {
-                                    // add() itself is what makes this fire only the FIRST tick an incident is observed for this handoffKey - checking the incident BEFORE calling add() (rather than relying on add()'s own return value to short- circuit the query) is what keeps a legitimately-slow, incident-free tick from ever marking this handoffKey "already logged".
+                                    // Logs the incident once per handoffKey until resolved.
                                     if (stuckOnIncidentLogged.add(handoffKey)) {
                                         logger.error("STUCK: proxy execution {} (businessKey={}) is waiting on "
                                                 + "RESPONSE for signal '{}', but its twin partner "
@@ -749,7 +746,7 @@ public class TargetPlatformMessagingGenerator {
                                                 partnerInstanceId);
                                     }
                                 } else {
-                                    // No incident currently open (never had one, or a prior one was already resolved) - clear any stale suppression so a LATER incident on this same handoffKey logs again instead of staying silenced forever.
+                                    // Clear logged state when no incidents remain.
                                     stuckOnIncidentLogged.remove(handoffKey);
                                 }
                             }
@@ -774,10 +771,48 @@ public class TargetPlatformMessagingGenerator {
                         }
                     }
 
+                    // "The partner will never turn up here, stop waiting for it." Getting this wrong in
+                    // the permissive direction is what breaks lockstep: releasing this side early is
+                    // indistinguishable, from the outside, from a synchronization that never happened.
+                    //
+                    // The five-tick budget predates human activities. It assumes both sides reach a
+                    // shared signal within seconds, which held while every gated activity was an
+                    // engine-driven service or external task. It does not hold when the partner is a
+                    // person: a Proxy parked on a userTask reaches its sync point only when someone
+                    // completes the task, which is minutes or hours, not five seconds - and the budget
+                    // would release the Twin long before that, letting it run the whole process
+                    // through while the human had not started.
+                    //
+                    // So the budget is now spent only when the partner is DEMONSTRABLY not coming:
+                    //   - it already passed this signal (everDelivered), or
+                    //   - its process instance is gone, or
+                    //   - it is itself parked on signals and none of them is this one, which is the
+                    //     divergent-path case the budget was written for and still covers.
+                    // A partner that is alive and still working - a human task, a long service call -
+                    // is a partner that is still coming, and this side keeps waiting for it.
                     private boolean partnerNotComing(String waitKey, String partnerInstanceId, String signalName) {
                         if (everDelivered.contains(partnerInstanceId + "|" + signalName)) {
                             partnerArrivalTicks.remove(waitKey);
                             return true;
+                        }
+                        ProcessInstance partner = runtimeService.createProcessInstanceQuery()
+                                .processInstanceId(partnerInstanceId)
+                                .singleResult();
+                        if (partner == null) {
+                            partnerArrivalTicks.remove(waitKey);
+                            return true;
+                        }
+                        List<EventSubscription> partnerSignals = runtimeService.createEventSubscriptionQuery()
+                                .processInstanceId(partnerInstanceId)
+                                .eventType("signal")
+                                .list();
+                        boolean partnerParkedElsewhere = !partnerSignals.isEmpty()
+                                && partnerSignals.stream().noneMatch(s -> s.getEventName().equals(signalName));
+                        if (!partnerParkedElsewhere) {
+                            // Still working towards this rendezvous. Reset rather than accumulate, so a
+                            // partner that later diverges still gets a full budget from that point.
+                            partnerArrivalTicks.remove(waitKey);
+                            return false;
                         }
                         int ticks = partnerArrivalTicks.merge(waitKey, 1, Integer::sum);
                         if (ticks >= MAX_PARTNER_ARRIVAL_TICKS) {
@@ -787,7 +822,7 @@ public class TargetPlatformMessagingGenerator {
                         return false;
                     }
 
-                    // True once the responder has provably moved past the gated task behind signalName - subscribed to a different signal, or completed entirely - rather than merely having received the signal itself, which happens before its gated task ever runs. Relies on the responder's own JavaDelegate.execute() running synchronously, inside the same Camunda command/transaction as the signal delivery that triggers it - only that makes "no longer subscribed to signalName" (checked here via a separate query, on a later broadcaster tick) proof that the gated task actually finished, rather than merely that it started. A delegate that hands work to another thread and returns early would make this method return true before the real work is done.
+                    // Checks whether the responder has completed or transitioned past the task gated by signalName.
                     private boolean responderHasAdvancedPast(String signalName, String responderInstanceId) {
                         ProcessInstance stillActive = runtimeService.createProcessInstanceQuery()
                                 .processInstanceId(responderInstanceId)
@@ -841,9 +876,7 @@ public class TargetPlatformMessagingGenerator {
         return new GeneratedSource("signal", "SignalBroadcaster", source);
     }
 
-    // Replaces the template's placeholder ProxyProcessController with a real /start (registering with
-    // PairRegistry so SignalBroadcaster can pair it with its twin) and an /instances listing.
-    // processKey is baked in as a literal because a generated project deploys exactly one proxy definition.
+    // Generates process controller with start and instance-query endpoints for the given processKey.
     private GeneratedSource proxyController(String processKey) {
         return sideController("proxy", "ProxyProcessController", "/api/proxy", processKey);
     }
@@ -870,7 +903,7 @@ public class TargetPlatformMessagingGenerator {
 
                 import com.tp.TargetPlatform.coordination.PairRegistry;
 
-                // Starts and registers %2$s process instances. businessKey is what pairs a %2$s instance with its counterpart (see PairRegistry / SignalBroadcaster) - the first instance registered under a key is the initiator, the second is the responder, so starting a proxy and a twin with the SAME businessKey is what makes them synchronize.
+                // REST controller starting %2$s instances and registering their businessKey with PairRegistry.
                 @RestController
                 @RequestMapping("%3$s")
                 public class %4$s {
@@ -888,7 +921,7 @@ public class TargetPlatformMessagingGenerator {
                         return "%1$s ok";
                     }
 
-                    // businessKey is optional - omit it to run a lone %1$s instance with nothing to synchronize against (every signal falls back to immediate delivery); supply the SAME key on both sides' /start calls to pair them.
+                    // Starts a process instance; matching businessKey enables coordinated signal synchronization.
                     @PostMapping("/start")
                     public Map<String, Object> start(@RequestParam(required = false) String businessKey) {
                         String key = (businessKey == null || businessKey.isBlank())

@@ -9,7 +9,7 @@ This directory contains standalone, fully completed Spring Boot + Camunda 7 Targ
    - Implements 9 lockstep manufacturing activities (`Cutting`, `Laying`, `Stitching`, `Sampling`, `Checking`, `Marking`, `Packaging`, `Pressing`, `Shipping`) synchronized over RabbitMQ AMQP exchanges and intermediate catch signals.
 
 2. [`liveverify-wiretransfer/`](liveverify-wiretransfer/)
-   - **Scope Item 6 Acceptance Target Platform:** Generated from the single-model `LiveVerify-WireTransfer` banking process (`Process_WireTransfer.bpmn`), with mirrored Twin process derived via `TwinModelGenerator`.
+   - **Wire Transfer Target Platform:** Generated from the single-model `LiveVerify-WireTransfer` banking process (`Process_WireTransfer.bpmn`), with mirrored Twin process derived via `TwinModelGenerator`.
    - Used to verify dynamic agent discovery (`NodeManagerClient`), Ollama AI candidate recommendation, governance policy enforcement, and runtime execution dispatch to pluggable component executors.
 
 ## Architecture Distinction

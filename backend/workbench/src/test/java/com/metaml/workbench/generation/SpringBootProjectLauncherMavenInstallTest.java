@@ -13,13 +13,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-// Item 3's explicit requirement ('mvn clean install -DskipTests' before 'mvnw spring-boot:run')
-// only applies to the no-wrapper (RedCollarTP-derived Target Platform) launch path - see
-// SpringBootProjectLauncher.startProcess, which is exercised end to end (with the real launch
-// that follows) by TargetHarnessPlatformEndToEndTest-style suites. runMavenInstall itself is
-// tested directly here via reflection, the same way this test class already reaches into private
-// launcher state elsewhere, so a build failure is proven to surface plainly and fast rather than
-// only as a much later, harder-to-diagnose "never started listening on port N".
+// Verifies that runMavenInstall ('mvn clean install -DskipTests') surfaces build failures directly
+// for projects requiring an explicit build step prior to launch.
 class SpringBootProjectLauncherMavenInstallTest {
 
     @TempDir
@@ -48,8 +43,8 @@ class SpringBootProjectLauncherMavenInstallTest {
         assertThat(projectDir.resolve("build.log")).exists();
     }
 
-    // Tagged slow like the other real-Maven-build suites here (RedCollarEndToEndTest etc.) - a
-    // genuine 'mvn clean install' needs the local/remote plugin resolution those already assume.
+    // Tagged slow like other Maven build suites - running 'mvn clean install' requires
+    // local/remote plugin resolution.
     @Tag("slow")
     @Test
     void aValidPomInstallsCleanlyAndLeavesABuildLogBehind() throws Throwable {

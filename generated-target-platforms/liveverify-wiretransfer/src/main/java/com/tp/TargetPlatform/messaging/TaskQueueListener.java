@@ -3,7 +3,7 @@ package com.tp.TargetPlatform.messaging;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-// The real consumer for task messages - the Camunda signal delivery that releases twin's waiting execution happens here, triggered by consuming the message. Enabled only with metaml.messaging.enabled=true; when disabled, SignalBroadcaster delivers signals directly instead.
+// Consumes task messages to release twin execution upon message delivery.
 @Component
 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
 public class TaskQueueListener {

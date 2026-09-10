@@ -26,13 +26,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 
-// TwinAutomationDelegate had no timeout around
-// ProjectAutomationService.execute(), and AutoBridgeTrigger's single-thread executor never
-// recovered from a call that blocked past its own wait - one hung automation call wedged the
-// executor's only thread forever, so every OTHER twin's auto-bridge queued behind it and silently
-// timed out too, with no Incident anywhere to explain why. Own Spring context (own H2 mem url,
-// own mocked "default" automation) so a genuinely-forever-hanging mock can't leak into any other
-// test's shared context.
+// Verifies that a hung automation delegate call on one twin does not permanently
+// block auto-bridge execution for subsequent twins.
 @IsolatedWorkbenchTest
 @TestPropertySource(properties = {
         "spring.datasource.url=jdbc:h2:mem:metaml-hung-automation-test;DB_CLOSE_DELAY=-1"
@@ -59,13 +54,7 @@ class AutoBridgeHungAutomationTest {
             return new AgentAvailabilityResult(type, true, type + "-agent-01", "stub catalog", false);
         });
 
-        // Hangs forever, but only for the FIRST Task_Target automation call (twin A's) - resolved
-        // via synchronizationActivityIdOf the same way TwinAutomationDelegate itself has to, since
-        // execution.getCurrentActivityId() here is the automation task's own id
-        // (Task_Target_automate), not the activity id. Task_Gate has to stay fast: it's bridged
-        // manually below, synchronously on this test's own thread. Twin B's later Task_Target call
-        // must also stay fast - that's the whole point being proven - so only the first ever
-        // Task_Target call hangs, not every one.
+        // Twin B's subsequent Task_Target call executes normally, verifying that hung automation is isolated.
         CountDownLatch neverReleased = new CountDownLatch(1);
         AtomicBoolean firstTargetCallHung = new AtomicBoolean(false);
         given(defaultAutomation.execute(any(DelegateExecution.class))).willAnswer(call -> {
@@ -79,12 +68,7 @@ class AutoBridgeHungAutomationTest {
 
         ProcessModel model = workbenchService.saveProcessModel(null, "hung automation test", twoTaskBpmn());
 
-        // Twin A: both activities connected. Task_Gate's own start fires during launchProcess,
-        // before the twin is registered (same reason KYC needs manual bridging elsewhere in this
-        // codebase), so it's bridged by hand here - fast, since the mock only hangs for Task_Target.
-        // That's what puts the twin's own token genuinely at Task_Target's receive task, so
-        // completing Task_Gate on the original is what makes Task_Target's start event - the one
-        // that actually engages AutoBridgeTrigger's executor - fire for real.
+        // Connect both activities on Twin A and bridge Task_Gate to park at Task_Target.
         TwinProcess twinA = workbenchService.launchProcess(model.getId());
         workbenchService.connectActivity(twinA.getId(), TASK_GATE, TASK_GATE);
         workbenchService.connectActivity(twinA.getId(), TASK_TARGET, TASK_TARGET);
@@ -103,10 +87,7 @@ class AutoBridgeHungAutomationTest {
         // it was before the attempt - still on Task_Target, nothing consumed
         assertThat(runtimeService.getActiveActivityIds(twinA.getTwinProcessId())).containsExactly(TASK_TARGET);
 
-        // Twin B: a second, independent twin, driven through the identical shape (both activities
-        // connected, including Task_Target - whose automation runs for real this time, unhung)
-        // immediately afterward. If the executor were still wedged on twin A's hung call, this
-        // would time out the same way instead of genuinely completing.
+        // Verifies worker thread pool recovers by advancing an independent subsequent twin.
         TwinProcess twinB = workbenchService.launchProcess(model.getId());
         workbenchService.connectActivity(twinB.getId(), TASK_GATE, TASK_GATE);
         workbenchService.connectActivity(twinB.getId(), TASK_TARGET, TASK_TARGET);

@@ -20,8 +20,7 @@ public class ResponseQueueListener {
     public ResponseQueueListener(RuntimeService runtimeService) {
         this.runtimeService = runtimeService;
     }
-
-    // Reliability hardening (Pass 1): see TaskQueueListener's own comment - identical malformed-payload and already-advanced-vs-genuine-failure treatment.
+    // Validates message payload and routes to DLQ on failure, handling idempotent delivery states consistently with TaskQueueListener.
     @RabbitListener(queues = { "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.sampling-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.laying-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.marking-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.cutting-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.stitching-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.checking-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.pressing-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.packaging-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.shipping-signal" })
     public void onResponseMessage(String payload) {
         String[] parts = payload.split("\\|", -1);

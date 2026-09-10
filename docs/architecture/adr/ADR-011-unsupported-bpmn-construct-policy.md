@@ -1,35 +1,37 @@
 # ADR-011: Unsupported BPMN Constructs Fail Twin Generation Explicitly
 
-**Status:** Accepted (Version 1.0) — corrected in Phase 7.5 (previously violated this ADR's own principle)
+**Status:** Accepted (Version 1.0)
 
 ## Context
 
-`TwinModelGenerator` only knows how to transform a specific set of BPMN constructs (Architecture Specification, Section 5). The question is what should happen when the Original contains something outside that set: silently drop it and continue, or refuse to build a Twin at all.
+`TwinModelGenerator` supports a defined subset of BPMN constructs (Architecture Specification, Section 5). When a source process definition contains elements outside this supported set, the generator must have a consistent failure policy: either omit the element with a warning or fail generation explicitly.
 
 ## Decision
 
-Any node the generator cannot transform now **fails Twin generation** with an `IllegalArgumentException` naming the process, the specific activity id, and its BPMN element type — *except* Boundary Events, which remain a deliberate, separately-justified silent drop (Architecture Specification, Section 5: a Boundary Timer on a Twin activity that now genuinely finishes inside one job would fire on the Twin's own clock, causing exactly the divergence this whole architecture exists to prevent).
+Any BPMN construct that the generator cannot translate into a synchronized twin equivalent triggers an immediate **generation failure** via an `IllegalArgumentException` identifying the process ID, the element ID, and the unsupported BPMN type.
+
+*Exception:* Boundary Events are omitted by deliberate design (Architecture Specification, Section 5): attaching a local Boundary Timer to a twin activity that executes synchronously inside a single command would trigger on the twin's local clock, leading to premature divergence from the original process.
 
 ## Alternatives Investigated
 
-- **Silent warn-and-drop for everything unsupported** — this was the *actual, shipped* Phase-7 behavior, and Phase 7's own red-team review (finding W2) identified it as a direct violation of "the Twin generator must never silently generate an incomplete Twin." A `logger.warn` and a dropped node (plus everything only reachable through it) is exactly that failure mode with the volume turned down — a developer could deploy a Twin missing entire branches and have no signal beyond a log line nobody was watching.
-- **Attempting best-effort support for every construct** (e.g. treating a Call Activity as a no-op pass-through) — rejected; a fabricated, semantically-wrong transformation is worse than an honest failure, since it would silently misrepresent what the Twin actually does.
-- **Failing generation for Boundary Events too, for consistency** — considered and rejected specifically because Boundary Events are not an *unrecognized* construct in the same sense as, say, a Call Activity; the generator fully understands what a Boundary Timer means and has a specific, reasoned decision (not an implementation gap) about why it must not carry over. Conflating "we chose not to" with "we don't know how" would make the fail-fast diagnostic misleading.
+- **Silent omission or warning-only logging:** Rejected because silent omission risks deploying incomplete twin graphs where execution branches are missing without notifying the model author. An explicit, fail-fast exception prevents hidden runtime discrepancies.
+- **Best-effort semantic approximation:** Rejected because substituting unsupported flow nodes with arbitrary pass-through tasks risks misrepresenting business logic.
+- **Failing on Boundary Events:** Rejected because boundary event omission is a deliberate synchronization design choice rather than an unhandled construct.
 
-## Evidence
+## Technical Validation
 
-Traced the full `launchProcess → deployTwinDefinition → generate()` call chain to confirm the new throw always fires *before* any Camunda deployment or app-side persistence occurs — a rejected model leaves no partial deployment, no orphaned `ProcessModel`, nothing to clean up. Both shipped example models (`citibank-wire-transfer.bpmn`, `grad-admission-review.bpmn`) were checked construct-by-construct and confirmed to use nothing outside the fully-supported set, so this change is safe against every existing walkthrough. `generatingATwinFailsFastOnAnUnsupportedConstructInsteadOfSilentlyDroppingIt` (`TwinExecutionWalkthroughTest`) is the dedicated regression, proven to fail against the pre-Phase-7.5 code before the fix, per the standing empirical-verification standard.
+The invocation chain `launchProcess → deployTwinDefinition → generate()` ensures that validation exceptions are raised before engine deployment or persistence occurs. A rejected model leaves no partial deployments or orphaned records. Unit and integration tests (`TwinExecutionWalkthroughTest`) verify that unsupported constructs fail fast with descriptive diagnostic messages.
 
 ## Trade-offs
 
-- **Gained:** a developer building a process model for this system gets an immediate, precise, actionable error the moment they use an unsupported construct, instead of discovering a silently-truncated Twin during a demo.
-- **Given up:** a model that happens to use one unsupported construct in a branch the demo never exercises can no longer be launched at all, even though the missing piece might never matter in practice. Accepted as strictly preferable to the alternative of an operator not knowing what's missing.
+- **Gained:** Immediate, actionable feedback on model compatibility; prevention of silently incomplete digital twin deployments.
+- **Given up:** Inability to run models containing unsupported constructs in untested flow branches.
 
 ## Consequences
 
-- Every future extension to `isSupported()`/`append()` (adding real support for, say, Event-Based Gateway) removes one entry from the fail-fast set — this ADR's list of currently-unsupported constructs (Architecture Specification, Section 5 / Section 9) should be treated as a living checklist, not a permanent boundary.
-- The `AdHocSubProcess` case is different in kind from the rest of this list: it is not something the generator *chooses* not to support, it is something the bundled `camunda-bpmn-model` 7.22.0 library cannot represent at all (confirmed via `javap`), and should not be conflated with an ordinary Implementation Gap when reasoning about future work.
+- Process model authors receive immediate notification when unsupported elements are present.
+- Adding support for new BPMN constructs in `isSupported()` and `append()` progressively expands the supported modeling envelope.
 
 ## Future Reconsideration
 
-Each entry in the current "Implementation Gap" list (Event-Based Gateway, Call Activity, sub-processes, pre-existing automated task types) is independently reconsiderable as its own future decision to actually implement support, following the same "derive using standard Camunda mechanisms first" discipline this whole document tries to model.
+Constructs currently outside the supported set (such as Event-Based Gateways and Call Activities) may be supported in future releases as transformation rules are developed.

@@ -21,11 +21,6 @@ class WorkbenchStateStoreTest {
     @TempDir
     Path tempDir;
 
-    // A snapshot written before TwinProcess had a tenantId field must
-    // still restore cleanly - null tenantId, not a read failure. The fixture below deliberately
-    // still carries the "models" key that older files (written when this store also persisted
-    // process models) contain, which doubles as the proof that such a file is still read without
-    // error now that models have been removed from this store - the key is simply ignored.
     @Test
     void olderSnapshotsWithoutTenantIdStillRestoreAsUnownedNotAsAnError() throws Exception {
         Path stateFile = tempDir.resolve("workbench-state.json");
@@ -62,7 +57,6 @@ class WorkbenchStateStoreTest {
         assertThat(snapshot.twins().get(0).getTenantId()).isNull();
     }
 
-    // the same field round-trips for a twin that DOES have a tenant, not just null
     @Test
     void tenantIdRoundTripsForTwinsThatHaveOne() {
         Path stateFile = tempDir.resolve("workbench-state.json");
@@ -108,19 +102,6 @@ class WorkbenchStateStoreTest {
         assertThat(snapshot.twins().get(0).getTwinProcessDefinitionId()).isEqualTo("original-def");
     }
 
-    // Save() used to build its DTO snapshot from the live twins
-    // collections OUTSIDE the write lock, only synchronizing the actual file write. Since
-    // WorkbenchServiceImpl always passes the SAME live, mutable collections on every call (not a
-    // frozen copy per call), two concurrent persistState() calls could interleave their
-    // snapshot-then-write sequences so a snapshot taken before some mutation could still win the
-    // write lock AFTER a snapshot taken after that mutation had already written it - a lost update.
-    // Snapshotting now happens inside the same lock as the write, so whichever caller acquires the
-    // lock second always reads the CURRENT (already-mutated) live state, not a stale pre-captured
-    // one - the file can only move forward, never regress, under concurrent saves of the same
-    // live, growing state. Proven under real contention: many threads each append one more unique
-    // entry to a SHARED TwinProcess's event log and immediately save() the same live twin
-    // collection, all racing for the one write lock - every entry must still be present in the
-    // final file, none silently lost to an overtaking older write.
     @Test
     void concurrentSavesOfTheSameLiveGrowingStateNeverLoseAnAlreadyWrittenEntry() throws Exception {
         Path stateFile = tempDir.resolve("workbench-state.json");
@@ -156,10 +137,6 @@ class WorkbenchStateStoreTest {
 
         WorkbenchStateStore.Snapshot snapshot = store.load();
         assertThat(snapshot.twins()).hasSize(1);
-        // the file's own last write might not have raced everyone, but by the time all threads
-        // finish, the twin's own in-memory eventLog already holds all 24 - the property under test
-        // is whether the LAST successful save() call's write reflects that full state, not a
-        // regression back to some earlier, smaller snapshot
         assertThat(snapshot.twins().get(0).getEventLog()).hasSize(threadCount);
     }
 }

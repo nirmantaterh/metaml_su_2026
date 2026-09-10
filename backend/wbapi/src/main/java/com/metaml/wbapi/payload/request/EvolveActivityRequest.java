@@ -11,9 +11,8 @@ public class EvolveActivityRequest {
     private String twinProcessId;
     private String activityId;
     private String agentType;
-    // Optional (Scope 6 identity fix): the exact runtime sibling to target when the caller has
-    // already disambiguated a parallel multi-instance activity's concurrent instances (see
-    // WorkbenchController#evolveActivity). Null/absent preserves the existing 3-argument
-    // WorkbenchService#evolveActivity behavior unchanged.
+    // Optional: the exact runtime sibling to target when disambiguating concurrent instances
+    // of a parallel multi-instance activity. When null or absent, the service targets the
+    // default activity instance.
     private String activityInstanceId;
 }

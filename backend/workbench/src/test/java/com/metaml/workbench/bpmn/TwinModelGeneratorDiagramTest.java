@@ -10,12 +10,8 @@ import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnPlane;
 import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnShape;
 import org.junit.jupiter.api.Test;
 
-// The generated Twin carries its own diagram interchange
-// because the builder hands every DI element a fresh random id on every call, which broke
-// enableDuplicateFiltering - relaunching the same model kept deploying a spurious new Twin
-// definition version. stabilizeDiagramInterchange fixes that the same way the message/loop ids
-// nearby already were fixed: derive each DI element's id from what it depicts instead of dropping
-// it, so the Twin stays deterministic AND stays renderable in Cockpit.
+// Verifies that generated Twin diagram interchange elements have deterministic IDs
+// derived from depicted model elements, preventing spurious redeployments in Camunda.
 class TwinModelGeneratorDiagramTest {
 
     private final TwinModelGenerator generator = new TwinModelGenerator();
@@ -59,16 +55,10 @@ class TwinModelGeneratorDiagramTest {
         }
     }
 
-    // The actual defect this whole method exists to fix: repeated generate() calls on the SAME
-    // input used to produce byte-different XML purely because of the diagram's own random ids,
-    // which defeated Camunda's enableDuplicateFiltering and deployed a spurious new Twin version
-    // on every relaunch of an unchanged model.
+    // Diagram element IDs must be deterministic across regenerations to support duplicate filtering.
     @Test
     void regeneratingFromTheSameInputProducesByteIdenticalXml() {
-        // The SAME already-built original, read from the SAME persisted XML twice - matching how a
-        // real regenerate actually happens (from one saved model's bpmnXml, not two independent
-        // fresh builds), so the original's own sequence-flow ids (also builder-assigned, and just
-        // as random per build as the diagram this test is really about) are fixed across both calls.
+        // Re-parses original model from XML to hold sequence-flow IDs stable across calls.
         String originalXml = Bpmn.convertToString(twoActivityProcess());
 
         String first = Bpmn.convertToString(generator.generate(readModel(originalXml)));

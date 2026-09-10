@@ -73,10 +73,6 @@ public class WorkbenchController {
         }
     }
 
-    // Entry point for a model with its own independently authored second BPMN (Manufacturing + Twin as two
-    // files); without this, saveProcessModelWithAuthoredTwin was only reachable by calling the service
-    // directly. Generation needs no separate endpoint - TRANSMUTE_GENERATE_PROJECT already branches on
-    // whether the model has an authored twin.
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_MODELE_AUTHORED_TWIN)
     public ResponseEntity<ApiResponse> saveModelWithAuthoredTwin(
             @RequestBody com.metaml.wbapi.payload.request.SaveAuthoredTwinProcessModelRequest request) {
@@ -94,8 +90,6 @@ public class WorkbenchController {
         }
     }
 
-    // Backs "Edit Existing Project": a picker needs something to list, not just a lookup by an id the
-    // user already has to know.
     @GetMapping(WorkbenchUrlMapping.TRANSMUTE_MODELE)
     public ResponseEntity<ApiResponse> listModels() {
         try {
@@ -106,7 +100,6 @@ public class WorkbenchController {
         }
     }
 
-    // Backs the Transmute > Generate / Launch pickers - see WorkbenchService.listProcessModelSummaries.
     @GetMapping(WorkbenchUrlMapping.TRANSMUTE_MODEL_SUMMARIES)
     public ResponseEntity<ApiResponse> listModelSummaries() {
         try {
@@ -117,7 +110,6 @@ public class WorkbenchController {
         }
     }
 
-    // Resolves model workflow execution state.
     @GetMapping(WorkbenchUrlMapping.TRANSMUTE_WORKFLOW)
     public ResponseEntity<ApiResponse> getWorkflowState(@PathVariable String id) {
         try {
@@ -144,7 +136,6 @@ public class WorkbenchController {
         }
     }
 
-    // Deletes a process model from the catalog.
     @DeleteMapping(WorkbenchUrlMapping.TRANSMUTE_MODELE + "/{id}")
     public ResponseEntity<ApiResponse> deleteModel(@PathVariable String id) {
         try {
@@ -161,8 +152,6 @@ public class WorkbenchController {
         }
     }
 
-    // First step of Model -> Generate -> Launch. Returns one generated Java Delegate class per
-    // delegateExpression in the saved model.
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_GENERATE)
     public ResponseEntity<ApiResponse> generateDelegates(@RequestBody GenerateDelegatesRequest request) {
         try {
@@ -177,7 +166,6 @@ public class WorkbenchController {
         }
     }
 
-    // Generates a standalone Target Harness Platform project.
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_GENERATE_PROJECT)
     public ResponseEntity<ApiResponse> generateSpringBootProject(@RequestBody GenerateProjectRequest request) {
         try {
@@ -194,7 +182,6 @@ public class WorkbenchController {
         }
     }
 
-    // Launches a generated Target Platform project as a background process.
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_LAUNCH_PROJECT)
     public ResponseEntity<ApiResponse> launchGeneratedProject(@RequestBody LaunchProjectRequest request) {
         try {
@@ -211,7 +198,6 @@ public class WorkbenchController {
         }
     }
 
-    // Stops a running generated Target Platform background process.
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_STOP_PROJECT)
     public ResponseEntity<ApiResponse> stopGeneratedProject(@RequestBody StopProjectRequest request) {
         try {
@@ -228,7 +214,6 @@ public class WorkbenchController {
         }
     }
 
-    // Lists all currently running generated Target Platform projects.
     @GetMapping(WorkbenchUrlMapping.TRANSMUTE_RUNNING_PROJECTS)
     public ResponseEntity<ApiResponse> listRunningProjects() {
         try {
@@ -267,8 +252,7 @@ public class WorkbenchController {
         }
     }
 
-    // Read-only: bound agent, whether automation has actually run for this activity, and its real
-    // output (if any) - never mutates the twin. See WorkbenchService#getActivityExecutionState.
+    // Queries activity execution state without mutating the twin process.
     @GetMapping(WorkbenchUrlMapping.TRANSMUTE_TWIN + "/{id}/activity/{activityId}/execution")
     public ResponseEntity<ApiResponse> getActivityExecutionState(@PathVariable String id,
             @PathVariable String activityId) {
@@ -312,11 +296,7 @@ public class WorkbenchController {
         }
     }
 
-    // Claims an activity for component integration so the auto-bridge holds the twin at it instead
-    // of autonomously running DEFAULT_BRIDGE_AGENT_TYPE the moment the original reaches it. The
-    // claim is released by the evolution that binds an agent. Reuses EvolveActivityRequest's shape
-    // (twinProcessId/activityId/optional activityInstanceId); agentType is not required here
-    // because the whole point is that the component has not been chosen yet.
+    // Claims an activity for component integration, pausing auto-bridge execution until an agent is bound.
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_INTEGRATION_CLAIM)
     public ResponseEntity<ApiResponse> requestComponentIntegration(
             @RequestBody EvolveActivityRequest request) {
@@ -336,9 +316,9 @@ public class WorkbenchController {
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_EVOLVE)
     public ResponseEntity<ApiResponse> evolveActivity(@RequestBody EvolveActivityRequest request) {
         try {
-            // Scope 6 identity fix: an explicit activityInstanceId routes to the instance-scoped
-            // overload so it targets exactly that runtime sibling; its absence preserves the
-            // existing 3-argument behavior (currentVisitId()'s resolution) unchanged.
+            // When an explicit activityInstanceId is supplied, route to the instance-scoped
+            // overload to target that specific runtime sibling; otherwise fall back to the
+            // activity-scoped overload.
             String activityInstanceId = request.getActivityInstanceId();
             AgentDecision decision = (activityInstanceId != null && !activityInstanceId.isBlank())
                     ? workbenchService.evolveActivity(request.getTwinProcessId(), request.getActivityId(),
@@ -368,7 +348,28 @@ public class WorkbenchController {
         }
     }
 
-    // Lists pending evolution approvals for a tenant.
+    // P7 Step 5: the one retrieval seam a standalone generated Target Platform calls, at boot (for
+    // every capability-requiring activity id its own bundled BPMN declares) and again on any later
+    // cache miss (for one activity id). processKey is the BPMN process key the Target Platform's own
+    // bundled BPMN also carries - never a Workbench-internal twin process/instance id, which the
+    // Target Platform has no way to know. Activities with no current binding are simply absent from
+    // the response, never an error and never fabricated.
+    @GetMapping(WorkbenchUrlMapping.TRANSMUTE_BINDINGS)
+    public ResponseEntity<ApiResponse> listCapabilityBindings(
+            @org.springframework.web.bind.annotation.RequestParam String processKey,
+            @org.springframework.web.bind.annotation.RequestParam List<String> activityIds) {
+        try {
+            List<com.metaml.wbapi.payload.response.CapabilityBindingResponse> response =
+                    workbenchService.listCapabilityBindings(processKey, activityIds).stream()
+                            .map(com.metaml.wbapi.payload.response.CapabilityBindingResponse::from).toList();
+            return ResponseEntity.ok(new ApiResponse(FeedbackMessage.SUCCESS, response));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(BAD_REQUEST).body(new ApiResponse(e.getMessage(), null));
+        } catch (Exception e) {
+            return ResponseEntity.status(INTERNAL_SERVER_ERROR).body(new ApiResponse(e.getMessage(), null));
+        }
+    }
+
     @GetMapping(WorkbenchUrlMapping.TRANSMUTE_EVOLVE_APPROVALS)
     public ResponseEntity<ApiResponse> listApprovals(@org.springframework.web.bind.annotation.RequestParam String tenantId) {
         try {
@@ -411,7 +412,6 @@ public class WorkbenchController {
         }
     }
 
-    // Bridges an activity event to trigger Twin advancement.
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_BRIDGE + "/{twinId}/{activityId}")
     public ResponseEntity<ApiResponse> bridgeActivityEvent(@PathVariable String twinId,
             @PathVariable String activityId) {
@@ -429,7 +429,6 @@ public class WorkbenchController {
         }
     }
 
-    // Completes open tasks for the original process instance.
     @PostMapping(WorkbenchUrlMapping.TRANSMUTE_COMPLETE_TASK + "/{twinId}")
     public ResponseEntity<ApiResponse> completeCurrentTasks(@PathVariable String twinId) {
         try {

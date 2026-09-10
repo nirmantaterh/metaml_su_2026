@@ -16,18 +16,18 @@ Every twin launch generates and deploys its **own** BPMN process definition ([`T
 - **A single shared definition with conditional automation** (one BPMN, some execution paths automated, some human) — rejected: it conflates the Original's and Twin's identities into one process instance, which breaks the one-way-authority model (ADR-001) and Camunda's own instance/version semantics (a single definition can't sensibly be "the same process" running two different ways at once).
 - **Deploying the Twin under the Original's own process key** — rejected specifically because it would file the Twin as a new *version* of the Original's definition; Cockpit would then show one process key flipping between a human diagram and an automated one depending which version was opened. The Twin gets its own process id (`<originalId>_twin`) instead.
 
-## Evidence
+## Verification
 
 `TwinModelGenerator.twinProcessId()` derives a distinct id; `theGeneratedDefinitionKeepsTheShapeOfTheOriginalWithoutTheHumansOrTheTimer` (in `TwinExecutionWalkthroughTest`) asserts the generated definition's key is distinct from the Original's and that no `UserTask` element survives generation.
 
 ## Trade-offs
 
-- **Gained:** a Twin that genuinely executes, with its own Cockpit-visible process instance and history, distinguishable from the Original at a glance.
+- **Gained:** an independent Twin execution with its own Cockpit-visible process instance and history, distinguishable from the Original at a glance.
 - **Given up:** deploying a second definition per model means twice the Camunda deployment/version bookkeeping; addressed by deterministic generation + duplicate filtering (ADR — see Architecture Specification, Section 5) so relaunching the same model does not accumulate versions.
 
 ## Consequences
 
-- Every place that needs to reason about "the Original's activity id" vs "the Twin's activity id" must be explicit about which side it means — this is why `ActivityLink` exists at all (ADR-006) rather than assuming the two are always interchangeable, even though the generator does preserve matching ids by default.
+- Every place that needs to reason about "the Original's activity id" vs "the Twin's activity id" must be explicit about which side it means — prompting the design of `ActivityLink` (ADR-006) rather than assuming the two are always interchangeable, even though the generator does preserve matching ids by default.
 
 ## Future Reconsideration
 

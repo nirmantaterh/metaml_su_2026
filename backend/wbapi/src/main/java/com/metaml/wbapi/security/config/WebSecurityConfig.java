@@ -15,7 +15,7 @@ import lombok.RequiredArgsConstructor;
 @EnableWebSecurity
 @RequiredArgsConstructor
 public class WebSecurityConfig {
-    // No auth, no CSRF: the only guard is server.address=127.0.0.1; add real auth before exposing externally.
+    // Localhost deployment configuration; external exposure requires authentication and CSRF protection.
     @Bean
     SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http.authorizeHttpRequests(requests -> requests.anyRequest().permitAll())

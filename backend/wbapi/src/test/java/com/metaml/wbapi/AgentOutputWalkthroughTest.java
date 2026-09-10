@@ -28,9 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 
-// The walkthrough test next door covers riskFlagged, which is the one output the citi model has
-// an opinion about. This one is about the mechanism underneath it: an agent reporting outputs
-// nobody wrote Java for, which is what the next project attaching to this platform will be doing.
+// Integration test verifying generic agent output propagation and BPMN output variable mapping.
 @IsolatedWorkbenchTest
 @TestPropertySource(properties = {
         "spring.datasource.url=jdbc:h2:mem:metaml-test;DB_CLOSE_DELAY=-1"
@@ -69,7 +67,6 @@ class AgentOutputWalkthroughTest {
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
         assertThat(workbenchService.evolveActivity(twin.getId(), CREDIT, RISK_AGENT_TYPE).isApproved()).isTrue();
 
-        // types survive the trip, or a gateway asking whether one of these == true never fires
         assertThat(twinVariable(twin, "evolvedAgentOutput_riskFlagged_" + CREDIT)).isEqualTo(true);
         assertThat(twinVariable(twin, "evolvedAgentOutput_confidence_" + CREDIT)).isEqualTo(42);
         assertThat(twinVariable(twin, "evolvedAgentOutput_tier_" + CREDIT)).isEqualTo("gold");
@@ -78,16 +75,12 @@ class AgentOutputWalkthroughTest {
 
         assertThat(originalVariable(twin, "agentOutput_" + CREDIT + "_confidence")).isEqualTo(42);
         assertThat(originalVariable(twin, "agentOutput_" + CREDIT + "_tier")).isEqualTo("gold");
-        // and riskFlagged lands twice: once generically, once under the name the citi gateway reads
         assertThat(originalVariable(twin, "agentOutput_" + CREDIT + "_riskFlagged")).isEqualTo(true);
         assertThat(originalVariable(twin, RISK_FLAG)).isEqualTo(true);
         assertThat(twin.getEventLog()).anyMatch(entry -> entry.contains("agentOutput_" + CREDIT + "_tier"));
     }
 
-    // the generic names say what the agent said, false included. Only the legacy flag treats
-    // false as "say nothing", because its gateway leans on the variable being absent. Has to run
-    // this on Task_Credit specifically, since that's the one activity whose declaration also
-    // names agentFlaggedRisk - anywhere else there's nothing for the two paths to collide over.
+    // Generic outputs record explicit false values, unlike legacy flags that rely on variable absence.
     @Test
     void anExplicitFalseIsWrittenGenericallyAndSuppressedOnTheLegacyName() throws IOException {
         stubCatalog(Map.of("riskFlagged", false));
@@ -100,15 +93,10 @@ class AgentOutputWalkthroughTest {
 
         assertThat(originalVariable(twin, "agentOutput_" + CREDIT + "_riskFlagged")).isEqualTo(false);
         assertThat(originalVariable(twin, RISK_FLAG)).isNull();
-        // the legacy block's removeVariable() doesn't log, so agentFlaggedRisk shows up in the
-        // event log at all only if the declarative write also fired for it - which would mean it
-        // logged "= false" a line before the removal quietly took it back out. Variable-state
-        // assertions alone can't tell the two paths apart, since the legacy block wins either way.
         assertThat(twin.getEventLog()).noneMatch(entry -> entry.contains("'" + RISK_FLAG + "'"));
     }
 
-    // same reconciliation the risk flag already had, except now nothing knows in advance which
-    // outputs there are to clear, so the twin carries an index of what the last evolution wrote
+    // Re-evolving an activity clears previously recorded agent outputs using the recorded output index.
     @Test
     void reEvolvingClearsAnOutputTheNewAgentDoesNotReport() throws IOException {
         given(nodeManagerClient.checkAgentAvailability(anyString())).willAnswer(call -> {
@@ -130,10 +118,6 @@ class AgentOutputWalkthroughTest {
         assertThat(twinVariable(twin, "evolvedAgentOutputs_" + KYC)).isEqualTo("tier");
     }
 
-    // Task_Credit's riskFlagged -> agentFlaggedRisk has a hardcoded alias behind it as well, so
-    // the citi model can't tell you whether a declaration on its own does anything. This one is a
-    // stand-in for the next project attaching to the platform: a name nothing in Java has heard
-    // of, published under a short variable purely because the BPMN said to.
     @Test
     void aDeclaredOutputAlsoLandsUnderTheNameTheModelAskedFor() throws IOException {
         given(nodeManagerClient.checkAgentAvailability(anyString())).willAnswer(call -> {
@@ -148,24 +132,16 @@ class AgentOutputWalkthroughTest {
         assertThat(workbenchService.evolveActivity(twin.getId(), HOLDS, "validator").isApproved()).isTrue();
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
 
-        // the declared one, which is the whole point
         assertThat(originalVariable(twin, "overdueFlagged")).isEqualTo(true);
-        // and the generic name is still written alongside it, not replaced by it
         assertThat(originalVariable(twin, "agentOutput_" + HOLDS + "_overdueFlagged")).isEqualTo(true);
 
-        // holdCount came back from the same agent but nobody declared it, so it stays prefixed.
-        // Without this the test would pass just as well if every output got a bare name.
+        // Undeclared outputs remain prefixed with the activity ID.
         assertThat(originalVariable(twin, "agentOutput_" + HOLDS + "_holdCount")).isEqualTo(3);
         assertThat(originalVariable(twin, "holdCount")).isNull();
     }
 
-    // RiskFlagged used to reach the original as agentFlaggedRisk
-    // unconditionally, on any activity, in any project, purely because an output happened to be
-    // named "riskFlagged" - the one Twin-to-Original write-back that wasn't gated by the
-    // activity's own metaml:agentOutputs declaration the way every other output already is.
-    // Task_CheckHolds declares overdueFlagged but never riskFlagged, so an agent reporting
-    // riskFlagged=true for it must NOT reach agentFlaggedRisk - only the generic, always-safe
-    // agentOutput_<activityId>_riskFlagged name should.
+    // Undeclared riskFlagged outputs must write only to scoped variable names,
+    // not to legacy agentFlaggedRisk unless explicitly declared in metaml:agentOutputs.
     @Test
     void anUndeclaredRiskFlaggedOutputNeverReachesTheLegacyVariable() throws IOException {
         given(nodeManagerClient.checkAgentAvailability(anyString())).willAnswer(call -> {
@@ -181,15 +157,10 @@ class AgentOutputWalkthroughTest {
         assertThat(workbenchService.evolveActivity(twin.getId(), HOLDS, "validator").isApproved()).isTrue();
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
 
-        // the generic, always-on name still carries it - nothing about the gate touches that path
         assertThat(originalVariable(twin, "agentOutput_" + HOLDS + "_riskFlagged")).isEqualTo(true);
-        // but the legacy bare name, which a gateway elsewhere could be routing on, stays untouched
         assertThat(originalVariable(twin, RISK_FLAG)).isNull();
     }
 
-    // same shape as the real catalog: only the credit assessor reports anything, everything else
-    // just says it exists. Keeps the assertions below about the one activity that was evolved
-    // with it, rather than whatever the bridge's default agent left lying around.
     private void stubCatalog(Map<String, ?> riskAgentOutputs) {
         Map<String, Object> outputs = new LinkedHashMap<>(riskAgentOutputs);
         given(nodeManagerClient.checkAgentAvailability(anyString())).willAnswer(call -> {
@@ -199,8 +170,7 @@ class AgentOutputWalkthroughTest {
         });
     }
 
-    // KYC's start event fires inside launchProcess, before the twin is tracked, so it's the one
-    // activity the walkthroughs bridge by hand
+    // Initial task start event fires before twin registration; bridge manually.
     private TwinProcess launchAndBridgeKyc(String modelName) throws IOException {
         ProcessModel model = workbenchService.saveProcessModel(null, modelName, citibankBpmn());
         TwinProcess twin = workbenchService.launchProcess(model.getId());
@@ -221,9 +191,7 @@ class AgentOutputWalkthroughTest {
         return variable == null ? null : variable.getValue();
     }
 
-    // not in examples/ on purpose: this is a throwaway stand-in for somebody else's model, and
-    // the two real examples are things people demo. Only needs one task, a listener and the
-    // declaration under test.
+    // Test BPMN fixture declaring an agent output variable mapping.
     private static String libraryBpmn() {
         return """
                 <?xml version="1.0" encoding="UTF-8"?>
@@ -255,7 +223,6 @@ class AgentOutputWalkthroughTest {
                 """;
     }
 
-    // same walk up to examples/ the walkthrough test does, rather than a second copy of the model
     private static String citibankBpmn() throws IOException {
         Path dir = Path.of("").toAbsolutePath();
         while (dir != null) {

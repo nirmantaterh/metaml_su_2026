@@ -21,17 +21,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
-// Keeps the workbench's own twin processes in a json file, since Camunda's own persistence doesn't
-// know that map exists - specifically, a twin's activityLinks (what connectActivity records) are
-// never written to Camunda at all, so nothing else can reconstruct them. Rewrites the whole file
-// every time - fine at demo scale. Never throws to the caller: a missing or corrupt file just
-// starts empty instead of failing boot.
-//
-// Process models are NOT persisted here. They live in the H2-backed ProcessModelArchiveStore, which
-// is and always was their real persistence; this file used to carry a redundant second copy of them
-// plus a restore-time fallback for models the archive had never seen. Both were removed - the
-// archive is the single authoritative source for models. An older file that still contains a
-// "models" key reads fine and is simply ignored (FAIL_ON_UNKNOWN_PROPERTIES is disabled below).
+/**
+ * File-backed store for persisting workbench twin process metadata across restarts.
+ */
 @Component
 public class WorkbenchStateStore {
 
@@ -85,9 +77,7 @@ public class WorkbenchStateStore {
         if (!enabled) {
             return;
         }
-        // Snapshot and write inside the same lock. Built outside it, two concurrent saves could interleave so
-        // that the older snapshot won the lock last and silently overwrote newer data - a lost update,
-        // reproduced with two threads racing save().
+        // Synchronize snapshot creation and file write to prevent lost updates.
         synchronized (writeLock) {
             StateDto dto = new StateDto();
             dto.twins = new ArrayList<>();
@@ -119,13 +109,11 @@ public class WorkbenchStateStore {
         return list == null ? List.of() : list;
     }
 
-    // plain dtos instead of binding straight to the model classes - Jackson would replace TwinProcess's CopyOnWriteArrayList/newKeySet fields with plain ones and silently drop the thread safety the bridge's forwarded-set guard depends on
+    // DTOs decouple persistence format from runtime model collections.
     static final class StateDto {
         public List<TwinProcessDto> twins;
     }
 
-    // Nothing here for forwardedBridgeActivities: the bridge dedupe guard derives from the twin's own
-    // evolvedAgent_* history (see WorkbenchServiceImpl.alreadyEvolved), which already survives a restart.
     static final class TwinProcessDto {
         public String id;
         public String modelId;

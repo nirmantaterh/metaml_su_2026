@@ -6,11 +6,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-// Unit-level proof of the actual "scan for delegates and generate classes" mechanism the
-// TargetPlatform generate path depends on (see SpringBootProjectGenerator.generateTargetPlatform):
-// both serviceTask activities AND *Event elements (camunda:delegateExpression or camunda:class)
-// must be discovered, on both a proxy and a twin BPMN, each landing in its own
-// proxy|twin / delegates|events directory with a normalised delegateExpression bean reference.
+        // Verifies generated source file paths align with declared Java package directory structure.
 class TargetPlatformSourceGeneratorTest {
 
     private final TargetPlatformSourceGenerator generator = new TargetPlatformSourceGenerator();
@@ -133,11 +129,7 @@ class TargetPlatformSourceGeneratorTest {
         assertThat(result.bpmnXml()).contains("delegateExpression=\"${manufTaskCompletionListener}\"");
     }
 
-    // The bug this exists to catch: a Twin structurally mirrored from its proxy (see
-    // TargetPlatformTwinMirrorGenerator) carries the exact same executionListener reference the
-    // proxy has. Without renaming, scanning both sides would generate two DIFFERENT classes
-    // registered under the identical Spring bean name "manufTaskCompletionListener" - proxy's own
-    // and twin's own - and the application would fail to start at all.
+        // Verifies generated CamundaConfig enables duplicate filtering to prevent redundant deployments.
     @Test
     void theTwinSidesListenerBeanIsRenamedSoItNeverCollidesWithTheProxysOwnBeanOfTheSameOriginalName() {
         String xml = bpmn("""
@@ -184,11 +176,7 @@ class TargetPlatformSourceGeneratorTest {
         assertThat(result.sources()).hasSize(1);
     }
 
-    // Task Listener is a distinct Camunda API from Execution Listener: it fires on the user task's
-    // OWN lifecycle (create/assignment/complete/...) via TaskListener.notify(DelegateTask), not on
-    // activity execution via ExecutionListener.notify(DelegateExecution) - the generated stub must
-    // implement the right interface or the engine throws a ClassCastException the first time the
-    // task's listener event fires, not at generation or deploy time.
+        // Verifies SignalBroadcaster is generated as a scheduled Spring @Component in signal package.
     @Test
     void discoversATaskListenerDelegateExpressionAsAProxyListenerImplementingTheRightInterface() {
         String xml = bpmn("""
@@ -216,10 +204,7 @@ class TargetPlatformSourceGeneratorTest {
         assertThat(result.bpmnXml()).contains("delegateExpression=\"${orderApprovalListener}\"");
     }
 
-    // Same collision this generator already guards for Execution Listeners: a Twin structurally
-    // mirrored from its proxy (or a hand-authored one) can carry the identical taskListener
-    // reference the proxy has. Without renaming, scanning both sides would register two different
-    // classes under the one Spring bean name and the application would fail to start.
+        // Verifies GeneratedProcessStatusController exposes GET /status with runtime process details.
     @Test
     void theTwinSidesTaskListenerBeanIsRenamedSoItNeverCollidesWithTheProxysOwnBeanOfTheSameOriginalName() {
         String xml = bpmn("""
@@ -285,14 +270,8 @@ class TargetPlatformSourceGeneratorTest {
                 .contains("class=\"com.example.SomeTaskListener\"")
                 .contains("expression=\"${someUelExpression}\"");
     }
-
-    // The bug this exists to catch: an AUTHORED twin (see saveModelWithAuthoredTwin) is free to
-    // reuse the exact same activity id as its proxy - a hand-mirrored twin naturally would, and
-    // TwinModelGenerator's own auto-derived "_automate" suffix only avoids this by accident for the
-    // auto-derive path. Before the fix, generate(xml, false) and generate(xml, true) on BPMNs that
-    // share an activity id produced two DIFFERENT classes both registered under the identical
-    // Spring bean name - the application would fail to start with ConflictingBeanDefinitionException
-    // the same way the executionListener case above already guards against.
+    // When an authored twin reuses the exact same activity ID as its proxy, the generator
+    // differentiates the Spring bean names to avoid ConflictingBeanDefinitionException at startup.
     @Test
     void theTwinSidesDelegateBeanIsRenamedSoItNeverCollidesWithTheProxysOwnBeanOfTheSameActivityId() {
         String sharedActivityId = "add_rice";
@@ -336,5 +315,118 @@ class TargetPlatformSourceGeneratorTest {
         TargetPlatformSourceGenerator.Result result = generator.generate(xml, false);
 
         assertThat(result.sources()).isEmpty();
+    }
+
+    // ── Human-activity lockstep (P7) ───────────────────────────────────────────
+
+    private static String flowBpmn(String processId, String activityXml) {
+        return """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                    id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+                  <bpmn2:process id="%s" name="Flow" isExecutable="true">
+                    <bpmn2:startEvent id="Start"><bpmn2:outgoing>f0</bpmn2:outgoing></bpmn2:startEvent>
+                    <bpmn2:sequenceFlow id="f0" sourceRef="Start" targetRef="StepOne" />
+                    %s
+                    <bpmn2:sequenceFlow id="f1" sourceRef="StepOne" targetRef="End" />
+                    <bpmn2:endEvent id="End"><bpmn2:incoming>f1</bpmn2:incoming></bpmn2:endEvent>
+                  </bpmn2:process>
+                </bpmn2:definitions>
+                """.formatted(processId, activityXml);
+    }
+
+    // A human task carries no delegateExpression, so the delegate scan skips it. It must still be
+    // gated: the Twin mirrors it as an automated task, and without a rendezvous the Twin would run
+    // that activity - and every later one - while the person had not yet finished this one.
+    @Test
+    void aProxyUserTaskIsGatedBySyncSignalEvenThoughItHasNoDelegate() {
+        String xml = flowBpmn("proxy_process", """
+                <bpmn2:userTask id="StepOne" name="Step One">
+                  <bpmn2:incoming>f0</bpmn2:incoming><bpmn2:outgoing>f1</bpmn2:outgoing>
+                </bpmn2:userTask>
+                """);
+
+        TargetPlatformSourceGenerator.Result result = generator.generate(xml, false);
+
+        assertThat(result.sources()).as("a userTask still gets no generated delegate").isEmpty();
+        assertThat(result.syncSignalNames()).containsExactly("sync_StepOne");
+        assertThat(result.syncActivityIds()).containsExactly("StepOne");
+        // The catch event goes AFTER the human task: the Proxy parks only once the task is done.
+        assertThat(result.bpmnXml())
+                .contains("sourceRef=\"StepOne\" targetRef=\"sync_evt_StepOne\"")
+                .contains("sourceRef=\"sync_evt_StepOne\" targetRef=\"End\"");
+    }
+
+    // manualTask and a bare task are mirrored into automated Twin activities too, so they are gated
+    // on the same rule - by BPMN element type, not by anything about the model's subject matter.
+    @Test
+    void manualAndInertProxyTasksAreGatedOnTheSameRule() {
+        assertThat(generator.generate(flowBpmn("proxy_process", """
+                <bpmn2:manualTask id="StepOne"><bpmn2:incoming>f0</bpmn2:incoming>
+                  <bpmn2:outgoing>f1</bpmn2:outgoing></bpmn2:manualTask>
+                """), false).syncSignalNames()).containsExactly("sync_StepOne");
+        assertThat(generator.generate(flowBpmn("proxy_process", """
+                <bpmn2:task id="StepOne"><bpmn2:incoming>f0</bpmn2:incoming>
+                  <bpmn2:outgoing>f1</bpmn2:outgoing></bpmn2:task>
+                """), false).syncSignalNames()).containsExactly("sync_StepOne");
+    }
+
+    // The mirrored Twin has no receiveTask to rewrite - the mirror produced a serviceTask under the
+    // same activity id - so the rendezvous is inserted in FRONT of it. That ordering is the whole
+    // invariant: the Twin cannot execute activity N until the signal for N arrives.
+    @Test
+    void aMirroredTwinActivityGetsItsSyncCatchEventInsertedBeforeIt() {
+        String twinXml = flowBpmn("proxy_process_twin", """
+                <bpmn2:serviceTask id="StepOne" name="Step One"
+                    camunda:delegateExpression="${stepOne}">
+                  <bpmn2:incoming>f0</bpmn2:incoming><bpmn2:outgoing>f1</bpmn2:outgoing>
+                </bpmn2:serviceTask>
+                """);
+
+        TargetPlatformSourceGenerator.Result result =
+                generator.generate(twinXml, true, java.util.Set.of("StepOne"));
+
+        assertThat(result.syncSignalNames()).containsExactly("sync_StepOne");
+        assertThat(result.bpmnXml())
+                .contains("sourceRef=\"Start\" targetRef=\"sync_evt_StepOne\"")
+                .contains("sourceRef=\"sync_evt_StepOne\" targetRef=\"StepOne\"");
+    }
+
+    // An authored Twin that models its own wait state as a receiveTask keeps the pre-existing
+    // in-place rewrite, and must not additionally get an inserted catch event for the same activity.
+    @Test
+    void anAuthoredTwinReceiveTaskIsStillRewrittenInPlaceAndNotDuplicated() {
+        String twinXml = flowBpmn("proxy_process_twin", """
+                <bpmn2:receiveTask id="StepOne" name="Step One">
+                  <bpmn2:incoming>f0</bpmn2:incoming><bpmn2:outgoing>f1</bpmn2:outgoing>
+                </bpmn2:receiveTask>
+                """);
+
+        TargetPlatformSourceGenerator.Result result =
+                generator.generate(twinXml, true, java.util.Set.of("StepOne"));
+
+        assertThat(result.syncSignalNames()).containsExactly("sync_StepOne");
+        assertThat(result.bpmnXml()).doesNotContain("receiveTask");
+        assertThat(result.bpmnXml()).doesNotContain("sync_evt_StepOne");
+        // exactly one signal declaration for this activity, not one per insertion path
+        assertThat(result.bpmnXml().split("name=\"sync_StepOne\"", -1)).hasSize(2);
+    }
+
+    // A Twin that mirrors only part of the Proxy must not fail generation: the unmatched signal is a
+    // case SignalBroadcaster already handles, not a generation error.
+    @Test
+    void aProxyActivityTheTwinDoesNotMirrorIsSkippedRatherThanFailing() {
+        String twinXml = flowBpmn("proxy_process_twin", """
+                <bpmn2:serviceTask id="StepOne" camunda:delegateExpression="${stepOne}">
+                  <bpmn2:incoming>f0</bpmn2:incoming><bpmn2:outgoing>f1</bpmn2:outgoing>
+                </bpmn2:serviceTask>
+                """);
+
+        TargetPlatformSourceGenerator.Result result =
+                generator.generate(twinXml, true, new java.util.LinkedHashSet<>(
+                        java.util.List.of("StepOne", "NotMirroredHere")));
+
+        assertThat(result.syncSignalNames()).containsExactly("sync_StepOne");
     }
 }

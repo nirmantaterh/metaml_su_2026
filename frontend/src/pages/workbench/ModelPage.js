@@ -81,10 +81,9 @@ const ModelPage = () => {
     // Populated only by a successful Launch here - port/processKey/pairing detail, same shape LaunchProjectListPage keeps per row. Cleared on every new Generate, since a fresh generation invalidates whatever was previously launched.
     const [launchInfo, setLaunchInfo] = useState(null);
 
-    // Runtime execution evidence for Workflow Details. Kept here rather than inside the panel so
-    // WorkflowDetailsPanel stays the purely presentational component it already is. Loaded only
-    // while the details dropdown is actually open - this is observability on demand, not another
-    // polling loop layered on top of the workflow-state refresh above.
+    // Runtime execution state for Workflow Details. Maintained at the page level so
+    // WorkflowDetailsPanel remains purely presentational. Loaded only while the details
+    // dropdown is open to avoid background polling.
     const [execution, setExecution] = useState(null);
 
     useEffect(() => {

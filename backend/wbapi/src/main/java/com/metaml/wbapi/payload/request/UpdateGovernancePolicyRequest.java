@@ -6,7 +6,7 @@ import lombok.NoArgsConstructor;
 
 import java.util.Set;
 
-// all nullable on purpose - only what's in the body gets changed
+// Fields are nullable to support partial policy updates.
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

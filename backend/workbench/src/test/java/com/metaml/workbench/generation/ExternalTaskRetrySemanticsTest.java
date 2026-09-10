@@ -18,19 +18,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-// Verifies, against a REAL Camunda engine (not a mock, not generated source text), the exact retry
-// semantics the generated ExternalTaskPoller.handleWorkerFailure relies on (see
-// SpringBootProjectGenerator.writeExternalTaskPoller): a task's remaining retries start at
-// maxRetries on first failure, decrement on each subsequent one, self-heal via the poller's own
-// fetchAndLock cadence once the backoff window elapses (no job executor involved), and land in a
-// real, queryable terminal state (retries == 0) rather than a silent stall once exhausted.
-//
-// This exercises the underlying Camunda mechanism directly rather than the generated Java text,
-// which the workbench module has no compile-time dependency on (each generated project is meant to
-// stand alone - see SpringBootProjectGenerator's own header). RedCollarEndToEndTest and
-// GenericPlatformMechanismsEndToEndTest separately prove the generated poller's happy path executes
-// for real inside a launched Target Platform; this test proves the failure/retry path specifically,
-// with real task state asserted at each step - not merely that something was logged.
+        // Verifies Camunda external task decrements retries and opens incident on failure.
 class ExternalTaskRetrySemanticsTest {
 
     private static final String WORKER_ID = "generated-worker";
@@ -168,8 +156,7 @@ class ExternalTaskRetrySemanticsTest {
                 .as("a task with zero retries must never be handed out by fetchAndLock again")
                 .isEmpty();
 
-        // The process instance is genuinely stuck at this activity, not silently vanished or
-        // falsely reported complete - exactly the "process integrity" the audit asked to verify.
+        // The process instance remains active at this activity rather than completing prematurely.
         assertThat(engine.getRuntimeService().createProcessInstanceQuery()
                 .processInstanceId(processInstanceId).singleResult())
                 .as("process instance must still exist, parked at the failed activity")

@@ -11,9 +11,8 @@ class DelegateClassGeneratorTest {
 
     private final DelegateClassGenerator generator = new DelegateClassGenerator();
 
-    // Joanna's own example: a service task named "Calculate Interest" wired to
-    // delegateExpression="${calculateInterestService}" - the class name must come from the
-    // expression, not the display name, since that's what Camunda actually looks up at runtime
+    // A service task wired to delegateExpression="${calculateInterestService}" - the class name
+    // must come from the expression, not the display name, since that is what Camunda resolves at runtime.
     @Test
     void generatesAClassNamedAfterTheDelegateExpressionNotTheTaskLabel() {
         String bpmn = loanApprovalBpmn();
@@ -40,12 +39,8 @@ class DelegateClassGeneratorTest {
         assertThat(source).contains("public void execute(DelegateExecution execution)");
     }
 
-    // real bug, found by actually compiling a generated project and checking where the .class file
-    // landed - javac doesn't care that a source file's package disagrees with its directory, but
-    // Spring's default @ComponentScan only looks under the application's own package, so a class
-    // generated with the wrong package silently never becomes a bean at runtime even though the
-    // build is green. SpringBootProjectGenerator needs to be able to ask for a package that matches
-    // wherever it's actually going to place the file.
+    // Ensures the generator supports an explicit target package so generated delegate classes
+    // match the application scan directory and are detected by Spring @ComponentScan.
     @Test
     void generateAcceptsAnExplicitPackageSoTheCallerCanMatchWhereItWillActuallyPlaceTheFile() {
         List<GeneratedDelegate> generated = generator.generate(loanApprovalBpmn(), "com.example.camundademo.delegates");
@@ -89,12 +84,8 @@ class DelegateClassGeneratorTest {
                 .isEqualTo("Task_A");
     }
 
-    // Pins a real constraint found by probing camunda-bpm-model: camunda:delegateExpression=""
-    // reads back as null, i.e. the parser cannot tell an empty attribute from an absent one. That
-    // is why the generator skips null rather than failing on it - failing would break every model
-    // whose service task legitimately has no delegate attribute at all. It also means the empty-
-    // attribute shape (the only one Camunda accepts at deploy) cannot reach the element-attributed
-    // failure below; see DEMO_PROTOCOL.md.
+    // Camunda BPMN parser treats empty string delegate expressions identically to absent attributes (null);
+    // verify the generator skips these rather than failing.
     @Test
     void anEmptyDelegateExpressionAttributeIsIndistinguishableFromAnAbsentOneAndIsSkipped() {
         String bpmn = """
@@ -131,11 +122,7 @@ class DelegateClassGeneratorTest {
         assertThat(generated.get(0).className()).isEqualTo("Bad_name_here");
     }
 
-    // real bug, found by actually compiling generated output against the real template rather
-    // than trusting these fixtures - Joanna's own loanApproval.bpmn has a literal newline
-    // embedded in a task's name attribute ("Calculate\nInterest"), which broke out of the
-    // single-line // comment in the generated source and turned everything after it into a
-    // syntax error
+    // Handles task name attributes containing embedded newlines without breaking generated comment syntax.
     @Test
     void aTaskNameWithAnEmbeddedNewlineDoesNotBreakOutOfTheGeneratedCommentLine() {
         String bpmn = delegateExpressionBpmnWithMultilineName("calculateInterestService", "Calculate\nInterest");
@@ -157,9 +144,7 @@ class DelegateClassGeneratorTest {
                     || trimmed.startsWith("public")
                     || trimmed.startsWith("private")
                     || trimmed.startsWith("@Override")
-                    // the generated delegate now logs its own execution (professor: "just print
-                    // out a statement") - a legitimate two-line logger.info(...) call, not a
-                    // broken-comment fragment
+                    // The generated delegate includes execution logging via logger.info(...)
                     || trimmed.startsWith("logger.")
                     || trimmed.startsWith("+ \"")
                     || trimmed.equals("{") || trimmed.equals("}"))
@@ -168,10 +153,7 @@ class DelegateClassGeneratorTest {
         }
     }
 
-    // This repo's own demo models (citibank wire transfer, grad admission) use exactly this shape
-    // - a userTask with a camunda:taskListener, not a service task's own delegateExpression. Before
-    // this test existed, generating a project from either demo model silently produced zero
-    // delegates and shipped a project that crashed the first time a task completed.
+    // User tasks with taskListener delegateExpressions require generated listener classes.
     @Test
     void aUserTasksTaskListenerDelegateExpressionGeneratesATaskListenerNotAJavaDelegate() {
         String bpmn = userTaskListenerBpmn("agentExecutionDelegate", "Review Application");
@@ -223,18 +205,8 @@ class DelegateClassGeneratorTest {
                 .containsExactlyInAnyOrder(DelegateKind.SERVICE_TASK, DelegateKind.TASK_LISTENER);
     }
 
-    // Dedup is keyed on the generated class name, not the raw bean name: two DIFFERENT bean
-    // names that sanitize down to the same Java identifier (toClassName maps every illegal
-    // character to '_') both survived as separate GeneratedDelegates - which then fought over the
-    // same file the moment SpringBootProjectGenerator wrote them to disk, with whichever one got
-    // written second silently winning and the other bean simply never existing at runtime.
-    //
-    // This test used to assert only that the two didn't BOTH survive, which was the first, weaker
-    // half of the fix: deduping stopped the clobbering on disk but still dropped one element's bean
-    // on the floor without telling anyone, so the process still failed at runtime - just with a
-    // NoSuchBeanDefinitionException instead of a race over a file. Camunda accepts both expressions
-    // at deploy time, so nothing upstream catches this either. Failing here, naming the element
-    // that loses, is what the editor's "Go to error" needs to select the offending task.
+    // Deduplication is keyed on the generated class name: two different bean names that sanitize
+    // to the same Java identifier are detected early, failing fast and identifying the conflicting BPMN element.
     @Test
     void twoDifferentBeanNamesThatSanitizeToTheSameClassNameFailAndIdentifyTheLosingElement() {
         String bpmn = """
@@ -262,11 +234,7 @@ class DelegateClassGeneratorTest {
                 .isEqualTo("Task_B");
     }
 
-    // the other half of the same contract: a failure that isn't attributable to one element must
-    // NOT come back wearing an element id. Only InvalidDelegateExpressionException carries one
-    // (see WorkbenchServiceImpl.generateErrorFrom) - anything else falls through to a StageError
-    // with a null bpmnElementId, which is what keeps "Go to error" hidden rather than pointing the
-    // user at a task that has nothing wrong with it.
+        // Shared bean between UserTask and ServiceTask implements TaskListener to avoid runtime cast failure.
     @Test
     void aFailureThatIsNotAboutOneElementCarriesNoElementIdRatherThanAFabricatedOne() {
         String notEvenValidBpmn = "<nonsense/>";

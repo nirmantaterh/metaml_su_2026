@@ -27,10 +27,7 @@ class TargetPlatformMessagingGeneratorTest {
         assertThat(sources.stream().map(TargetPlatformMessagingGenerator.GeneratedSource::className))
                 .containsExactlyInAnyOrder("PairRegistry", "RabbitMqConfig", "TaskQueuePublisher",
                         "TaskQueueListener", "ResponseQueuePublisher", "ResponseQueueListener",
-                        // Reliability hardening (Pass 1): observability listener for the project-scoped
-                        // DLQs - only generated when there is at least one shared signal (same condition
-                        // that gates TaskQueueListener/ResponseQueueListener having a real @RabbitListener
-                        // body), which this test's Set.of("cuttingSignal") satisfies.
+                        // Observability listener for project-scoped DLQs, generated when at least one shared signal exists:
                         "DeadLetterQueueListener", "SignalBroadcaster", "ProxyProcessController",
                         "TwinProcessController");
 
@@ -96,10 +93,7 @@ class TargetPlatformMessagingGeneratorTest {
                 .contains("pairRegistry.registerAndClassify");
     }
 
-    // The generator, not just a hand-edited generated project,
-    // must be the source of the new persistence/confirm/DLQ/duplicate-handling code - these
-    // assertions catch a regression where a future change edits generated output by hand instead
-    // of through TargetPlatformMessagingGenerator itself.
+        // Asserts AMQP beans are omitted and signals deliver directly when messaging is disabled.
     @Test
     void publisherMessagesAreExplicitlyPersistentAndConfirmed() {
         List<TargetPlatformMessagingGenerator.GeneratedSource> sources = generator.generate("proj.abc123",

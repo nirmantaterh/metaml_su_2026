@@ -20,8 +20,33 @@ class EnterpriseLoanTargetPlatformGenerationTest {
     @TempDir
     Path tempDir;
 
-    private static final Path REAL_TEMPLATE = Path.of("../RedCollarTP");
-    private static final Path FIXTURE_PATH = Path.of("../../../e2e-acceptance-artifacts/fixtures/enterprise-loan-origination.bpmn");
+    private static final Path REAL_TEMPLATE = resolveTemplate();
+    private static final Path FIXTURE_PATH = resolveFixturePath();
+
+    private static Path resolveTemplate() {
+        Path[] candidates = new Path[] {
+            Path.of("../RedCollarTP"),
+            Path.of("backend/RedCollarTP"),
+            Path.of("../../backend/RedCollarTP")
+        };
+        for (Path c : candidates) {
+            if (Files.isDirectory(c)) return c;
+        }
+        return Path.of("../RedCollarTP");
+    }
+
+    private static Path resolveFixturePath() {
+        Path[] candidates = new Path[] {
+            Path.of("../../demo/enterprise-loan-origination.bpmn"),
+            Path.of("demo/enterprise-loan-origination.bpmn"),
+            Path.of("../demo/enterprise-loan-origination.bpmn"),
+            Path.of("../../../demo/enterprise-loan-origination.bpmn")
+        };
+        for (Path c : candidates) {
+            if (Files.isRegularFile(c)) return c;
+        }
+        return Path.of("../../demo/enterprise-loan-origination.bpmn");
+    }
 
     @Test
     void generatesCompleteTargetPlatformStructureFromEnterpriseLoanFixture() throws IOException {

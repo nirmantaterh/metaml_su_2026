@@ -1,5 +1,6 @@
 package com.metaml.workbench.automation;
 
+import com.metaml.workbench.capability.runtime.DelegateExecutionContext;
 import org.camunda.bpm.engine.delegate.DelegateExecution;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,7 +57,7 @@ public class DefaultProjectAutomationService implements ProjectAutomationService
             if (matching != null) {
                 logger.info("Twin activity {} on instance {} dispatching to exact executor {} for agent '{}'",
                         activityId, execution.getProcessInstanceId(), matching.getClass().getSimpleName(), agentNameOrType);
-                return matching.execute(execution, activityId, agentNameOrType);
+                return matching.execute(new DelegateExecutionContext(execution), activityId, agentNameOrType);
             }
 
             // Fail closed: an evolved agent was explicitly assigned but has no executor

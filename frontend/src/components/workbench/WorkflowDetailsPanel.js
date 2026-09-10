@@ -46,12 +46,7 @@ const startOf = (history, stage) => {
     return null;
 };
 
-// Renders ONLY what the runtime execution-state API reported. Every field below is read straight off
-// TwinActivityExecutionState - agentName, status, summary, output - with no inference: an activity is
-// never shown as EXECUTED because it was bound, reached, or recommended, only because the backend
-// itself said status === "EXECUTED". `execution` is null/undefined while nothing has been loaded yet,
-// carries an error flag when the API could not be reached, and holds an empty twins list when the
-// model genuinely has no twin with connected activities.
+// Renders runtime execution state (agentName, status, summary, output) directly from the API.
 const ExecutionSection = ({ execution, openOutputs, onToggleOutput }) => {
     if (execution === null || execution === undefined) {
         return null;
@@ -288,7 +283,7 @@ const WorkflowDetailsPanel = ({ workflowState, onClose, onGoToError, execution }
                 ) : (
                     <div className="workflow-details-history">
                         {history.map((event, index) => (
-                            // stage+status can repeat (a retry) so index is part of the key, not a workaround for missing data - there's no event id from the backend
+                            // Include index in key to handle repeated stage/status transitions without backend event IDs.
                             <div key={`${event.stage}-${event.status}-${index}`} className="workflow-details-history-row">
                                 <span className="workflow-details-history-time">{formatTime(event.timestamp)}</span>
                                 <span className="workflow-details-history-stage">{PHASE_LABELS[event.stage]}</span>

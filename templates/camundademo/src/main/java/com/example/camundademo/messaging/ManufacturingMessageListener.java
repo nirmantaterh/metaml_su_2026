@@ -8,7 +8,7 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-// Handles Twin responses and resumes waiting Camunda processes through message correlation. <p>Does not complete tasks or modify engine state directly.
+// Consumes Twin responses and resumes waiting Camunda process instances via message correlation.
 @Component
 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
 public class ManufacturingMessageListener {
@@ -34,7 +34,7 @@ public class ManufacturingMessageListener {
         resumeProcessIfWaiting(message);
     }
 
-    // Scoped to one process instance: multiple instances can park on the same message name. MismatchingMessageCorrelationException means the process is not waiting; logged as INFO, not an error.
+    // Correlates to a specific process instance; treats MismatchingMessageCorrelationException as benign if the process is not waiting.
     private void resumeProcessIfWaiting(HarnessMessage message) {
         String processInstanceId = message.getProcessInstanceId();
         if (processInstanceId == null) {

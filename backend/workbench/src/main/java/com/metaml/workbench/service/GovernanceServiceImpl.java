@@ -18,11 +18,7 @@ import java.util.stream.Collectors;
 @Service
 public class GovernanceServiceImpl implements GovernanceService {
 
-    // Platform governance is runtime-only by design: a restart returns these limits to their
-    // configured defaults with every counter at zero. They are a runaway guard rail on a running
-    // instance, not a durable budget - unlike tenant policy (TenantPolicyService), which is an
-    // authored business rule and does persist. Restart reconciliation relies on this: a persisted
-    // exhausted counter would refuse an approval that had already been granted.
+    // Enforces in-memory platform quotas for concurrent twins and per-twin evolutions.
     private volatile Set<String> deniedAgentTypes = Set.of();
     private volatile int maxEvolutionsPerTwin;
     private volatile int maxTwinExecutionsPerTwin;

@@ -1,14 +1,7 @@
 import { assertRenderableBpmn, isRenderableBpmn } from "./renderableBpmn";
 import defaultDiagram from "./defaultDiagram";
 
-// Regression guard for the "businessObject.get is not a function" class of failure.
-//
-// A BPMN with no bpmndi:BPMNDiagram is valid to Camunda but undrawable by bpmn-js. Handing one to
-// importXML leaves the canvas on an "__implicitroot_N" placeholder with no businessObject, which
-// bpmn-js-properties-panel then renders - and its TimerProps dereferences
-// businessObject.get('eventDefinitions') before checking isTimerSupported, so it throws a message
-// about timers for a model that has none, and stays broken for every later import too.
-// assertRenderableBpmn stops that XML before bpmn-js ever sees it.
+// Ensures BPMN XML contains a BPMNDiagram element to prevent bpmn-js rendering errors.
 describe("assertRenderableBpmn", () => {
     it("accepts the default diagram the editor boots with", () => {
         expect(() => assertRenderableBpmn(defaultDiagram)).not.toThrow();

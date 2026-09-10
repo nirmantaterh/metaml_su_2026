@@ -57,7 +57,7 @@ public class AutoBridgeTrigger {
     // AFTER_COMMIT required: plain @EventListener runs before engine flush, so queries return stale state.
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onActivityStarted(ExecutionEvent event) {
-        // can't let anything escape here or Camunda surfaces it as the task-complete call failing
+        // Swallows exceptions to prevent listener failures from aborting completed engine transactions.
         try {
             handleActivityStarted(event);
         } catch (RuntimeException e) {
@@ -76,28 +76,26 @@ public class AutoBridgeTrigger {
         }
         String twinId = BusinessKeys.twinIdFromOriginalKey(businessKey);
         String activityId = event.getCurrentActivityId();
-        // bare "original-" key or a scope execution with no activity - nothing to bridge
         if (twinId.isBlank() || activityId == null || activityId.isBlank()) {
             return;
         }
         if (shuttingDown) {
             return;
         }
-        // per-visit id: prevents repeat-visit collapse and disambiguates parallel siblings
+        // Disambiguates per-visit runtime execution for loops and parallel multi-instance siblings.
         String activityInstanceId = event.getActivityInstanceId();
 
-        // same-thread call risks joining the committed transaction; Spring unbinds it asynchronously
+        // Executes asynchronously to ensure unbinding from committed engine transaction.
         ExecutorService executor = bridgeExecutor.get();
         Future<?> bridged;
         try {
             bridged = executor.submit(() -> runBridge(twinId, activityId, activityInstanceId));
         } catch (RejectedExecutionException e) {
-            // shutdown raced us between the flag check and here
             logger.debug("Auto-bridge executor is gone, skipping activity {} on twin {}", activityId, twinId);
             return;
         }
 
-        // wait so the UI refetch after "Complete current task(s)" always sees the bridge result
+        // Awaits bridge completion so subsequent state queries observe updated twin execution.
         try {
             bridged.get(BRIDGE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
@@ -105,7 +103,7 @@ public class AutoBridgeTrigger {
         } catch (Exception e) {
             logger.warn("Auto-bridge of activity {} on twin {} did not finish in time: {}",
                     activityId, twinId, e.toString());
-            // interrupt best-effort; swap executor unconditionally so stuck threads don't block other twins
+            // Replaces executor if bridge times out to prevent stalled tasks from blocking subsequent events.
             bridged.cancel(true);
             if (bridgeExecutor.compareAndSet(executor, newBridgeExecutor())) {
                 executor.shutdown();

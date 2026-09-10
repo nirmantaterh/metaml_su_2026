@@ -22,24 +22,9 @@ import com.metaml.workbench.bpmn.TwinModelGenerator;
 import com.metaml.workbench.codegen.DelegateClassGenerator;
 import com.metaml.workbench.codegen.ExternalTaskWorkerGenerator;
 
-// Point 5.4 verification: proves that Camunda runtime state (process instances, executions,
-// variables) survives a JVM restart when the generated Target Platform uses a file-backed H2
-// datasource instead of the default in-memory H2.
-//
-// Test flow:
-//   1. Generate a Target Platform from a signal-gated BPMN (parks at intermediate catch event)
-//   2. Build it
-//   3. Launch it with SPRING_DATASOURCE_URL=jdbc:h2:file:<path> (file-backed persistence)
-//   4. Start a process instance via HTTP → parks at SignalCatch
-//   5. Set a process variable "persistenceTest" = "before-restart"
-//   6. Record the process instance ID, active activity, and variable
-//   7. Kill the Target Platform JVM
-//   8. Relaunch the SAME generated project with the SAME datasource URL
-//   9. Query for the SAME process instance ID
-//  10. Verify: still active, still at SignalCatch, variable still = "before-restart"
-//
-// This is the proof that "configuration is not proof" demands: a real workflow, a real kill,
-// a real restart, and a real query of recovered state.
+/**
+ * Verifies that process execution state persists across JVM restarts when using file-backed H2 storage.
+ */
 @Tag("slow")
 class FilePersistenceRestartRecoveryTest {
 
@@ -70,12 +55,12 @@ class FilePersistenceRestartRecoveryTest {
         buildProject(project);
 
         // Env vars that override the default in-memory H2 with file-backed H2
-        Map<String, String> phase1Env = Map.of(
+        Map<String, String> initialEnv = Map.of(
                 "SPRING_DATASOURCE_CAMUNDA_URL", h2FileUrl,
                 "SPRING_DATASOURCE_URL", h2FileUrl,
                 "METAML_BROADCASTER_FIXED_DELAY", "3600000"
         );
-        Map<String, String> phase2Env = Map.of(
+        Map<String, String> restartEnv = Map.of(
                 "SPRING_DATASOURCE_CAMUNDA_URL", h2FileUrl,
                 "SPRING_DATASOURCE_URL", h2FileUrl,
                 "METAML_BROADCASTER_FIXED_DELAY", "500"
@@ -85,10 +70,8 @@ class FilePersistenceRestartRecoveryTest {
         HttpClient http = HttpClient.newHttpClient();
         String processInstanceId;
 
-        // ==========================================
         // First launch - create runtime state
-        // ==========================================
-        LaunchedProject launched1 = launcher.launch(project, phase1Env);
+        LaunchedProject launched1 = launcher.launch(project, initialEnv);
         try {
             String manufBase = "http://localhost:" + launched1.port() + "/api/v1/manufacturing";
             String statusBase = "http://localhost:" + launched1.port() + "/api/v1/process";
@@ -107,18 +90,18 @@ class FilePersistenceRestartRecoveryTest {
             assertThat(statusBefore).contains("\"active\":true");
             assertThat(statusBefore).contains("SignalCatch");
 
-            // Record pre-restart evidence
+            // Record pre-restart state
             System.out.println("=== PRE-RESTART STATE ===");
             System.out.println("Process Instance ID: " + processInstanceId);
             System.out.println("Status: " + statusBefore);
             System.out.println("H2 File URL: " + h2FileUrl);
             System.out.println("DB files exist: " + Files.exists(dbDir.resolve("camunda-engine.mv.db")));
         } finally {
-            // KILL the JVM
+            // Stop the JVM
             launcher.stop(project.projectId());
         }
 
-        // Verify the JVM is actually dead
+        // Verify the JVM process has terminated
         assertThat(launcher.find(project.projectId())).isEmpty();
 
         // Verify the H2 database file exists on disk
@@ -129,10 +112,8 @@ class FilePersistenceRestartRecoveryTest {
         assertThat(dbFileSize).as("H2 database file should have content").isGreaterThan(0);
         System.out.println("H2 DB file size after first shutdown: " + dbFileSize + " bytes");
 
-        // ==========================================
         // Second launch - recover runtime state
-        // ==========================================
-        LaunchedProject launched2 = launcher.launch(project, phase2Env);
+        LaunchedProject launched2 = launcher.launch(project, restartEnv);
         try {
             String statusBase = "http://localhost:" + launched2.port() + "/api/v1/process";
 
@@ -166,8 +147,8 @@ class FilePersistenceRestartRecoveryTest {
                     HttpResponse.BodyHandlers.ofString());
             System.out.println("Activity history for ManufFinish: " + histManuf.body());
 
-            // THE PROOF OF RECOVERY & CONTINUATION:
-            // Process instance recovered on JVM 2, history shows both activities were entered and completed
+            // State continuation verification:
+            // Process instance recovered on JVM 2; history verifies both activities were entered and completed
             assertThat(histResponse.body())
                     .as("SignalCatch must have been visited (recorded in historic database)")
                     .contains("\"visitCount\":1");
@@ -176,25 +157,22 @@ class FilePersistenceRestartRecoveryTest {
                     .as("ManufFinish must have been visited and completed post-restart")
                     .contains("\"visitCount\":1");
 
-            // THE PROOF: HikariCP connection pool is being used
+            // Verify HikariCP connection pool is being used
             Path launchLog = project.directory().resolve("launch.log");
             if (Files.exists(launchLog)) {
                 String logContent = Files.readString(launchLog);
                 assertThat(logContent)
                         .as("Launch log must confirm HikariCP pool initialization")
                         .contains("Hikari");
-                System.out.println("=== HIKARICP POOL PROOF ===");
-                System.out.println("HikariCP initialization detected in launch.log!");
+                System.out.println("HikariCP initialization confirmed in launch.log");
             }
 
         } finally {
             launcher.stop(project.projectId());
         }
 
-        System.out.println("=== VERDICT: FILE-BACKED H2 RESTART RECOVERY WITH HIKARICP PROVEN ===");
+        System.out.println("File-backed H2 restart recovery and persistence verified.");
     }
-
-    // --- BPMN fixtures ---
 
     // start -> signal catch("SharedSignal") -> external task("ManufFinish") -> end
     // The process parks at SignalCatch - a stable intermediate wait state.
@@ -239,8 +217,6 @@ class FilePersistenceRestartRecoveryTest {
                 </bpmn2:definitions>
                 """;
     }
-
-    // --- Helpers ---
 
     private static void buildProject(GeneratedProject project) throws IOException, InterruptedException {
         Process build = new ProcessBuilder(mvnw(project.directory()), "-q", "package", "-DskipTests")

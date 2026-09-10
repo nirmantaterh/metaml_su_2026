@@ -45,8 +45,6 @@ public class TenantPolicyService {
         }
     }
 
-    // ---- Tenants ----
-
     public Tenant createTenant(String name) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("Tenant name must not be blank");
@@ -68,8 +66,6 @@ public class TenantPolicyService {
         }
         return tenant;
     }
-
-    // ---- Policies ----
 
     // Creates a tenant-scoped policy after validating tenant existence.
     public Policy createTenantPolicy(String tenantId, String name) {
@@ -103,8 +99,6 @@ public class TenantPolicyService {
     public List<Policy> listPlatformPolicies() {
         return policies.values().stream().filter(Policy::isPlatform).toList();
     }
-
-    // ---- Policy versions ----
 
     public PolicyVersion createDraftVersion(String policyId, String tenantId) {
         synchronized (writeLock) {
@@ -184,8 +178,6 @@ public class TenantPolicyService {
                 .filter(v -> v.status() == PolicyVersionStatus.ACTIVE)
                 .findFirst();
     }
-
-    // ---- internal helpers ----
 
     private void requirePolicyAccessible(String policyId, String tenantId) {
         Policy policy = policies.get(policyId);

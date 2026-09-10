@@ -34,7 +34,7 @@ describe("GenerateProjectListPage", () => {
         userEvent.click(generateButtons[0]);
 
         await waitFor(() => expect(generateProject).toHaveBeenCalledWith({ modelId: "m-1" }));
-        expect(await screen.findByText(/Generate successful \(process "wireTransferReview", id gp-1\)/))
+        expect(await screen.findByText(/Generate successful \("wireTransferReview"\)/))
             .toBeInTheDocument();
     });
 

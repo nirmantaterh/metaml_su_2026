@@ -1,13 +1,28 @@
-# RedCollarTP
+# Target Platform Template (RedCollarTP)
 
-Camunda 7 + Spring Boot process engine, structured around a **proxy / twin** pattern:
-- `proxy` — outward-facing process delegates that receive commands
-- `twin` — internal digital-twin mirror kept in sync via RabbitMQ
+Camunda 7 and Spring Boot process engine application template for generated MetaML Target Platforms.
 
-## Scaffold notes
-This structure was rebuilt from a VS Code screenshot. The `proxy/delegates` package is
-reproduced in full (matches the visible file tree). `config`, `controller`, RabbitMQ
-config, and `twin` package content were not visible in the screenshot, so they're
-filled in as reasonable placeholders — replace with your real logic.
+## Architecture
 
-Run: `./mvnw spring-boot:run`
+The platform runtime implements a synchronized **Proxy / Twin** architecture:
+- `proxy` — outward-facing process delegates and execution listeners that receive commands and drive primary process progression.
+- `twin` — operational digital-twin mirror kept in lockstep with the proxy process via RabbitMQ messaging and intermediate catch events.
+- `messaging` — AMQP queue configuration, publishers, and listeners providing decoupled process instance coordination.
+- `status` — REST controllers for process introspection and runtime status reporting.
+
+## Configuration
+
+Core properties are defined in `src/main/resources/application.properties`:
+- Port and context path (`server.port=8080`)
+- Camunda engine execution settings
+- In-memory H2 database (or configurable file-backed datasource)
+- RabbitMQ messaging topology (`metaml.messaging.enabled=true`)
+
+## Build & Run
+
+To build and run the application locally:
+
+```bash
+./mvnw clean compile
+./mvnw spring-boot:run
+```

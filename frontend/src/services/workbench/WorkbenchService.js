@@ -81,18 +81,14 @@ export async function getTwin(id) {
     return result.data;
 }
 
-// Twins belonging to one saved model. Same endpoint the VS Code extension's tree uses to populate
-// its "Twin Processes" section - no Workbench-specific twin listing exists or should.
+// Fetches twin processes associated with a saved model.
 export async function listTwinProcesses(modelId) {
     const result = await api.get(`/wb/transmute/twins`, { params: { modelId } });
     return result.data;
 };
 
-// The authoritative runtime execution state for ONE activity on ONE twin: the exact endpoint the
-// VS Code extension already consumes (WorkbenchService#getActivityExecutionState ->
-// TwinActivityExecutionState). Returns whatever the runtime actually recorded - agentName, status,
-// summary, output, activeInstances - and nothing derived. The Workbench renders this; it never
-// reconstructs execution from workflow history or from the presence of a binding.
+// Retrieves the runtime execution state for a specific activity on a twin process,
+// including agent assignment, status, summary, output data, and active instances.
 export async function getActivityExecutionState(twinProcessId, activityId) {
     const result = await api.get(
         `/wb/transmute/twin/${encodeURIComponent(twinProcessId)}/activity/${encodeURIComponent(activityId)}/execution`
@@ -100,17 +96,10 @@ export async function getActivityExecutionState(twinProcessId, activityId) {
     return result.data;
 };
 
-// Composes the two calls above into the shape Workflow Details renders: for each twin of this
-// model, the runtime state of each activity that has actually been connected to it. Deliberately
-// scoped to connected activities (twin.activityLinks) because an unconnected activity has no twin
-// activity for the runtime to have executed anything against.
-//
-// Per-activity failures are captured rather than thrown so one unreachable activity cannot blank
-// out the evidence for the rest; a twin with no links contributes nothing at all.
+// Aggregates execution state across connected activities for all twins associated with a model.
+// Per-activity errors are captured to allow partial results for reachable activities.
 export async function loadExecutionEvidence(modelId) {
-    // Every backend response here is the standard ApiResponse envelope ({ message, data }); the
-    // rest of this app unwraps it at the call site with the same `res.data || res` idiom (see
-    // ModelPage's setWorkflowState). Do it once here so callers get plain runtime data.
+    // Unwraps the standard ApiResponse envelope ({ message, data }).
     const unwrap = (res) => (res && res.data !== undefined ? res.data : res);
 
     const twins = unwrap(await listTwinProcesses(modelId)) || [];
@@ -140,49 +129,49 @@ export async function launchModel(payload) {
     return result.data;
 }
 
-// twinProcessId is the id from launch, NOT either Camunda process-instance id.
+// twinProcessId is the workbench twin identifier, not Camunda process-instance id.
 export async function connectActivity(payload) {
     const result = await api.post(`/wb/transmute/connect`, payload);
     return result.data;
 }
 
-// returns AgentDecision; a 200 doesn't mean approved — check .approved
+// Returns AgentDecision; check approved field for decision status.
 export async function evolveActivity(payload) {
     const result = await api.post(`/wb/transmute/evolve`, payload);
     return result.data;
 }
 
-// idempotent, same AgentDecision shape as evolveActivity
+// Idempotent bridge invocation; returns AgentDecision.
 export async function bridgeActivity(twinProcessId, activityId) {
     const result = await api.post(`/wb/transmute/bridge/${twinProcessId}/${activityId}`);
     return result.data;
 }
 
-// every open task on the ORIGINAL instance, so the next activity becomes reachable
+// Completes open user tasks on original instance to advance execution.
 export async function completeCurrentTasks(twinProcessId) {
     const result = await api.post(`/wb/transmute/complete-task/${twinProcessId}`);
     return result.data;
 }
 
-// the policy is global server state, not per-twin
+// Global server governance policy.
 export async function getGovernancePolicy() {
     const result = await api.get(`/governance/policy`);
     return result.data;
 }
 
-// replaces the denylist, doesn't merge - load the current policy first or you'll wipe it
+// Replaces the policy denylist without merging.
 export async function updateGovernancePolicy(deniedAgentTypes, maxEvolutionsPerTwin) {
     const result = await api.post(`/governance/policy`, { deniedAgentTypes, maxEvolutionsPerTwin });
     return result.data;
 }
 
-// 404s if the twin was never launched
+// Returns 404 if the twin was never launched.
 export async function getGovernanceUsage(twinProcessId) {
     const result = await api.get(`/governance/usage/${twinProcessId}`);
     return result.data;
 }
 
-// tenant-scoped policy lifecycle — every call takes ids returned by earlier calls, none guessable
+// Tenant-scoped policy lifecycle operations.
 
 export async function listTenants() {
     const result = await api.get(`/governance/tenants`);
@@ -204,51 +193,51 @@ export async function createTenantPolicy(tenantId, payload) {
     return result.data;
 }
 
-// tenantId is a query param here (reads); mutations take it in the body.
+// tenantId is passed via query parameter for reads, request body for mutations.
 export async function listPolicyVersions(policyId, tenantId) {
     const result = await api.get(`/governance/policies/${policyId}/policy-versions`, { params: { tenantId } });
     return result.data;
 }
 
-// always starts empty; rules are added separately
+// Draft versions start with an empty rule set.
 export async function createDraftVersion(policyId, payload) {
     const result = await api.post(`/governance/policies/${policyId}/policy-versions`, payload);
     return result.data;
 }
 
-// 409s if the version isn't DRAFT
+// Returns 409 Conflict if the targeted version is not in DRAFT status.
 export async function addPolicyRule(versionId, payload) {
     const result = await api.post(`/governance/policy-versions/${versionId}/rules`, payload);
     return result.data;
 }
 
-// retires the previously ACTIVE version server-side; re-fetch to see its status change
+// Activates draft version and retires the previously active version.
 export async function activatePolicyVersion(versionId, payload) {
     const result = await api.post(`/governance/policy-versions/${versionId}/activate`, payload);
     return result.data;
 }
 
-// always evaluates the ACTIVE version, never a DRAFT.
+// Evaluates rules against the ACTIVE policy version.
 export async function evaluatePolicy(payload) {
     const result = await api.post(`/governance/evaluate`, payload);
     return result.data;
 }
 
-// approval endpoints — /transmute not /governance because these resolve a paused twin evolution
+// Approvals for policy-gated twin evolution workflows.
 
-// PENDING and resolved alike, unordered — caller sorts if it cares
+// Returns all approvals (pending and resolved).
 export async function listApprovals(tenantId) {
     const result = await api.get(`/wb/transmute/evolve/approvals`, { params: { tenantId } });
     return result.data;
 }
 
-// returns AgentDecision (not Approval); re-fetch listApprovals for the real status.
+// Approves an evolution request; returns AgentDecision.
 export async function approveEvolution(approvalId, payload) {
     const result = await api.post(`/wb/transmute/evolve/approvals/${approvalId}/approve`, payload);
     return result.data;
 }
 
-// same AgentDecision-not-Approval caveat as approveEvolution
+// Rejects an evolution request; returns AgentDecision.
 export async function rejectApproval(approvalId, payload) {
     const result = await api.post(`/wb/transmute/evolve/approvals/${approvalId}/reject`, payload);
     return result.data;

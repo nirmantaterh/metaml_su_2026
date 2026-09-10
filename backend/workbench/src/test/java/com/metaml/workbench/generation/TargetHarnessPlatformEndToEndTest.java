@@ -21,9 +21,7 @@ import com.metaml.workbench.bpmn.TwinModelGenerator;
 import com.metaml.workbench.codegen.DelegateClassGenerator;
 import com.metaml.workbench.codegen.GeneratedDelegate;
 
-// Acceptance test: generates, builds, launches, and executes a real generated delegate.
-// Uses the synthetic fixture until the professor's RedCollar BPMN is available.
-// Slow: builds and launches a real Target Harness JVM.
+// End-to-end test for target harness platform delegate generation, build, and launch.
 @Tag("slow")
 class TargetHarnessPlatformEndToEndTest {
 
@@ -50,7 +48,7 @@ class TargetHarnessPlatformEndToEndTest {
 
         GeneratedProject project = generator.generate(bpmnXml, delegates);
 
-        // --- 1. generated code exists, with the professor's required shape ---
+        // 1. Verify generated code structure.
         String slug = "fixtureprocess";
         String basePackagePath = "src/main/java/com/metaml/targetplatform/" + slug;
         assertThat(project.directory().resolve(basePackagePath
@@ -63,8 +61,7 @@ class TargetHarnessPlatformEndToEndTest {
         assertThat(project.directory().resolve("src/main/resources/processes/fixtureProcess.bpmn")).exists();
         assertThat(project.directory().resolve("src/main/resources/processes/fixtureProcess_twin.bpmn")).exists();
 
-        // Messaging ships in the template and must be repackaged for THIS project - left under
-        // com.example.camundademo it would sit outside the generated app's component scan.
+        // Messaging ships in the template and must be repackaged for this project.
         Path messagingDir = project.directory().resolve(basePackagePath + "/messaging");
         assertThat(messagingDir.resolve("MessagingTopology.java")).exists();
         assertThat(messagingDir.resolve("HarnessMessage.java")).exists();
@@ -76,8 +73,6 @@ class TargetHarnessPlatformEndToEndTest {
         assertThat(Files.readString(project.directory().resolve(basePackagePath + "/bridge/NotificationBridge.java")))
                 .contains("package com.metaml.targetplatform." + slug + ".bridge;")
                 .doesNotContain("com.example.camundademo");
-        // test sources are rewritten too - otherwise the copied messaging IT would still import
-        // com.example.camundademo.* and break "mvn package" at test-compile
         assertThat(project.directory().resolve(
                 "src/test/java/com/metaml/targetplatform/" + slug + "/messaging/MessagingFlowIT.java")).exists();
 
@@ -102,18 +97,17 @@ class TargetHarnessPlatformEndToEndTest {
                 try {
                     adminClient.send(
                             HttpRequest.newBuilder(URI.create("http://localhost:15672/api/queues/%2f/" + queue))
-                                    .header("Authorization", "Basic " + java.util.Base64.getEncoder()
-                                            .encodeToString("guest:guest".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
-                                    .DELETE().build(),
-                            HttpResponse.BodyHandlers.ofString());
-                } catch (Exception e) {
-                    // Ignore failures during cleanup
-                }
-            }
-        }
-
-        // --- 2. generated application: it actually builds ---
-        // no "clean": fresh dir. no "-o": may need a plugin not in local cache.
+                                     .header("Authorization", "Basic " + java.util.Base64.getEncoder()
+                                             .encodeToString("guest:guest".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                                     .DELETE().build(),
+                             HttpResponse.BodyHandlers.ofString());
+                 } catch (Exception e) {
+                     // Ignore failures during cleanup
+                 }
+             }
+         }
+ 
+        // 2. Build generated application.
         Process build = new ProcessBuilder(mvnw(project.directory()), "-q", "package", "-DskipTests")
                 .directory(project.directory().toFile())
                 .redirectErrorStream(true)
@@ -123,14 +117,13 @@ class TargetHarnessPlatformEndToEndTest {
         assertThat(buildFinished).as("mvn build did not finish in time").isTrue();
         assertThat(build.exitValue()).as("generated project failed to build:%n%s", buildOutput).isZero();
 
-        // --- 3. running application: launch it as its own standalone process ---
+        // 3. Launch generated application as a standalone process.
         SpringBootProjectLauncher launcher = new SpringBootProjectLauncher();
         LaunchedProject launched;
         try {
             launched = launcher.launch(project);
 
-            // --- 4. invoke the manufacturing endpoint over real HTTP, against the LAUNCHED
-            // PROCESS's own port - never the Workbench's embedded engine ---
+            // 4. Invoke the manufacturing endpoint over HTTP against the launched process port.
             HttpClient http = HttpClient.newHttpClient();
             String base = "http://localhost:" + launched.port() + "/api/v1/manufacturing";
 
@@ -151,14 +144,14 @@ class TargetHarnessPlatformEndToEndTest {
                     .as("completing the manufacturing activity failed: %s", completeResponse.body())
                     .isEqualTo(200);
 
-            // --- 5. read proof from the launched app's own log ---
+            // 5. Verify execution logs from the launched application.
             String log = Files.readString(project.directory().resolve("launch.log"));
             assertThat(log).as("generated delegate never logged its execution:%n%s", log)
                     .contains("Executing generated task listener for activity \"Stitch\"");
             assertThat(log).as("manufacturing controller never notified the twin via NotificationBridge:%n%s", log)
                     .contains("[manufacturing -> twin] activity 'UserTask_Stitch' complete");
 
-            // --- 6. with a broker: full Manufacturing → Twin → Gateway → Twin → Manufacturing chain ---
+            // 6. Verify end-to-end messaging chain with RabbitMQ broker.
             if (brokerAvailable) {
                 // Process is parked at ReceiveTask_AwaitTwin; only the twin's answer triggers message correlation.
                 String messagingLog = awaitLogContaining(project.directory(),
@@ -169,9 +162,7 @@ class TargetHarnessPlatformEndToEndTest {
                 assertThat(messagingLog).contains("[twin] received QC response 'PASS'");
                 assertThat(messagingLog).contains("[manufacturing] twin reported stage result 'PASS'");
 
-                // --- 7. Probe the wait state via the generated endpoint (REST API unavailable).
-                // 409 from signalReceiveTask means no execution is parked there; the wait state is gone.
-                // Combined with "resumed Camunda process instance" above, confirms Camunda advanced the token.
+                // 7. Probe wait state via generated endpoint; 409 confirms token has advanced.
                 HttpResponse<String> waitStateProbe = http.send(
                         HttpRequest.newBuilder(URI.create(base + "/" + processInstanceId
                                 + "/await-twin-result/complete"))
@@ -182,7 +173,7 @@ class TargetHarnessPlatformEndToEndTest {
                                 waitStateProbe.body())
                         .isEqualTo(409);
 
-                // --- 8. Finalize delegate log proves the token passed the receive task. ---
+                // 8. Verify finalize delegate log confirms progression past receive task.
                 String afterResume = awaitLogContaining(project.directory(),
                         "Executing generated delegate for activity \"Finalize\"");
                 assertThat(afterResume).contains("resumed Camunda process instance " + processInstanceId);
@@ -244,11 +235,7 @@ class TargetHarnessPlatformEndToEndTest {
         }
     }
 
-    // userTask with a "complete"-event taskListener delegateExpression - the shape
-    // TwinModelGenerator transforms (ADR-005: userTask -> receive+service pair); a plain
-    // serviceTask isn't supported (see TwinModelGenerator.copyGraph). BpmnActivities classifies a
-    // userTask as eligible for a generated completion endpoint, which is what makes
-    // "/stitch/complete" exist below.
+    // UserTask with taskListener transformed into receive-service pair and exposed via completion endpoint.
     private static String manufacturingFixtureBpmn() {
         return """
                 <?xml version="1.0" encoding="UTF-8"?>

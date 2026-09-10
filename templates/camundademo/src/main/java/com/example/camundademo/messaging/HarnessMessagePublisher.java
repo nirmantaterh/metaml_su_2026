@@ -7,7 +7,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-// Central message publisher for the Target Harness Platform. <p>Publishes through exchanges and routing keys. When messaging is disabled, logs the message without opening a broker connection.
+// Message publisher for Target Platform exchanges and routing keys.
 @Component
 public class HarnessMessagePublisher {
 
@@ -26,7 +26,7 @@ public class HarnessMessagePublisher {
         return enabled;
     }
 
-    // Publishes a message without allowing broker failures to interrupt Camunda work. <p>Failures are logged and swallowed; no retry mechanism is used.
+    // Publishes a message, logging errors without interrupting active process execution.
     public void publish(String exchange, String routingKey, HarnessMessage message) {
         if (!enabled) {
             logger.info("[messaging disabled] would publish {} to exchange '{}' key '{}'",

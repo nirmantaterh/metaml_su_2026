@@ -6,14 +6,8 @@ import org.junit.jupiter.api.Test;
 
 import com.metaml.workbench.model.GovernanceUsage;
 
-// Pins the PLATFORM governance contract that the class's own header comment states: this layer is
-// runtime-only. It exists because "the counters reset on restart" reads like lost state unless the
-// intent is written down somewhere executable - these tests are that somewhere, so a later change
-// that quietly starts persisting quota (or that persists it as a side effect of something else)
-// fails here rather than silently altering what a quota means.
-//
-// Tenant governance is the durable half and is covered separately (TenantPolicyServiceTest,
-// PolicyDecisionEngineTest); nothing here touches it.
+// Verifies runtime in-memory platform governance quotas and evolution slot reservations.
+// Durable tenant-level governance policies are tested separately in TenantPolicyServiceTest.
 class GovernanceServiceImplTest {
 
     private static final String TWIN = "twin-1";

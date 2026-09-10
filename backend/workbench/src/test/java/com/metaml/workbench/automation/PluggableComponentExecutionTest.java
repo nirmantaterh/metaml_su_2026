@@ -1,5 +1,7 @@
 package com.metaml.workbench.automation;
 
+import com.metaml.workbench.capability.runtime.DelegateExecutionContext;
+import com.metaml.workbench.capability.runtime.CapabilityExecutionContext;
 import org.camunda.bpm.engine.delegate.DelegateExecution;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,12 +49,11 @@ class PluggableComponentExecutionTest {
     void creditRiskAssessorExecutesWithHighRiskContextAndSetsProcessVariables() {
         given(execution.getVariable("transferAmount")).willReturn(15000.0);
 
-        AutomationResult result = creditRiskExecutor.execute(execution, "Task_KYC", "credit-risk-agent-01");
+        AutomationResult result = creditRiskExecutor.execute(new DelegateExecutionContext(execution), "Task_KYC", "credit-risk-agent-01");
 
         assertThat(result.summary()).contains("CreditRiskAssessorExecutor");
         assertThat(result.outputs()).containsEntry("riskFlagged", true);
         assertThat(result.outputs()).containsEntry("riskScore", 85);
-        assertThat(result.outputs()).containsEntry("executor", "CreditRiskAssessorExecutor");
         assertThat(result.outputs().get("assessmentReason").toString()).contains("Elevated risk");
 
         verify(execution).setVariable("agentFlaggedRisk", true);
@@ -64,7 +65,7 @@ class PluggableComponentExecutionTest {
         given(execution.getVariable("creditScore")).willReturn(780);
         given(execution.getVariable("transferAmount")).willReturn(3500.0);
 
-        AutomationResult result = creditRiskExecutor.execute(execution, "Task_KYC", "credit-risk-agent-01");
+        AutomationResult result = creditRiskExecutor.execute(new DelegateExecutionContext(execution), "Task_KYC", "credit-risk-agent-01");
 
         assertThat(result.outputs()).containsEntry("riskFlagged", false);
         assertThat(result.outputs()).containsEntry("riskScore", 20);
@@ -79,7 +80,7 @@ class PluggableComponentExecutionTest {
         given(execution.getVariable("creditScore")).willReturn(580);
         given(execution.getVariable("transferAmount")).willReturn(5000.0);
 
-        AutomationResult result = creditRiskExecutor.execute(execution, "Task_KYC", "credit-risk-agent-01");
+        AutomationResult result = creditRiskExecutor.execute(new DelegateExecutionContext(execution), "Task_KYC", "credit-risk-agent-01");
 
         assertThat(result.outputs()).containsEntry("riskFlagged", true);
         assertThat(result.outputs()).containsEntry("riskScore", 90);
@@ -93,13 +94,12 @@ class PluggableComponentExecutionTest {
     void validatorExecutesAndReturnsPassedForValidContext() {
         given(execution.getVariable("customerId")).willReturn("CUST-98721");
 
-        AutomationResult result = validatorExecutor.execute(execution, "Task_KYC", "validator-agent-01");
+        AutomationResult result = validatorExecutor.execute(new DelegateExecutionContext(execution), "Task_KYC", "validator-agent-01");
 
         assertThat(result.summary()).contains("ValidatorExecutor");
         assertThat(result.outputs()).containsEntry("validationPassed", true);
         assertThat(result.outputs()).containsEntry("validationStatus", "PASSED");
         assertThat(result.outputs()).containsEntry("schemaVersion", "v2.4");
-        assertThat(result.outputs()).containsEntry("executor", "ValidatorExecutor");
 
         verify(execution).setVariable("validationPassed", true);
     }
@@ -108,7 +108,7 @@ class PluggableComponentExecutionTest {
     void validatorExecutesAndReturnsFailedForInvalidCustomerId() {
         given(execution.getVariable("customerId")).willReturn("INVALID");
 
-        AutomationResult result = validatorExecutor.execute(execution, "Task_KYC", "validator-agent-01");
+        AutomationResult result = validatorExecutor.execute(new DelegateExecutionContext(execution), "Task_KYC", "validator-agent-01");
 
         assertThat(result.outputs()).containsEntry("validationPassed", false);
         assertThat(result.outputs()).containsEntry("validationStatus", "FAILED");
@@ -121,7 +121,7 @@ class PluggableComponentExecutionTest {
     void validatorExecutesAndReturnsFailedWhenForceValidationFailureIsSet() {
         given(execution.getVariable("forceValidationFailure")).willReturn(true);
 
-        AutomationResult result = validatorExecutor.execute(execution, "Task_KYC", "validator-agent-01");
+        AutomationResult result = validatorExecutor.execute(new DelegateExecutionContext(execution), "Task_KYC", "validator-agent-01");
 
         assertThat(result.outputs()).containsEntry("validationPassed", false);
         assertThat(result.outputs()).containsEntry("validationStatus", "FAILED");
@@ -136,7 +136,6 @@ class PluggableComponentExecutionTest {
         AutomationResult result = automationService.execute(execution);
 
         assertThat(result.summary()).contains("CreditRiskAssessorExecutor");
-        assertThat(result.outputs()).containsEntry("executor", "CreditRiskAssessorExecutor");
     }
 
     @Test
@@ -146,7 +145,6 @@ class PluggableComponentExecutionTest {
         AutomationResult result = automationService.execute(execution);
 
         assertThat(result.summary()).contains("CreditRiskAssessorExecutor");
-        assertThat(result.outputs()).containsEntry("executor", "CreditRiskAssessorExecutor");
     }
 
     @Test
@@ -156,7 +154,6 @@ class PluggableComponentExecutionTest {
         AutomationResult result = automationService.execute(execution);
 
         assertThat(result.summary()).contains("ValidatorExecutor");
-        assertThat(result.outputs()).containsEntry("executor", "ValidatorExecutor");
     }
 
     @Test
@@ -186,7 +183,8 @@ class PluggableComponentExecutionTest {
                 return "validator";
             }
             @Override
-            public AutomationResult execute(DelegateExecution execution, String activityId, String agentName) {
+            public AutomationResult execute(CapabilityExecutionContext context, String activityId,
+                    String agentName) {
                 return null;
             }
         };

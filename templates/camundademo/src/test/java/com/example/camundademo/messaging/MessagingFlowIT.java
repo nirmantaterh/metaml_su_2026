@@ -23,18 +23,12 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
 
-/**
- * Verifies the messaging flow against a real RabbitMQ broker.
- *
- * <p>Requires RabbitMQ on {@code localhost:5672}. Observes logs instead of adding
- * a second queue consumer, which would compete with the real listener.
- */
+// Integration test verifying task publish, consumption, and response correlation over RabbitMQ.
 @SpringBootTest
 @TestPropertySource(properties = {
         "metaml.messaging.enabled=true",
         "spring.rabbitmq.host=localhost",
         "spring.rabbitmq.port=5672",
-        // keep this test independent of the Camunda side of the app
         "camunda.bpm.job-executor-activate=false"
 })
 class MessagingFlowIT {

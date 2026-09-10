@@ -13,10 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 
-// Writes each saved model's BPMN as a real .bpmn file, one per model id, because the generation step
-// needs a file it can copy into a generated project - not just the XML embedded in a state snapshot.
-// Unlike WorkbenchStateStore, a write failure here is thrown rather than swallowed: the caller cannot
-// continue without the file.
+// Persists model BPMN XML to disk for target harness template copying; throws on I/O failure.
 @Component
 public class ProcessModelFileStore {
 

@@ -18,11 +18,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
-// Scope 6 identity fix, controller layer: proves WorkbenchController#evolveActivity routes to the
-// 4-argument WorkbenchService#evolveActivity overload exactly when the request carries a non-blank
-// activityInstanceId, and to the existing 3-argument overload otherwise - never both, never the
-// wrong one. Pure Mockito unit test against the controller directly (no Spring context needed),
-// same pattern as TransmuteAgentsEndpointTest.
+// Verifies that controller routes to 4-arg service overload when activityInstanceId is present.
 class EvolveActivityInstanceRoutingTest {
 
     private static final String TWIN_ID = "twin-1";
@@ -33,8 +29,6 @@ class EvolveActivityInstanceRoutingTest {
     private final WorkbenchService service = mock(WorkbenchService.class);
     private final WorkbenchController controller = new WorkbenchController(service);
 
-    // TEST E: activityInstanceId present -> 4-argument overload reached, 3-argument overload
-    // never called.
     @Test
     void requestWithActivityInstanceIdRoutesToFourArgumentOverload() {
         EvolveActivityRequest request = new EvolveActivityRequest();
@@ -55,15 +49,12 @@ class EvolveActivityInstanceRoutingTest {
         verify(service, never()).evolveActivity(eq(TWIN_ID), eq(ACTIVITY_ID), eq(AGENT_TYPE));
     }
 
-    // TEST F: activityInstanceId absent -> existing 3-argument overload reached unchanged,
-    // 4-argument overload never called. Preserves legacy request compatibility.
     @Test
     void requestWithoutActivityInstanceIdRoutesToThreeArgumentOverload() {
         EvolveActivityRequest request = new EvolveActivityRequest();
         request.setTwinProcessId(TWIN_ID);
         request.setActivityId(ACTIVITY_ID);
         request.setAgentType(AGENT_TYPE);
-        // activityInstanceId left null - exactly what a legacy/unmodified client sends.
 
         AgentDecision expected = new AgentDecision(AGENT_TYPE, true, "validator-agent-01", "Available");
         given(service.evolveActivity(TWIN_ID, ACTIVITY_ID, AGENT_TYPE)).willReturn(expected);
@@ -77,8 +68,7 @@ class EvolveActivityInstanceRoutingTest {
         verify(service, never()).evolveActivity(eq(TWIN_ID), eq(ACTIVITY_ID), isNull(), eq(AGENT_TYPE));
     }
 
-    // Blank (not just null) activityInstanceId must also fall back to the legacy overload -
-    // proves the controller checks for blank, not merely non-null.
+    // Whitespace activityInstanceId is treated as omitted.
     @Test
     void requestWithBlankActivityInstanceIdRoutesToThreeArgumentOverload() {
         EvolveActivityRequest request = new EvolveActivityRequest();

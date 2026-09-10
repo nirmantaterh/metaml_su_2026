@@ -14,10 +14,6 @@ import com.metaml.wbapi.payload.request.StopProjectRequest;
 import com.metaml.wbapi.payload.response.ApiResponse;
 import com.metaml.workbench.service.WorkbenchService;
 
-// The launcher's own tests already prove the process really dies; this only covers the bit that
-// lives in the REST layer, which is the translation of stop()'s boolean into a status code. Plain
-// mock rather than @SpringBootTest on purpose - there's no engine or Camunda state involved here,
-// and the wbapi suite is slow enough already.
 class StopProjectEndpointTest {
 
     private final WorkbenchService service = mock(WorkbenchService.class);

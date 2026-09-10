@@ -6,14 +6,14 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-// Stands in for the two components NOT part of this generated platform: Gateway and Machines. <p>Both are separate deployables in the target architecture - Gateway in particular is where ML/agent execution will eventually live. Neither exists yet. This class answers on the queues they will own, with a canned reply, so the message flow can be proven end to end today. <p><strong>Disposable.</strong> When the real services arrive, delete this class - exchanges, queues, routing keys and the message contract stay exactly as they are. <p>Deliberately no ML, no scoring, no decision logic: this proves the communication architecture, not QC itself.
+// Stub listener simulating external worker responses for development and integration testing.
 @Component
 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
 public class ExternalComponentStubListener {
 
     private static final Logger logger = LoggerFactory.getLogger(ExternalComponentStubListener.class);
 
-    // Canned QC outcome; a real gateway returns actual model/agent output.
+    // Default stub outcomes for QC and machine allocation.
     private static final String STUB_QC_STATUS = "PASS";
     private static final String STUB_MACHINE_STATUS = "ACQUIRED";
 
@@ -23,15 +23,14 @@ public class ExternalComponentStubListener {
         this.publisher = publisher;
     }
 
-    // GATEWAY stub: responds to QC requests from the Twin.
+    // Responds to QC requests from the Twin.
     @RabbitListener(queues = MessagingTopology.GATEWAY_QC_REQUEST_QUEUE)
     public void onQcRequest(HarnessMessage message) {
         if (message == null || message.getActivityId() == null) {
             logger.error("[gateway stub] discarding malformed QC request: {}", message);
             return;
         }
-        logger.info("[gateway stub] executing QC for activity '{}' (correlationId={}) "
-                + "- pretending to be an ML agent, returning {}",
+        logger.info("[gateway stub] executing QC for activity '{}' (correlationId={}) - returning stub status {}",
                 message.getActivityId(), message.getCorrelationId(), STUB_QC_STATUS);
 
         HarnessMessage response = message.reply(HarnessMessage.Type.QC_RESPONSE,
@@ -40,7 +39,7 @@ public class ExternalComponentStubListener {
                 response);
     }
 
-    // MACHINES stub: responds to machine acquisition requests from Manufacturing.
+    // Responds to machine acquisition requests from Manufacturing.
     @RabbitListener(queues = MessagingTopology.MACHINES_REQUEST_QUEUE)
     public void onMachineRequest(HarnessMessage message) {
         if (message == null || message.getActivityId() == null) {

@@ -15,39 +15,23 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-// Generates one Java class per delegateExpression found in a saved model.
-// The class name comes from the expression (${calculateInterestService} -> CalculateInterestService),
-// not the task's display name: the expression is what Camunda looks up at runtime, and display names
-// routinely disagree with it in both casing and wording.
-// Both BPMN shapes that carry a delegateExpression are scanned - service tasks and userTask
-// taskListeners - since scanning only service tasks silently produced zero delegates for models that
-// use the listener form, and the generated app then crashed on the first completed task.
+// Generates Java delegate and listener classes for delegateExpressions declared in service tasks and task listeners.
 @Component
 public class DelegateClassGenerator {
 
-    // used when a caller doesn't care where the class ultimately lives (the standalone preview/inspection path) - a real generated project overrides this via the packageName parameter below so the class lands somewhere Spring's component scan will actually find it
+    // Default package for delegate generation when no specific project package is provided.
     static final String DEFAULT_PACKAGE = "com.metaml.generated.delegate";
 
     public List<GeneratedDelegate> generate(String bpmnXml) {
         return generate(bpmnXml, DEFAULT_PACKAGE);
     }
 
-    // One class per unique delegateExpression, not per task: two activities naming the same expression
-    // already share one Spring bean, so generating twice would just be two classes fighting over one
-    // @Component name.
-    // Deduped by className rather than beanName, because two bean names can sanitize to the same Java
-    // identifier ("bad-name" and "bad_name" both become "Bad_name") and would otherwise both be written
-    // to the same file, the loser silently never existing at runtime.
-    // packageName must match where the caller actually writes the file: javac tolerates a mismatch, but
-    // Spring's component scan only looks under the application class's package, so the bean would never
-    // register even though the build succeeds.
+    // Generates unique delegate classes deduped by class name for the target package.
     public List<GeneratedDelegate> generate(String bpmnXml, String packageName) {
         BpmnModelInstance model = Bpmn.readModelFromStream(
                 new ByteArrayInputStream(bpmnXml.getBytes(StandardCharsets.UTF_8)));
 
-        // Collect every BPMN element reaching each className first, rather than building the GeneratedDelegate
-        // directly - that is what lets the loop below tell "reached by exactly one element, safe to record"
-        // apart from "shared, would have to guess which one".
+        // Collects BPMN elements mapped to each class name to identify shared delegates.
         Map<String, List<Source>> sourcesByClassName = new LinkedHashMap<>();
 
         for (ServiceTask task : model.getModelElementsByType(ServiceTask.class)) {
@@ -55,7 +39,7 @@ public class DelegateClassGenerator {
                     DelegateKind.SERVICE_TASK);
         }
 
-        // task listeners live in a user task's <extensionElements>, not as an attribute on the task itself - camunda-bpm-model only exposes them through a typed query on that element, there is no getCamundaTaskListeners() shortcut on UserTask the way there is for a service task's own delegateExpression
+        // Extracts task listeners from extensionElements of user tasks.
         for (UserTask task : model.getModelElementsByType(UserTask.class)) {
             ExtensionElements extensionElements = task.getExtensionElements();
             if (extensionElements == null) {
@@ -72,19 +56,15 @@ public class DelegateClassGenerator {
         for (Map.Entry<String, List<Source>> entry : sourcesByClassName.entrySet()) {
             String className = entry.getKey();
             List<Source> sources = entry.getValue();
-            // the first BPMN element encountered still names/comments the generated class, exactly as before this change (see renderSource below) - only bpmnElementId is new
+            // Primary BPMN element metadata used to document the generated delegate class.
             Source first = sources.get(0);
-            // Two elements reaching this className under the SAME bean name is fine - that is one shared bean,
-            // exactly what Camunda does at runtime. Under DIFFERENT bean names it is not: only one class can be
-            // written to that path, so the other element's bean silently never exists and the process fails the
-            // first time a token reaches that task. Camunda accepts both expressions at deploy time, so this is
-            // the last point where the problem can still be attributed to a specific element.
+            // Validates that elements sharing a class name do not declare conflicting bean names.
             Source loser = firstWithDifferentBeanName(sources, first.beanName());
             if (loser != null) {
                 throw InvalidDelegateExpressionException.collision(loser.elementId(), loser.taskName(),
                         "${" + loser.beanName() + "}", "${" + first.beanName() + "}", className);
             }
-            // more than one BPMN element sharing this bean is a real, legitimate case (two activities pointing at the same service) - "go to error" pointing at an arbitrary one of them would be worse than not pointing anywhere, so this is left null rather than fabricated
+            // When multiple activities share a bean, bpmnElementId is left null to avoid ambiguous navigation.
             String bpmnElementId = sources.size() == 1 ? first.elementId() : null;
             String source = renderSource(packageName, className, first.beanName(), first.taskName(), first.kind());
             delegates.add(new GeneratedDelegate(first.beanName(), className, first.taskName(), first.kind(), source,
@@ -93,7 +73,7 @@ public class DelegateClassGenerator {
         return delegates;
     }
 
-    // A ServiceTask with camunda:class is instantiated by Camunda directly via that fully-qualified class name - no Spring bean lookup involved, unlike delegateExpression. The generated stub must therefore land at the exact package the BPMN itself names, not this generator's own package convention, or the deployed process fails the first time the task runs.
+    // Service tasks with camunda:class require classes matching the declared FQCN rather than Spring bean delegates.
     public List<GeneratedDelegate> generateFromJavaClass(String bpmnXml) {
         BpmnModelInstance model = Bpmn.readModelFromStream(
                 new ByteArrayInputStream(bpmnXml.getBytes(StandardCharsets.UTF_8)));
@@ -156,14 +136,12 @@ public class DelegateClassGenerator {
         return null;
     }
 
-    // The BPMN element that pointed at this delegateExpression, carried alongside the bean name, task
-// name and kind.
     private record Source(String elementId, String beanName, String taskName, DelegateKind kind) {
     }
 
     private static void addSource(Map<String, List<Source>> sourcesByClassName, String elementId,
             String rawExpression, String taskName, DelegateKind kind) {
-        // Absent and present-but-unusable are NOT the same: absent means nothing was ever claimed, skip it (Camunda rejects such a model at save anyway). Present but empty/unresolvable means the BPMN claims this task runs a delegate and names none - fail now, naming the element responsible, rather than shipping a project that fails at runtime instead.
+        // Skips absent expressions; throws if an expression is explicitly declared but empty.
         if (rawExpression == null) {
             return;
         }
@@ -176,7 +154,7 @@ public class DelegateClassGenerator {
                 .add(new Source(elementId, beanName, taskName, kind));
     }
 
-    // delegateExpression is stored (and read back) as the literal attribute text, "${beanName}" - this is the one place that ${...} wrapper gets stripped down to the bean name underneath it
+    // Strips ${...} wrapper from delegateExpression to isolate the bean name.
     private static String unwrap(String delegateExpression) {
         if (delegateExpression == null) {
             return "";
@@ -188,7 +166,7 @@ public class DelegateClassGenerator {
         return trimmed;
     }
 
-    // bean names in a delegateExpression are conventionally already valid Java identifiers (camelCase, e.g. calculateInterestService), but this is user-authored BPMN, not generated output - a stray character shouldn't produce a .java file that fails to compile
+    // Converts bean name to a valid Java class name identifier.
     private static String toClassName(String beanName) {
         StringBuilder sanitized = new StringBuilder(beanName.length());
         for (int i = 0; i < beanName.length(); i++) {
@@ -203,7 +181,7 @@ public class DelegateClassGenerator {
         return sanitized.toString();
     }
 
-    // task labels are free-text from the modeler, not code - BPMN can carry an embedded newline in a name attribute (Joanna's own loanApproval.bpmn does: "Calculate\nInterest"), and every use of this label lands inside a single-line // comment, where an unsanitized newline breaks the generated file's syntax.
+    // Sanitizes task labels by normalizing whitespace for safe comment rendering.
     private static String sanitizeForComment(String label) {
         return label.replaceAll("\\s+", " ").trim();
     }
@@ -242,10 +220,7 @@ public class DelegateClassGenerator {
                 """.formatted(packageName, label, beanName, beanName, className, className, label);
     }
 
-    // A taskListener's delegateExpression names a TaskListener, not a JavaDelegate. Generating a
-    // JavaDelegate stub would compile and deploy, because Camunda only checks the interface when it
-    // actually invokes the listener - surfacing as a ClassCastException the first time someone touches
-    // that task rather than at generation time.
+    // Task listener delegateExpression requires TaskListener rather than JavaDelegate to avoid runtime cast failure.
     private static String renderTaskListenerSource(String packageName, String className, String beanName,
             String label) {
         return """

@@ -12,12 +12,12 @@ Once two process instances exist, something has to decide what "the current, cor
 
 ## Alternatives Investigated
 
-- **App-owned shadow state for execution facts** (e.g. tracking "which activities has the twin visited" in a Java `Set`, as `forwardedBridgeActivities` originally did) — this was the actual pre–Phase 7.5 design for bridge deduplication, and it violated this principle: an in-memory `Set` on `TwinProcess` was the deduplication guard, and it did not survive an app restart (Phase 7 finding W4). Corrected in Phase 7.5 by deriving the guard from Camunda's own variable/history state instead — see [ADR-012](ADR-012-restart-and-recovery-philosophy.md).
+- **App-owned shadow state for execution facts** (e.g. tracking "which activities has the twin visited" in a Java `Set`, as an in-memory collection) — rejected because an in-memory `Set` on `TwinProcess` as a deduplication guard does not survive an application restart. The guard is derived from Camunda's own variable and history state instead — see [ADR-012](ADR-012-restart-and-recovery-philosophy.md).
 - **A separate application database for twin metadata** (e.g. a real relational store instead of a JSON file) — not pursued; would improve `WorkbenchStateStore`'s own scaling concerns (Known Limitations, Architecture Specification Section 9) but does not change what class of information belongs there versus in Camunda's tables, which is the actual question this decision answers.
 
-## Evidence
+## Verification
 
-The W4 correction (Phase 7.5) is the clearest evidence this principle is load-bearing, not aspirational: `alreadyEvolved` was rewritten twice during that correction, each time to depend more precisely on Camunda's own `runtimeService`/`historyService` state (variable existence, then variable-*update-count* via `HistoricDetail`, since `HistoricVariableInstance` alone collapses to only the latest value) rather than on anything the app itself tracks. Every execution-identity resolution method in `WorkbenchServiceImpl` (`currentVisitId`, `loopCounterOf`, `originalExecutionIdForVisit`, `resolveParallelSibling`, `findWaitingExecutionId`) reads exclusively from `runtimeService`/`historyService`, never from an app-side cache.
+This principle is load-bearing for restart and recovery safety: `alreadyEvolved` depends directly on Camunda's own `runtimeService`/`historyService` state (variable existence, and variable update counts via `HistoricDetail`, since `HistoricVariableInstance` alone collapses to only the latest value) rather than on application-side state. Every execution-identity resolution method in `WorkbenchServiceImpl` (`currentVisitId`, `loopCounterOf`, `originalExecutionIdForVisit`, `resolveParallelSibling`, `findWaitingExecutionId`) reads exclusively from `runtimeService`/`historyService`, never from an app-side cache.
 
 ## Trade-offs
 
@@ -26,7 +26,7 @@ The W4 correction (Phase 7.5) is the clearest evidence this principle is load-be
 
 ## Consequences
 
-- Any future feature that wants to track "has X happened" for the twin relationship should default to asking "can this be derived from Camunda's own tables" before adding a new field to `TwinProcess` or a new file to `WorkbenchStateStore`. Phase 7.5's own directive encoded this explicitly: "do not introduce new state when existing Camunda runtime state can be derived."
+- Any future feature that wants to track "has X happened" for the twin relationship should default to asking "can this be derived from Camunda's own tables" before adding a new field to `TwinProcess` or a new file to `WorkbenchStateStore`. The core design rule states: "do not introduce new state when existing Camunda runtime state can be derived."
 
 ## Future Reconsideration
 

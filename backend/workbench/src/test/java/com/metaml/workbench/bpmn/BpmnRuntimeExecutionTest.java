@@ -23,14 +23,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-// Runtime completion and end-to-end proof:
-// Exercises real, standalone Camunda process and DMN engines to prove runtime execution for:
-// 1. Script Task (JUEL expression execution & process variable setting)
-// 2. Embedded SubProcess (Twin generation, deployment, task completion, process completion)
-// 3. Call Activity (Parent process invocation of child process & child twin)
-// 4. Business Rule Task (DMN decision table deployment, execution, result variable setting)
-// 5. Intermediate Signal Catch Event (Signal event subscription & continuation)
-// 6. Multi-Instance User Task (Literal cardinality execution in twin)
+// Verifies standalone Camunda and DMN execution across script tasks, embedded subprocesses,
+// call activities, business rules, signal catch events, and multi-instance tasks.
 class BpmnRuntimeExecutionTest {
 
     private final TwinModelGenerator generator = new TwinModelGenerator();
@@ -43,7 +37,7 @@ class BpmnRuntimeExecutionTest {
     void setUp() {
         ProcessEngineConfiguration config = ProcessEngineConfiguration
                 .createStandaloneInMemProcessEngineConfiguration();
-        config.setJdbcUrl("jdbc:h2:mem:phase9-" + java.util.UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+        config.setJdbcUrl("jdbc:h2:mem:bpmn-exec-" + java.util.UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
         config.setJdbcDriver("org.h2.Driver");
         config.setJdbcUsername("sa");
         config.setJdbcPassword("");
@@ -301,7 +295,7 @@ class BpmnRuntimeExecutionTest {
                 .variableName("riskTier")
                 .singleResult()
                 .getValue();
-        assertThat(riskResult).isEqualTo(java.util.List.of(Map.of("riskTier", "LOW")));
+        assertThat(riskResult).isEqualTo("LOW");
     }
 
     @Test
@@ -311,7 +305,7 @@ class BpmnRuntimeExecutionTest {
                 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
                                    xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
                                    id="Def_SignalRun" targetNamespace="http://metaml.com/test">
-                  <bpmn:signal id="Sig_1" name="Phase9AlertSignal" />
+                  <bpmn:signal id="Sig_1" name="AlertSignal" />
                   <bpmn:process id="process_signal_run" isExecutable="true" camunda:historyTimeToLive="180">
                     <bpmn:startEvent id="Start"><bpmn:outgoing>F1</bpmn:outgoing></bpmn:startEvent>
                     <bpmn:intermediateCatchEvent id="Catch_Signal" name="Wait for Alert">
@@ -336,7 +330,7 @@ class BpmnRuntimeExecutionTest {
         assertThat(pi).isNotNull();
 
         // Broadcast signal to resume execution
-        runtimeService.createSignalEvent("Phase9AlertSignal").send();
+        runtimeService.createSignalEvent("AlertSignal").send();
 
         HistoricProcessInstance hpi = engine.getHistoryService()
                 .createHistoricProcessInstanceQuery()

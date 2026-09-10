@@ -62,7 +62,6 @@ public class CamundaConfig {
         configuration.setSkipIsolationLevelCheck(camundaProcessProperties.isSkipIsolationLevelCheck());
         configuration.setEnforceHistoryTimeToLive(camundaProcessProperties.isEnforceHistoryTimeToLive());
 
-        // Load BPMN process models from the classpath
         PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
         try {
             Resource[] resources = resolver.getResources(camundaProcessProperties.getDeploymentResourcePattern());

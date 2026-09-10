@@ -50,9 +50,8 @@ import com.metaml.workbench.store.WorkbenchStateStore;
 import com.metaml.workbench.workflow.WorkflowEventStore;
 import com.metaml.workbench.workflow.WorkflowStateTracker;
 
-// Scope 6 lifecycle guard: proves that evolveActivity() rejects evolution when the original
-// process instance has ended, while still allowing evolution on running processes and leaving
-// bridge semantics unchanged.
+// Lifecycle guard: verifies that evolveActivity() rejects evolution when the original
+// process instance has ended, while still allowing evolution on running processes.
 class EvolutionLifecycleGuardTest {
 
     @TempDir
@@ -128,8 +127,6 @@ class EvolutionLifecycleGuardTest {
         twinProcesses.put(TWIN_ID, twin);
     }
 
-    // ---- Test 1: Live process can evolve ----
-
     @Test
     void runningOriginalProcessAllowsEvolution() {
         // Original process IS running
@@ -157,8 +154,6 @@ class EvolutionLifecycleGuardTest {
                 "validator-agent-01");
     }
 
-    // ---- Test 2: Ended process cannot evolve ----
-
     @Test
     void endedOriginalProcessRejectsEvolution() {
         // Original process has ENDED
@@ -178,8 +173,6 @@ class EvolutionLifecycleGuardTest {
         // Verify node manager was NOT contacted
         verify(nodeManagerClient, never()).checkAgentAvailability(anyString());
     }
-
-    // ---- Test 3: Historical activity cannot masquerade as active ----
 
     @Test
     void historicalVisitOnEndedProcessDoesNotMasqueradeAsActive() {
@@ -207,8 +200,6 @@ class EvolutionLifecycleGuardTest {
         // (the historical fallback), the lifecycle guard blocked evolution
         verify(runtimeService, never()).setVariable(anyString(), anyString(), any());
     }
-
-    // ---- Test 4: Bridge regression — bridge still works for ended processes ----
 
     @Test
     void bridgeIsNotBlockedByLifecycleGuard() {
@@ -239,8 +230,6 @@ class EvolutionLifecycleGuardTest {
         }
     }
 
-    // ---- Test: Event log records the rejection reason ----
-
     @Test
     void eventLogRecordsEndedProcessRejection() {
         stubOriginalProcessRunning(false);
@@ -252,8 +241,6 @@ class EvolutionLifecycleGuardTest {
         assertThat(twin.getEventLog()).anyMatch(entry ->
                 entry.contains("Evolution blocked") && entry.contains("has already ended"));
     }
-
-    // ---- helpers ----
 
     private void stubOriginalProcessRunning(boolean running) {
         ProcessInstanceQuery piQuery = mock(ProcessInstanceQuery.class);

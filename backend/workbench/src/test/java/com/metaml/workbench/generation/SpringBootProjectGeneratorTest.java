@@ -25,9 +25,7 @@ class SpringBootProjectGeneratorTest {
     private Path templateDir;
     private Path outputDir;
 
-    // a small stand-in for the real templates/camundademo project - just enough structure to
-    // prove the copy/placeholder-removal/injection logic, not a full 20-file clone of the real
-    // template (that's covered by actually running a generated project, not a unit test)
+    // Lightweight template directory fixture for file structure and copy testing.
     @BeforeEach
     void buildFakeTemplate() throws IOException {
         templateDir = tempDir.resolve("template");
@@ -48,19 +46,13 @@ class SpringBootProjectGeneratorTest {
                 "unrelated file that must survive the copy untouched");
     }
 
-    // both real @Component beans, stateless, trivially constructible directly - see their own
-    // classes for why (TwinModelGenerator.generate() is a pure transform, DelegateClassGenerator
-    // needs no collaborators)
     private SpringBootProjectGenerator generator() {
         return new SpringBootProjectGenerator(templateDir.toString(), outputDir.toString(),
                 new TwinModelGenerator(), new DelegateClassGenerator(),
                 new com.metaml.workbench.codegen.ExternalTaskWorkerGenerator());
     }
 
-    // Manufacturing controller/delegates now live under a project-specific package
-    // (com.metaml.targetplatform.<slug>) rather than the template's own com.example.camundademo -
-    // this mirrors what SpringBootProjectGenerator.packageSlugFor derives from each test's process
-    // key, so assertions below can locate the generated files without hardcoding the old path.
+    // Resolves expected package path using the slug derived from the process key.
     private static String manufacturingPackagePath(String processKey) {
         return "src/main/java/com/metaml/targetplatform/" + processKey.toLowerCase().replaceAll("[^a-z0-9]", "");
     }
@@ -90,9 +82,7 @@ class SpringBootProjectGeneratorTest {
                 .doesNotExist();
     }
 
-    // the /complete-task assertion this used to carry encoded the pre-scope-item-4 behaviour (one
-    // generic completion endpoint for every activity). Joanna confirmed one endpoint per activity
-    // instead, so that expectation is obsolete and is asserted against below, not preserved.
+    // Controller generation creates specific completion endpoints for each eligible activity rather than a single generic endpoint.
     @Test
     void writesAGeneratedControllerBuiltAroundTheActualProcessKeyNotHardcodedToLoanApproval() {
         GeneratedProject project = generator().generate(differentProcessKeyBpmn(), List.of());
@@ -102,8 +92,7 @@ class SpringBootProjectGeneratorTest {
         assertThat(source).contains("@PostMapping(\"/start\")");
     }
 
-    // TEST F: the generic endpoint is gone, not merely joined by the per-activity ones - keeping
-    // it would leave the exact "every activity through one door" path being replaced
+    // Verifies the generic completion endpoint is omitted in favor of per-activity endpoints.
     @Test
     void noLongerGeneratesTheGenericCompletionEndpointEveryActivityUsedToShare() {
         GeneratedProject project = generator().generate(fourActivityBpmn(), List.of());
@@ -113,7 +102,7 @@ class SpringBootProjectGeneratorTest {
         assertThat(source).doesNotContain("public ResponseEntity<Map<String, List<String>>> completeTask(");
     }
 
-    // TEST A + TEST B: N eligible activities produce N activity-specific endpoints
+    // Eligible activities produce activity-specific completion endpoints.
     @Test
     void generatesOneCompletionEndpointPerBpmnActivity() {
         GeneratedProject project = generator().generate(fourActivityBpmn(), List.of());
@@ -126,9 +115,8 @@ class SpringBootProjectGeneratorTest {
         assertThat(countOccurrences(source, "/complete\")")).isEqualTo(4);
     }
 
-    // TEST C: each endpoint must dispatch on its own activity's BPMN id. The slug only ever
-    // appears in the URL - the handler passes the literal element id to the task query, so
-    // /credit-check/complete cannot reach the review-application activity.
+    // Each endpoint dispatches on its own activity's BPMN element id. The slug only appears in
+    // the URL; the handler passes the literal element id to the task query.
     @Test
     void eachEndpointCompletesItsOwnActivityAndNotAnother() {
         GeneratedProject project = generator().generate(fourActivityBpmn(), List.of());
@@ -199,8 +187,7 @@ class SpringBootProjectGeneratorTest {
         assertThat(source).contains("private ResponseEntity<Map<String, List<String>>> respond(");
     }
 
-    // TEST D: same BPMN in, same endpoints out - a second generation of one model must not
-    // produce a different project
+    // Repeated generation for the same BPMN model must produce deterministic output.
     @Test
     void endpointGenerationIsDeterministicForTheSameBpmn() {
         String first = readString(controllerOf(generator().generate(fourActivityBpmn(), List.of())));
@@ -265,10 +252,7 @@ class SpringBootProjectGeneratorTest {
         return count;
     }
 
-    // the delegate's own source is pre-rendered against DELEGATE_PACKAGE (the fixed placeholder
-    // WorkbenchServiceImpl always renders against - see that constant's own comment); generate()
-    // rewrites that placeholder to the real, project-specific manufacturing package as it writes
-    // the file, so the written content is not byte-identical to what was passed in
+    // Generator rewrites DELEGATE_PACKAGE placeholder to project-specific package during file writing.
     @Test
     void writesEveryGeneratedDelegateClassIntoTheDelegatesPackage() {
         GeneratedDelegate delegate = new GeneratedDelegate("calculateInterestService", "CalculateInterestService",
@@ -284,15 +268,8 @@ class SpringBootProjectGeneratorTest {
         assertThat(readString(written)).doesNotContain(SpringBootProjectGenerator.DELEGATE_PACKAGE);
     }
 
-    // Proves DelegateWriteException actually carries which BPMN element a failed
-    // delegate write was for, using a deterministic, OS-permission-free trigger - a directory
-    // already sitting where the delegate's own file needs to go, copied in from the template, so
-    // Files.writeString fails every time with no reliance on filesystem ACLs
-    // rewritePackage() carries the template's own tree (including this poison file) over to the
-    // project-specific package before writeManufacturingDelegates runs, so a plain file placed at
-    // .../delegates/manufacturing in the fake template becomes a plain file at that same relative
-    // spot under the rewritten package - exactly where the delegate write needs a directory
-    // instead, deterministically, without needing to know the random projectId in advance.
+    // Verifies that DelegateWriteException identifies the failing BPMN element and bean
+    // when delegate file generation encounters an I/O error.
     @Test
     void aDelegateThatFailsToWriteCarriesWhichBpmnElementItWasFor() throws IOException {
         GeneratedDelegate delegate = new GeneratedDelegate("brokenService", "BrokenDelegate", "Broken Task",
@@ -362,8 +339,7 @@ class SpringBootProjectGeneratorTest {
                 """;
     }
 
-    // deliberately shaped like Joanna's own worked example, so the endpoint names in the
-    // assertions above are the ones she actually asked about
+    // Test fixture containing representative loan intake activities.
     private static String fourActivityBpmn() {
         return """
                 <?xml version="1.0" encoding="UTF-8"?>
@@ -480,14 +456,12 @@ class SpringBootProjectGeneratorTest {
                 """;
     }
 
-    // --- scanExisting() (restart persistence) ---
-
+    // scanExisting restart persistence tests.
     @Test
     void scanExistingFindsAPreviouslyGeneratedProjectAndItsRealProcessKey() {
         GeneratedProject original = generator().generate(loanApprovalBpmn(), List.of());
 
-        // a fresh generator instance pointed at the same outputDir - exactly what a real restart
-        // produces, no in-memory state carried over
+        // A fresh generator instance pointed at the same outputDir simulates restart.
         List<GeneratedProject> rescanned = generator().scanExisting();
 
         assertThat(rescanned).hasSize(1);
@@ -510,9 +484,7 @@ class SpringBootProjectGeneratorTest {
                 .containsExactlyInAnyOrder("loanApproval", "gradAdmission");
     }
 
-    // TEST 3 (existing projects): scanExisting() reads the same fixed directory layout generate()
-    // itself produces, whether or not this generator instance is the one that wrote it - proves
-    // restoration does not depend on any bookkeeping specific to the current process
+    // scanExisting() reads the persisted directory layout independently of generator instance state.
     @Test
     void scanExistingDoesNotRequireTheSameGeneratorInstanceThatWroteTheProject() {
         generator().generate(loanApprovalBpmn(), List.of());
@@ -523,12 +495,11 @@ class SpringBootProjectGeneratorTest {
 
     @Test
     void scanExistingReturnsEmptyWhenNothingHasEverBeenGenerated() {
-        // outputDir isn't even created yet - no generate() call has happened
+        // Output directory does not exist prior to generate() invocation.
         assertThat(generator().scanExisting()).isEmpty();
     }
 
-    // TEST 4 (missing artifact): a project directory whose one real file is gone must not be
-    // guessed at or silently associated with a different project - it is simply not returned
+    // Directories lacking valid process definitions are excluded from scanExisting results.
     @Test
     void scanExistingSkipsAProjectDirectoryWithNoBpmnFile() throws IOException {
         GeneratedProject project = generator().generate(loanApprovalBpmn(), List.of());
@@ -538,11 +509,8 @@ class SpringBootProjectGeneratorTest {
         assertThat(generator().scanExisting()).isEmpty();
     }
 
-    // generate() writes a project metadata file declaring the real process key, so an extra
-    // unrelated .bpmn file sitting alongside it is no longer ambiguous - findProcessKey trusts the
-    // declared key once its own .bpmn file is confirmed still present. Ambiguity from a stray file
-    // is only a real problem for a project that predates the metadata file (see the legacy test
-    // below).
+    // Verifies that scanExisting resolves the active process key using project metadata
+    // even when extra BPMN definitions exist in the processes directory.
     @Test
     void scanExistingResolvesAProjectWithAnExtraBpmnFileViaItsDeclaredMetadata() throws IOException {
         GeneratedProject project = generator().generate(loanApprovalBpmn(), List.of());
@@ -552,10 +520,7 @@ class SpringBootProjectGeneratorTest {
                 .containsExactly(project.projectId());
     }
 
-    // same "no safe single answer" reasoning as the no-file case above - two candidates is exactly
-    // as unresolvable as zero, not a coin flip. Only reachable for a project that predates the
-    // metadata file (simulated here by deleting it) - see the metadata-backed case above for the
-    // now-normal shape of an extra .bpmn file alongside the declared one.
+    // Legacy projects lacking metadata are skipped if multiple BPMN definitions exist.
     @Test
     void scanExistingSkipsALegacyProjectDirectoryWithAmbiguousBpmnFilesAndNoMetadata() throws IOException {
         GeneratedProject project = generator().generate(loanApprovalBpmn(), List.of());
@@ -573,8 +538,7 @@ class SpringBootProjectGeneratorTest {
         assertThat(generator().scanExisting()).hasSize(1);
     }
 
-    // --- delete() (latest-generation-only retention) ---
-
+    // Project deletion tests.
     @Test
     void deleteRemovesTheWholeProjectDirectoryNotJustItsTopLevelFiles() {
         GeneratedProject project = generator().generate(loanApprovalBpmn(), List.of());

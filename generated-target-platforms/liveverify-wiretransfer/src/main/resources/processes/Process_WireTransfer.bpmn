@@ -119,11 +119,7 @@
 
             <bpmn:extensionElements>
 
-                <!-- Gateway_ChecksPassed reads agentFlaggedRisk, not the prefixed
-             agentOutput_Task_Credit_riskFlagged the delegate writes for every output. riskFlagged
-             also has a hardcoded alias to that same name for historical reasons, so this
-             declaration changes nothing here; it's the mechanism the next model to want a short
-             name of its own uses, without needing its own special case in Java. -->
+        <!-- Evaluates agentFlaggedRisk directly for gateway condition compatibility. -->
 
                 <metaml:agentOutputs>
 
@@ -311,10 +307,7 @@
 
         <bpmn:sequenceFlow id="Flow_ToChecksGateway" sourceRef="Gateway_ParallelJoin" targetRef="Gateway_ChecksPassed"/>
 
-        <!-- execution.getVariable(...) rather than a bare ${agentFlaggedRisk == true}: on a run where
-         nobody evolved a risk-flagging agent the variable was never set at all, and JUEL throws
-         PropertyNotFoundException on an identifier no resolver knows about. Going through the
-         execution gives back null instead, which compares false and takes the default flow. -->
+        <!-- Accesses agentFlaggedRisk via execution.getVariable() to return null rather than throwing PropertyNotFoundException when unset. -->
 
         <bpmn:sequenceFlow id="Flow_Checks_Fail" name="No" sourceRef="Gateway_ChecksPassed" targetRef="Task_Escalate">
 

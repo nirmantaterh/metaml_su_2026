@@ -13,12 +13,7 @@ import org.camunda.bpm.model.bpmn.instance.IntermediateCatchEvent;
 import org.camunda.bpm.model.bpmn.instance.SequenceFlow;
 import org.camunda.bpm.model.bpmn.instance.SignalEventDefinition;
 
-// Derives the operational Twin - the one that talks to Main over RabbitMQ at runtime - from Main's
-// own BPMN, so no second file is needed. Distinct from TwinModelGenerator's governance/Evolve twin,
-// which clones the whole graph for change approval rather than runtime communication.
-// A gate is an intermediateCatchEvent+signalEventDefinition flowing straight into a
-// camunda:type="external" activity. A Main with no gates has nothing to derive from, so deriveTwinXml
-// returns null and callers fall back to the single-process path.
+// Derives the operational twin definition for runtime RabbitMQ communication from signal-gated external tasks.
 public final class OperationalTwinGenerator {
 
     private static final String CAMUNDA_NS = "http://camunda.org/schema/1.0/bpmn";

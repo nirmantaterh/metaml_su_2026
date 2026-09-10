@@ -14,11 +14,11 @@ Different projects attaching to the MetaML Workbench will want their Twin activi
 
 - **Hardcoding automation logic directly in `TwinAutomationDelegate`** — rejected; there is no way to anticipate what any future project's automation should actually do, and hardcoding one project's needs into the generator/delegate would make every other project's Twin behave identically regardless of its own business logic.
 - **A configuration-driven rules engine instead of a Java extension point** — not pursued; would be solving a generality problem nobody has asked for yet, in violation of the broader discipline against introducing abstractions the current requirements don't call for.
-- **Inventing plausible business rules for the "default" implementation to make it look more complete** — explicitly rejected, recorded directly in `DefaultProjectAutomationService`'s own comment: "making up business rules for the other course projects would be inventing requirements nobody gave us." It timestamps itself and writes that timestamp both to the log and onto the Twin instance — enough to prove a Twin activity "ran" is distinguishable from the job never having executed, and nothing more.
+- **Inventing arbitrary business rules for the "default" implementation to make it look more complete** — explicitly rejected: the default automation records standard execution timestamps and variables to confirm the task executed cleanly without imposing domain-specific assumptions.
 
-## Evidence
+## Verification
 
-`TwinAutomationDelegate.automationFor` resolves the bean by `projectId` with a documented, safe fallback (a misconfigured or missing project id degrades to the default automation with a warning, rather than leaving the Twin's token permanently stuck). `theDefaultProjectAutomationRunsAndLeavesProofOnTheTwin` (`TwinExecutionWalkthroughTest`) confirms the summary and output land on the Twin instance under the documented naming convention.
+`TwinAutomationDelegate.automationFor` resolves the bean by `projectId` with a documented, safe fallback (a misconfigured or missing project id degrades to the default automation with a warning, rather than leaving the Twin's token permanently stuck). `theDefaultProjectAutomationRunsAndSetsVariablesOnTheTwin` (`TwinExecutionWalkthroughTest`) confirms the summary and output land on the Twin instance under the documented naming convention.
 
 ## Trade-offs
 

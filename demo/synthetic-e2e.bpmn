@@ -1,27 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  SYNTHETIC END-TO-END FIXTURE - NOT RedCollar, not a real manufacturing process.
-
-  Exists only to exercise the Target Harness architecture end to end:
-
-    Start
-      -> UserTask_Stitch          (manufacturing activity; its complete-listener delegate is generated)
-      -> ReceiveTask_AwaitTwin    (process PARKS here, waiting for BPMN message "TwinStageResponse")
-      -> ServiceTask_Finalize     (only reachable once the twin's answer resumed the process)
-      -> End
-
-  Completing UserTask_Stitch makes the generated manufacturing controller publish to RabbitMQ.
-  The twin asks the gateway for QC, the gateway answers, the twin reports back, and
-  ManufacturingMessageListener correlates "TwinStageResponse" into THIS process instance -
-  which is the only thing that can move the token past ReceiveTask_AwaitTwin.
-
-  Replace this wholesale with the professor's RedCollar BPMN when it arrives. Nothing in the
-  generator, messaging layer or runtime is specific to this file.
-
-  The bpmndi:BPMNDiagram section is required for bpmn-js to render the diagram in the Workbench
-  editor. Without it bpmn-js cannot construct proper shape objects on the canvas, and the
-  properties panel crashes with "businessObject.get is not a function". The BPMN process section
-  is unchanged - Camunda only reads that, not the DI.
+  Synthetic end-to-end fixture for target harness workflow testing.
 -->
 <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
     xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"

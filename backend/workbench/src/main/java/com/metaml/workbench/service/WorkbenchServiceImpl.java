@@ -18,11 +18,19 @@ import org.camunda.bpm.engine.runtime.Execution;
 import org.camunda.bpm.engine.runtime.ProcessInstance;
 import org.camunda.bpm.engine.task.Task;
 import org.camunda.bpm.model.bpmn.BpmnModelInstance;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.metaml.workbench.bpmn.TwinModelGenerator;
+import com.metaml.workbench.capability.binding.CapabilityBindingPersistenceException;
+import com.metaml.workbench.capability.binding.CapabilityBindingRegistry;
+import com.metaml.workbench.capability.gap.CapabilityGap;
+import com.metaml.workbench.capability.gap.CapabilityGapService;
+import com.metaml.workbench.capability.gap.GapOrigin;
+import com.metaml.workbench.capability.runtime.CapabilityBinding;
 import com.metaml.workbench.client.AgentAvailabilityResult;
 import com.metaml.workbench.codegen.DelegateClassGenerator;
 import com.metaml.workbench.codegen.ExternalTaskWorkerGenerator;
@@ -91,30 +99,25 @@ public class WorkbenchServiceImpl implements WorkbenchService {
 
     private static final Logger logger = LoggerFactory.getLogger(WorkbenchServiceImpl.class);
 
-    // auto-bridge has no caller to ask for a type, so it uses this one
+    // Default agent type used during automatic activity bridging.
     private static final String DEFAULT_BRIDGE_AGENT_TYPE = "validator";
 
-    // The single action name every EVOLVE_TWIN GovernanceRequest uses, so a tenant policy has one stable
-// string to match against.
+    // Action name used in EVOLVE_TWIN GovernanceRequest evaluations.
     private static final String EVOLVE_TWIN_ACTION = "EVOLVE_TWIN";
 
-    // what a client-supplied model id is allowed to look like. Generated ids are UUIDs, which fit this comfortably; anything with a separator, a dot, or a drive letter in it does not.
+    // Allowed model ID pattern (alphanumeric, dash, underscore).
     private static final Pattern SAFE_MODEL_ID = Pattern.compile("[A-Za-z0-9_-]+");
 
-    // still the live copy - twins are mirrored to a file by WorkbenchStateStore after each change; models are persisted to H2 by ProcessModelArchiveStore
+    // In-memory cache mirrored to disk by WorkbenchStateStore and persisted to H2 by ProcessModelArchiveStore.
     private final Map<String, ProcessModel> processModels = new ConcurrentHashMap<>();
     private final Map<String, TwinProcess> twinProcesses = new ConcurrentHashMap<>();
-    // twin+visit being evolved right now - the evolvedAgent_* variable alone can't tell you that, since it isn't set until an evolution actually succeeds. Keyed per visit like everything else, or two visits of a multi-instance activity block each other for nothing.
+    // Tracks in-flight evolutions per visit so multi-instance activity instances do not block one another.
     private final Map<String, Boolean> evolutionsInFlight = new ConcurrentHashMap<>();
-    // Rebuilt on every restart from sources that already persist - the project directory itself and
-    // each model's GENERATE stage - so these maps need no file of their own. A launched process is the
-    // one thing that genuinely does not survive; that still comes from the launcher's live registry.
+    // Restored on startup from disk and model workflow stage records.
     private final Map<String, GeneratedProject> generatedProjects = new ConcurrentHashMap<>();
-    // the only place a generated project's originating model is remembered - GeneratedProject itself carries no modelId (it's a workbench.generation concern, not a BPMN one), and both launch and stop need to know which model's breadcrumb a project's LAUNCH stage belongs to
+    // Maps generated project IDs to their originating model ID.
     private final Map<String, String> modelIdByProjectId = new ConcurrentHashMap<>();
-    // One lock per model id, guarding the two authoring operations that can conflict over a model's
-    // existence: Generate and Delete. Never removed - bounded by the model ids seen since startup, and in
-    // memory only.
+    // Serializes generate and delete operations per model ID.
     private final Map<String, Object> modelLocks = new ConcurrentHashMap<>();
     private final NodeManagerClient nodeManagerClient;
     private final GovernanceService governanceService;
@@ -132,8 +135,33 @@ public class WorkbenchServiceImpl implements WorkbenchService {
     private final DelegateClassGenerator delegateClassGenerator;
     private final SpringBootProjectGenerator springBootProjectGenerator;
     private final SpringBootProjectLauncher springBootProjectLauncher;
-    // single source of truth for where a model's Model -> Generate -> Launch pipeline actually is - see the class's own header comment. Every method below that IS one of those three stages records into it; nothing else should.
+    // Authoritative tracker for Model -> Generate -> Launch workflow pipeline progression.
     private final WorkflowStateTracker workflowStateTracker;
+    // Optional by construction (MetaML Scope 6, Phase 5): field-injected rather than a constructor
+    // parameter so every existing test that builds this class with `new WorkbenchServiceImpl(...)`
+    // keeps compiling and running unchanged. CapabilityGapService itself depends on WorkbenchService
+    // (this class, through the interface) to reach evolveActivity/findTwinProcess/
+    // listCapabilityProviders, so a direct field reference here is circular at the Spring wiring
+    // level - confirmed by a real ApplicationContext startup failure
+    // (BeanCurrentlyInCreationException) when a wbapi bean happened to request capabilityGapService
+    // before workbenchServiceImpl. An ObjectProvider defers the actual getBean(...) call to first
+    // use, after the whole context has finished starting, exactly like TwinAutomationDelegate's own
+    // ObjectProvider<CapabilityOutputContractSource> already does for the same reason (see that
+    // class). Empty in every test that does not register a CapabilityGapService bean, in which case
+    // notifyCapabilityProviderExecutionSucceeded below is a no-op - exactly as if no capability gap
+    // were ever open for that execution.
+    @Autowired(required = false)
+    private ObjectProvider<CapabilityGapService> capabilityGapService;
+
+    // Optional by construction, same reasoning as capabilityGapService above: field-injected so
+    // every existing `new WorkbenchServiceImpl(...)` test keeps compiling unchanged. No circularity
+    // risk here (CapabilityBindingRegistry depends only on CapabilityBindingStore, never on
+    // WorkbenchService), so a direct reference rather than an ObjectProvider is enough. Null in any
+    // test that does not register a CapabilityBindingRegistry bean, in which case
+    // recordCapabilityBindingOrCompensate is a no-op and evolution behaves exactly as it did before
+    // P7 Step 5 existed.
+    @Autowired(required = false)
+    private CapabilityBindingRegistry capabilityBindingRegistry;
 
     public WorkbenchServiceImpl(NodeManagerClient nodeManagerClient, GovernanceService governanceService,
             PolicyDecisionEngine policyDecisionEngine, ApprovalService approvalService,
@@ -165,13 +193,10 @@ public class WorkbenchServiceImpl implements WorkbenchService {
     @PostConstruct
     void restoreState() {
         WorkbenchStateStore.Snapshot snapshot = stateStore.load();
-        // The H2-backed archive is the single authoritative source for process models. A model that is not in
-        // the archive is not a model this workbench knows about.
+        // The H2-backed archive is the authoritative source for process models.
         for (ProcessModel model : processModelArchiveStore.findAll()) {
             processModels.put(model.getId(), model);
-            // Spring finishes WorkflowStateTracker's @PostConstruct before injecting it, so this
-            // reads real restored history. Only backfill a model with no history at all - backfilling
-            // one that has history would wipe its real GENERATE/LAUNCH progress.
+            // Only backfill a model with no history; preserving existing history maintains recorded progress.
             if (workflowStateTracker.hasNoHistory(model.getId())) {
                 workflowStateTracker.record(model.getId(), WorkflowStage.MODEL, StageStatus.COMPLETED, null,
                         model.getCreatedAt());
@@ -184,11 +209,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         reconcileApprovedApprovals();
     }
 
-    // generatedProjects/modelIdByProjectId are rebuilt rather than persisted: the project directory is
-    // the source of truth for its own id and process key, and each model's GENERATE stage detail
-    // already records which project it produced.
-    // Order matters - this runs after processModels is populated and after workflowStateTracker's own
-    // restore.
     private void restoreGeneratedProjects() {
         for (GeneratedProject project : springBootProjectGenerator.scanExisting()) {
             generatedProjects.put(project.projectId(), project);
@@ -199,15 +219,10 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         for (ProcessModel model : processModels.values()) {
             WorkflowState state = workflowStateTracker.stateFor(model.getId());
             String projectId = currentProjectIdOf(state);
-            // Only wired up when the project this model's GENERATE stage points at still exists on disk: a stale
-            // detail from a deleted directory must not silently claim whatever id now occupies that slot.
+            // Only associate when the project directory exists on disk.
             if (projectId != null && generatedProjects.containsKey(projectId)) {
                 modelIdByProjectId.put(projectId, model.getId());
             }
-            // A superseded project's JVM does not normally survive a restart, so leftovers on disk
-            // are collectable now. "Normally" is doing real work: a hard kill skips @PreDestroy and
-            // leaves generated apps still holding their ports, invisible to this instance's empty
-            // registry - hence the port probe before collecting anything.
             if (aRecordedLaunchPortIsStillListening(state)) {
                 logger.warn("Skipping generated-project cleanup for model {} on startup - a port it previously "
                         + "launched on is still listening, so a generated app from before this restart may still "
@@ -218,9 +233,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         }
     }
 
-    // Every port this model was recorded as launching on, newest first. A STOPPED event is not taken
-    // as proof the port is free - the probe decides that - and a port never recorded cannot be
-    // checked at all, which is why this is a best-effort guard rather than a liveness check.
+    // Checks whether any recorded launch port is currently active.
     private boolean aRecordedLaunchPortIsStillListening(WorkflowState state) {
         for (StageEvent event : state.history()) {
             if (event.stage() != WorkflowStage.LAUNCH || event.detail() == null
@@ -239,7 +252,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return false;
     }
 
-    // Retention (latest generation only, chosen product policy): a model keeps exactly one generated project - its newest completed generation - and older ones are disposable once nothing is running out of them. Computes current project ID from completed GENERATE history.
+    // Computes current project ID from the latest completed GENERATE workflow stage.
     private static String currentProjectIdOf(WorkflowState state) {
         String current = null;
         for (StageEvent event : state.history()) {
@@ -251,14 +264,12 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return current;
     }
 
-    // Lists superseded project IDs for a process model.
     private static List<String> supersededProjectIdsOf(WorkflowState state) {
         List<String> superseded = new ArrayList<>(allGeneratedProjectIdsOf(state));
         superseded.remove(currentProjectIdOf(state));
         return superseded;
     }
 
-    // Lists all generated project IDs for a process model.
     private static List<String> allGeneratedProjectIdsOf(WorkflowState state) {
         List<String> projectIds = new ArrayList<>();
         for (StageEvent event : state.history()) {
@@ -277,7 +288,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         cleanupSupersededProjects(modelId, workflowStateTracker.stateFor(modelId));
     }
 
-    // Best-effort cleanup of superseded projects.
     private void cleanupSupersededProjects(String modelId, WorkflowState state) {
         for (String projectId : supersededProjectIdsOf(state)) {
             try {
@@ -290,7 +300,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
     }
 
     private void deleteIfSuperseded(String modelId, String projectId) {
-        // never another model's project. supersededProjectIdsOf() read this id out of THIS model's own history, so a conflicting owner means two models' histories disagree about who generated it - unresolvable from here, and deleting on a guess is the one outcome that can't be undone
+        // Do not delete a project recorded as belonging to a different model.
         String owner = modelIdByProjectId.get(projectId);
         if (owner != null && !owner.equals(modelId)) {
             logger.warn("Not deleting generated project {} while cleaning up model {} - it is recorded as "
@@ -298,31 +308,26 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             return;
         }
         boolean wasIdle = springBootProjectLauncher.runIfIdle(projectId, () -> {
-            // Re-read inside the lock: the list was computed before it was taken, and a concurrent
-            // regenerate can append a GENERATE event in between. This is what makes "never delete the
-            // current project" true at the moment of deletion rather than a moment earlier.
+            // Re-check current project inside the lock to ensure it was not updated concurrently.
             if (projectId.equals(currentProjectIdOf(workflowStateTracker.stateFor(modelId)))) {
                 logger.info("Generated project {} became the current generation for model {} before it could be "
                         + "cleaned up - retaining it", projectId, modelId);
                 return;
             }
             if (springBootProjectGenerator.delete(projectId)) {
-                // only after the directory is actually gone - a project still on disk must stay reachable through launchGeneratedProject, and scanExisting() would put it back on the next restart anyway
+                // Remove from in-memory index once directory deletion succeeds.
                 generatedProjects.remove(projectId);
                 modelIdByProjectId.remove(projectId, modelId);
             }
         });
         if (!wasIdle) {
-            // the whole point of the policy's "superseded + running -> retain temporarily" arm
+            // Retain running superseded projects until they stop.
             logger.info("Retaining superseded generated project {} for model {} - it is still running or "
                     + "being launched; it will be collected when it next stops", projectId, modelId);
         }
     }
 
-    // An approval is left APPROVED if the JVM died between approveEvolution() marking it so and
-    // marking it COMPLETED/FAILED. Resolved on startup from Camunda's own committed variable history,
-    // which is transactional with the setVariable itself: absent proves the evolution never ran,
-    // present proves it did, whatever the Approval's status says. Never a blind retry.
+    // Reconciles interrupted approvals on restart against committed process variables.
     private void reconcileApprovedApprovals() {
         List<Approval> approved = approvalService.listAllApproved();
         if (approved.isEmpty()) {
@@ -339,8 +344,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             String evolvedAgentVariable = AgentVariables.evolvedAgent(approval.twinActivityId(),
                     approval.loopCounter());
             if (evolvedAgentVariableIsSet(twin, evolvedAgentVariable)) {
-                // The side effect this approval represents already happened before the crash, so marking COMPLETED
-// here does not repeat it.
+                // Side effect already executed prior to restart; mark COMPLETED without re-executing.
                 approvalService.markCompleted(approval.id(),
                         "reconciled on restart - '" + evolvedAgentVariable + "' was already set");
                 twin.getEventLog().add("Approval " + approval.id()
@@ -349,8 +353,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                         evolvedAgentVariable);
                 continue;
             }
-            // The variable was never set, so the operation never ran. Running it now is its first execution, not
-// a retry of one that may already have happened.
+            // Variable was not set prior to restart; execute evolution.
             GovernanceDecision reservation = governanceService.reserveEvolutionSlot(approval.twinId(),
                     approval.agentType());
             if (!reservation.isAllowed()) {
@@ -431,12 +434,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         }
         String modelId;
         if (id != null && !id.isBlank()) {
-            // Validates model ID syntax.
             if (!SAFE_MODEL_ID.matcher(id).matches()) {
                 throw new IllegalArgumentException("Process model id may only contain letters, digits, "
                         + "'-' and '_': " + id);
             }
-            // no overwriting - twins already launched still point at the old definition
+            // Prevent overwriting existing active model definition.
             if (processModels.containsKey(id)) {
                 throw new IllegalArgumentException("Process model already exists: " + id);
             }
@@ -450,22 +452,16 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             modelId = UUID.randomUUID().toString();
         }
 
-        // Records IN_PROGRESS status before saving.
         workflowStateTracker.record(modelId, WorkflowStage.MODEL, StageStatus.IN_PROGRESS, null);
         try {
             return doSaveProcessModel(modelId, name, bpmnXml, twinBpmnXml, tenantId, projectId);
         } catch (RuntimeException e) {
-            // Record FAILED status on save failure.
             workflowStateTracker.record(modelId, WorkflowStage.MODEL, StageStatus.FAILED, e.getMessage(),
                     new StageError(e.getClass().getSimpleName(), "SAVE_MODEL", null, null, null, null, null));
             throw e;
         }
     }
 
-    // twinBpmnXml is null on the ordinary single-BPMN path. When present it is validated but NOT
-    // deployed here: only the primary bpmnXml runs on the Workbench's engine, so
-    // processDefinitionId keeps its existing meaning. The authored twin only ever runs inside the
-    // generated Target Platform, which gets its own engine.
     private ProcessModel doSaveProcessModel(String modelId, String name, String bpmnXml, String twinBpmnXml,
             String tenantId, Long projectId) {
         Deployment deployment;
@@ -486,7 +482,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     .deploymentId(deployment.getId())
                     .singleResult();
         } catch (ProcessEngineException e) {
-            // singleResult() throws if the XML has more than one executable process. their mistake, not ours, so 400
+            // singleResult() throws if the XML declares multiple executable processes.
             discardDeployment(deployment.getId());
             throw new IllegalArgumentException(
                     "BPMN must declare exactly one executable bpmn:process element: " + e.getMessage());
@@ -507,7 +503,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
 
         ProcessModel model = new ProcessModel(modelId, name, bpmnXml, twinBpmnXml, Instant.now(),
                 definition.getId(), tenantId);
-        // the containsKey above isn't enough on its own - two saves of the same id can both clear it and both deploy, and the loser would silently replace the winner's definition
+        // Concurrent save guard: putIfAbsent ensures earlier winner's definition is retained.
         ProcessModel existing = processModels.putIfAbsent(modelId, model);
         if (existing != null) {
             discardDeployment(deployment.getId());
@@ -516,29 +512,58 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         Path bpmnFilePath;
         Path twinBpmnFilePath = null;
         try {
-            // The generation step needs a real .bpmn file on disk, not just the copy of this XML the archive
-            // embeds as a string field.
+            // Code generation requires a .bpmn file on disk.
             bpmnFilePath = modelFileStore.save(modelId, bpmnXml);
             if (twinBpmnXml != null) {
                 twinBpmnFilePath = modelFileStore.saveTwin(modelId, twinBpmnXml);
             }
         } catch (RuntimeException e) {
-            // don't leave a model that's deployed and in memory but has no matching file - roll both back rather than leave a half-saved model the Generate step would silently fail against later
+            // Roll back in-memory state and deployment if file persistence fails.
             processModels.remove(modelId, model);
             discardDeployment(deployment.getId());
             throw e;
         }
-        // H2-backed archive is the model's persistence, full stop - the JSON snapshot alongside it covers twins only
+        // ProcessModelArchiveStore (H2) is the authoritative persistence for process models.
         processModelArchiveStore.save(model, bpmnFilePath, twinBpmnFilePath, projectId);
         persistState();
         workflowStateTracker.record(modelId, WorkflowStage.MODEL, StageStatus.COMPLETED, null);
         logger.info("Saved process model {} and deployed process definition {}", modelId, definition.getId());
+        detectStaticCapabilityGapsIfApplicable(modelId, definition.getId());
         return model;
     }
 
-    // Structural check only, no deployment: an authored twin never runs on the Workbench's engine, so
-    // it should not gain a deployment footprint there. Applies the same "exactly one executable
-    // process" rule the real deployment enforces for bpmnXml.
+    // MetaML Scope 6, Phase 5: static capability-gap detection, wired into the one existing point in
+    // the Workbench model lifecycle where a BPMN model is validated, deployed, and fully available -
+    // the same place already used to record MODEL workflow-stage completion two lines above. Purely
+    // additive: reads the just-deployed BpmnModelInstance back from the process engine (the same
+    // repositoryService.getBpmnModelInstance(definitionId) pattern TwinAutomationDelegate already
+    // uses) rather than reparsing bpmnXml, and never changes `model`, the workflow stage already
+    // recorded, or anything returned to the caller. No scheduler, no polling: this runs exactly once
+    // per successful save, exactly like every other post-save side effect in this method. No-op when
+    // no CapabilityGapService bean is registered, or on any failure - a detection failure must never
+    // fail an otherwise-valid model save.
+    private void detectStaticCapabilityGapsIfApplicable(String modelId, String processDefinitionId) {
+        CapabilityGapService gapService = capabilityGapService == null ? null : capabilityGapService.getIfAvailable();
+        if (gapService == null) {
+            return;
+        }
+        try {
+            BpmnModelInstance deployedModel = repositoryService.getBpmnModelInstance(processDefinitionId);
+            if (deployedModel == null) {
+                return;
+            }
+            List<CapabilityGap> gaps = gapService.detectStatic(deployedModel, modelId);
+            if (!gaps.isEmpty()) {
+                logger.info("Static capability-gap detection recorded {} gap(s) for process model {}",
+                        gaps.size(), modelId);
+            }
+        } catch (RuntimeException e) {
+            logger.warn("Could not run static capability-gap detection for process model {}: {}",
+                    modelId, e.getMessage());
+        }
+    }
+
+    // Validates that the BPMN XML declares exactly one executable process definition.
     private static void requireExactlyOneExecutableProcess(String bpmnXml) {
         BpmnModelInstance model;
         try {
@@ -557,7 +582,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         }
     }
 
-    // we deploy before we can check any of this, so a rejected model would otherwise leave its deployment sitting in the engine and showing up in cockpit
+    // Delete deployment from engine repository if model validation or persistence fails.
     private void discardDeployment(String deploymentId) {
         try {
             repositoryService.deleteDeployment(deploymentId, true);
@@ -569,7 +594,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
 
     @Override
     public ProcessModel getProcessModel(String id) {
-        // ConcurrentHashMap.get(null) throws NPE - used to 500 on a launch body with no modelId
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("Process model id must not be blank");
         }
@@ -580,9 +604,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return model;
     }
 
-    // An id a model was once created under but no model currently holds. Keyed on MODEL/COMPLETED
-    // rather than "has any history": a save rejected for bad BPMN never reaches COMPLETED, and
-    // retrying that id is normal - otherwise every rejected save would burn its id permanently.
+    // Identifies IDs previously associated with completed models to prevent re-registration.
     private boolean isRetiredModelId(String modelId) {
         for (StageEvent event : workflowStateTracker.stateFor(modelId).history()) {
             if (event.stage() == WorkflowStage.MODEL && event.status() == StageStatus.COMPLETED) {
@@ -592,19 +614,10 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return false;
     }
 
-    // Deletion is an authoring operation, so it only excludes the other one that can invent state for
-    // the same model - Generate. Launch and cleanup already serialise on the launcher's per-project
-    // lock, and Evolve touches a twin, never a model.
-    // Lock order where both are held: model lock first, then project locks.
     private Object modelLockFor(String modelId) {
         return modelLocks.computeIfAbsent(modelId, id -> new Object());
     }
 
-    // Removes what the model owns and nothing else. Twins, their Camunda instances and deployments,
-    // approvals, policies and workflow history all survive: a twin holds its model id as provenance
-    // only, and deployments are shared between a model's twins, so cascading would kill live instances
-    // of twins that are still running fine.
-    // Refuses outright if a generated app is running - deleting a model is not a reason to kill it.
     @Override
     public boolean deleteProcessModel(String modelId) {
         if (modelId == null || modelId.isBlank()) {
@@ -615,11 +628,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             if (model == null) {
                 throw new NoSuchElementException("Process model not found: " + modelId);
             }
-            // every generation, not just the superseded ones - once the model is gone, its current generation has nothing left to belong to either
+            // Remove all generations belonging to this model once deleted.
             List<String> projectIds = allGeneratedProjectIdsOf(workflowStateTracker.stateFor(modelId));
             boolean deleted = springBootProjectLauncher.runIfAllIdle(projectIds, () -> {
                 for (String projectId : projectIds) {
-                    // same ownership guard cleanupSupersededProjects uses - never delete a directory another model is recorded as owning
+                    // Avoid deleting a project directory belonging to another model.
                     String owner = modelIdByProjectId.get(projectId);
                     if (owner != null && !owner.equals(modelId)) {
                         logger.warn("Not deleting generated project {} while deleting model {} - it is recorded "
@@ -640,7 +653,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                         + " - one of its generated applications is running or is being launched. Stop it first, "
                         + "then delete the model.");
             }
-            // history is NOT touched: it is what retires this id for good (see isRetiredModelId)
+            // Retain workflow history so the retired model ID is not reused.
             logger.info("Deleted process model {} and {} generated project(s); its workflow history, twins, "
                     + "Camunda state and approvals are retained", modelId, projectIds.size());
             return true;
@@ -670,8 +683,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
 
     @Override
     public List<ProcessModelSummaryDto> listProcessModelSummaries() {
-        // Reads off the archive store rather than the in-memory processModels map, which has no notion of a
-        // project.
+        // Reads summaries directly from the archive store.
         return processModelArchiveStore.findAllSummaries();
     }
 
@@ -683,7 +695,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
 
     @Override
     public GeneratedProject generateSpringBootProject(String modelId) {
-        // model lock held across the whole generate, so a delete can't land between the model lookup below and the GENERATE record - which would otherwise leave a generated project and a COMPLETED event belonging to a model that no longer exists
+        // Guard against concurrent model deletion during project generation.
         synchronized (modelLockFor(modelId)) {
             return doGenerateSpringBootProject(modelId);
         }
@@ -695,27 +707,20 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         try {
             GeneratedProject project;
             if (model.hasAuthoredTwin()) {
-                // Model saved with an authored twin: both BPMNs go into the generated Target
-                // Platform as-is. Everything after this branch is identical to the single-BPMN path.
+                // Authored twin BPMN is packaged directly into the generated target platform.
                 project = springBootProjectGenerator.generateWithAuthoredTwin(model.getBpmnXml(),
                         model.getAuthoredTwinBpmnXml(), model.getName());
             } else {
-                // Regenerated rather than reusing generateDelegates' output, which renders against
-                // DelegateClassGenerator's default package - fine for previewing source, wrong for where the file is
-                // about to be written. Must be SpringBootProjectGenerator.DELEGATE_PACKAGE, or the class compiles but
-                // Spring's component scan never finds it.
                 List<GeneratedDelegate> delegates = delegateClassGenerator.generate(model.getBpmnXml(),
                         SpringBootProjectGenerator.DELEGATE_PACKAGE);
                 project = springBootProjectGenerator.generate(model.getBpmnXml(), delegates, model.getName());
             }
             generatedProjects.put(project.projectId(), project);
             modelIdByProjectId.put(project.projectId(), modelId);
-            // projectId as the detail, not just a bare COMPLETED - stopGeneratedProject/ launchGeneratedProject both key off project ids, and the breadcrumb needs a way to hand one to the caller without a second round trip through generatedProjects
+            // Record project ID in the stage detail for reference during project launch.
             workflowStateTracker.record(modelId, WorkflowStage.GENERATE, StageStatus.COMPLETED, project.projectId());
             logger.info("Generated Target Harness Platform {} for model {}", project.projectId(), modelId);
-            // This generation is now the current one, so every earlier generation of this model is superseded.
-            // Deliberately after the COMPLETED record, so "current" is read from committed history: a generate
-            // that failed before this point leaves the previous generation current and collects nothing.
+            // Clean up earlier generations once new generation completes successfully.
             cleanupSupersededProjects(modelId);
             return project;
         } catch (RuntimeException e) {
@@ -725,15 +730,13 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         }
     }
 
-    // delegateExpression/bpmnElementId are only known for a DelegateWriteException - the one failure
-    // scoped to a single BPMN element. Everything else fails the operation as a whole and stays null
-    // rather than guessing.
+    // Preserves element ID when available for targeted navigation in the editor.
     private static StageError generateErrorFrom(RuntimeException e) {
         if (e instanceof DelegateWriteException dwe) {
             return new StageError(e.getClass().getSimpleName(), "GENERATE_PROJECT", null, null, null,
                     "${" + dwe.beanName() + "}", dwe.bpmnElementId());
         }
-        // the other failure that genuinely knows its BPMN element: one task declaring a delegateExpression that names no bean (see InvalidDelegateExpressionException). Carrying both fields is what makes the editor's "Go to error" able to select that exact task.
+        // Capture invalid delegate expression element for targeted editor navigation.
         if (e instanceof InvalidDelegateExpressionException bad) {
             return new StageError(e.getClass().getSimpleName(), "GENERATE_PROJECT", null, null, null,
                     bad.rawExpression(), bad.bpmnElementId());
@@ -745,17 +748,16 @@ public class WorkbenchServiceImpl implements WorkbenchService {
     public LaunchedProject launchGeneratedProject(String projectId) {
         GeneratedProject project = generatedProjects.get(projectId);
         if (project == null) {
-            // restart no longer loses this on its own (see restoreGeneratedProjects()) - a genuine miss here means the id was never real, or its project directory is gone/unreadable
             throw new NoSuchElementException("Generated project not found: " + projectId
                     + " - it may not exist, or its generated-project directory may be missing or unreadable");
         }
-        // absent when this project's own model can no longer be identified - a legacy project whose workflow history predates persistence entirely, or one whose GENERATE detail didn't survive for some other reason. The launch still works, it just has no breadcrumb to update.
+        // If model ID is unresolvable, launch proceeds without recording workflow state.
         String modelId = modelIdByProjectId.get(projectId);
         if (modelId != null) {
             workflowStateTracker.record(modelId, WorkflowStage.LAUNCH, StageStatus.IN_PROGRESS, null);
         }
         try {
-            // Messaging is opt-in at the launcher level (see SpringBootProjectLauncher.launch), so it's enabled only when this generated project actually has a Twin. hasAuthoredTwin() alone isn't reliable here since an operationally-derived Twin (see OperationalTwinGenerator) never gets written back onto the ProcessModel.
+            // Target platform messaging is only enabled when a twin process is present.
             boolean generatedProjectHasMessaging = projectHasMessagingLayer(project.directory());
             Map<String, String> extraEnv = generatedProjectHasMessaging
                     ? Map.of("METAML_MESSAGING_ENABLED", "true")
@@ -778,7 +780,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         }
     }
 
-    // Whether generateWithAuthoredTwin wrote a RabbitMqConfig.java anywhere under this project.
+    // Checks whether the project directory contains generated messaging configuration.
     private static boolean projectHasMessagingLayer(Path projectDirectory) {
         if (!Files.isDirectory(projectDirectory)) {
             return false;
@@ -803,14 +805,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
 
     @Override
     public boolean stopGeneratedProject(String projectId) {
-        // Deliberately not gated on generatedProjects: a launched process never survives a restart, and
-        // refusing to stop what the launcher still tracks would leave a running app nothing could reach.
-        // The launcher's registry is the authority on what is running.
+        // Stopping queries the launcher directly; process state does not survive restart.
         if (projectId == null || projectId.isBlank()) {
             throw new IllegalArgumentException("projectId must not be blank");
         }
-        // Read before stop(), not after - the launcher drops its entry once stopped, and the port is worth
-        // keeping on the STOPPED event rather than losing it to the fold's latest-event-wins rule.
+        // Capture port before stop drops the launcher entry.
         String portDetail = springBootProjectLauncher.find(projectId)
                 .map(launched -> "port " + launched.port())
                 .orElse(null);
@@ -819,9 +818,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         if (wasRunning && modelId != null) {
             workflowStateTracker.record(modelId, WorkflowStage.LAUNCH, StageStatus.STOPPED, portDetail);
         }
-        // A project superseded while running was left alone at the time; stopping is the lifecycle
-        // event that makes it collectable. Runs regardless of wasRunning - a JVM that already died
-        // externally is just as collectable.
+        // Clean up superseded projects once running process terminates.
         if (modelId != null) {
             cleanupSupersededProjects(modelId);
         }
@@ -850,9 +847,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 .toList();
     }
 
-    // One launch, one twin, and the twin always gets a definition of its own that its token can walk.
-    // A second entry point for that used to exist alongside a passive default, which meant two UI buttons
-    // producing twins that behaved nothing alike.
     @Override
     public TwinProcess launchProcess(String modelId) {
         ProcessModel model = getProcessModel(modelId);
@@ -862,7 +856,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         try {
             return launch(model, twinDefinition.getId());
         } catch (RuntimeException e) {
-            // Only clean up a deployment this call actually made. Duplicate filtering hands back the one an earlier launch created, and a twin from that launch can still be running on it - deleting it cascade-deletes a live instance.
+            // Only delete deployment if created by this launch call to avoid cascading live instances.
             if (!twinWasAlreadyDeployed) {
                 discardDeployment(twinDefinition.getDeploymentId());
             }
@@ -874,7 +868,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return model.getName() + " (twin " + model.getId() + ")";
     }
 
-    // The twin is generated from what's actually deployed rather than from the stored XML, so it can't drift from the definition the original is running.
+    // Twin is generated from deployed definition to prevent drift from original.
     private ProcessDefinition deployTwinDefinition(ProcessModel model) {
         BpmnModelInstance twinModel;
         try {
@@ -887,9 +881,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
 
         Deployment deployment;
         try {
-            // Deployment and resource name must be identical on every launch of this model or duplicate filtering
-            // has nothing to compare against - hence the model id in both, since two models may share a display
-            // name. Without it, ten launches left ten twin deployments behind, each its own definition version.
+            // Duplicate filtering requires stable deployment and resource names across launches.
             deployment = repositoryService.createDeployment()
                     .name(twinDeploymentName(model))
                     .enableDuplicateFiltering(true)
@@ -910,7 +902,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return definition;
     }
 
-    // twinDefinitionId is the original's own on the plain path, which is the whole difference between a twin that can move and one that can't
+    // Launches original and twin process instances with correlated business keys.
     private TwinProcess launch(ProcessModel model, String twinDefinitionId) {
         String twinId = UUID.randomUUID().toString();
 
@@ -920,7 +912,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         try {
             twinInstance = runtimeService.startProcessInstanceById(twinDefinitionId, BusinessKeys.twinKey(twinId));
         } catch (RuntimeException e) {
-            // kill the original as well, otherwise every failed launch leaks a live instance
+            // Terminate original instance if twin instance startup fails.
             try {
                 runtimeService.deleteProcessInstance(original.getProcessInstanceId(),
                         "Twin process instance failed to start; rolling back the original");
@@ -934,8 +926,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         TwinProcess twin = new TwinProcess();
         twin.setId(twinId);
         twin.setModelId(model.getId());
-        // A twin never picks its own tenant; it inherits the one on the model it was launched from, which is
-// null for a model saved before tenancy existed.
+        // Twin inherits tenant ID from originating process model.
         twin.setTenantId(model.getTenantId());
         twin.setProcessDefinitionId(model.getProcessDefinitionId());
         twin.setTwinProcessDefinitionId(twinDefinitionId);
@@ -965,7 +956,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         if (twin == null) {
             throw new NoSuchElementException("Twin process not found: " + id);
         }
-        // stored status goes stale as soon as either instance ends, so recompute every read
+        // Recompute status from live instances on every read.
         twin.setStatus(computeStatus(twin));
         return twin;
     }
@@ -1030,14 +1021,9 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         }
 
         requireActivityInDefinition(twin.getProcessDefinitionId(), originalActivityId, "originalActivityId");
-        // the twin's own definition, not the original's. The two happen to share activity ids today, so checking the original passed for the wrong reason - and would keep passing for an id the generator had dropped, leaving a link pointing at nothing.
+        // Validate activity exists in the twin's deployed definition.
         requireActivityInDefinition(twin.getTwinProcessDefinitionId(), twinActivityId, "twinActivityId");
 
-        // One twin activity maps to one original activity: evolvedAgent_<twinActivityId> and the
-        // advance message are keyed on twinActivityId alone, so a second original sharing it would
-        // clobber the first. Synchronized on the twin because CopyOnWriteArrayList makes each
-        // operation safe but not this check-then-add; one lock per twin, since only calls racing on
-        // the same twin can conflict.
         synchronized (twin) {
             twin.getActivityLinks().stream()
                     .filter(link -> link.getTwinActivityId().equals(twinActivityId))
@@ -1050,7 +1036,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                                 + "' to a different twin activity instead of sharing this one");
                     });
 
-            // replace not append - lookups use findFirst() so a duplicate link would just sit unused
+            // Replace existing link to maintain one-to-one mapping.
             twin.getActivityLinks().removeIf(link -> link.getOriginalActivityId().equals(originalActivityId));
             twin.getActivityLinks().add(new ActivityLink(originalActivityId, twinActivityId));
         }
@@ -1073,16 +1059,13 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 () -> new IllegalArgumentException("Activity " + activityId
                         + " is not connected to a twin activity"));
 
-        // Only resolve a loop counter when the caller named a specific runtime instance. Claiming
-        // the activity as a whole is deliberate when no instance exists yet - that is the only way
-        // to get ahead of the auto-bridge, which fires the instant the first instance starts.
+        // Only resolve loop counter when targeting a specific runtime instance.
         Object loopCounter = activityInstanceId == null ? null
                 : loopCounterOf(twin, activityId, activityInstanceId);
         String pendingVariable = AgentVariables.integrationPending(twinActivityId, loopCounter);
         try {
             runtimeService.setVariable(twin.getTwinProcessId(), pendingVariable, Boolean.TRUE);
         } catch (ProcessEngineException e) {
-            // twin already ended - there is nothing left for the auto-bridge to advance either
             twin.getEventLog().add("Could not claim activity " + activityId
                     + " for integration on twin instance " + twin.getTwinProcessId()
                     + " (it may have already ended): " + e.getMessage());
@@ -1100,15 +1083,12 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return twin;
     }
 
-    // True while an operator has claimed this visit (or the whole activity) for integration and no
-    // evolution has bound an agent for it yet. Checked against both names so a claim staked before
-    // the activity had any runtime instance still holds the sibling that later starts.
+    // Checks whether an integration claim is pending for this activity visit or activity.
     private boolean integrationPendingFor(TwinProcess twin, String twinActivityId, Object loopCounter) {
         Map<String, Object> variables;
         try {
             variables = runtimeService.getVariables(twin.getTwinProcessId());
         } catch (ProcessEngineException e) {
-            // twin already ended - nothing to hold
             return false;
         }
         return Boolean.TRUE.equals(variables.get(AgentVariables.integrationPending(twinActivityId, null)))
@@ -1116,8 +1096,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                         variables.get(AgentVariables.integrationPending(twinActivityId, loopCounter))));
     }
 
-    // Released by the evolution that actually binds an agent for this visit - both the per-visit and
-    // the whole-activity claim, since either could have been the one holding it.
+    // Release both per-visit and whole-activity claims upon binding.
     private void releaseIntegrationClaim(TwinProcess twin, String twinActivityId, Object loopCounter) {
         try {
             runtimeService.removeVariable(twin.getTwinProcessId(),
@@ -1127,7 +1106,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                         AgentVariables.integrationPending(twinActivityId, loopCounter));
             }
         } catch (ProcessEngineException e) {
-            // twin already ended - the claim cannot hold anything any more either way
             logger.debug("Could not release integration claim for twin activity {} on twin {}: {}",
                     twinActivityId, twin.getId(), e.getMessage());
         }
@@ -1141,17 +1119,14 @@ public class WorkbenchServiceImpl implements WorkbenchService {
     @Override
     public AgentDecision evolveActivity(String twinProcessId, String activityId, String activityInstanceId,
             String agentType) {
-        // check before logging - a null agentType used to 500 after the event log was already written
         if (agentType == null || agentType.isBlank()) {
             throw new IllegalArgumentException("agentType must not be blank");
         }
-        // missing activityId isn't an NPE, it quietly logs "activity null" and returns not-connected
         if (activityId == null || activityId.isBlank()) {
             throw new IllegalArgumentException("activityId must not be blank");
         }
 
         TwinProcess twin = getTwinProcess(twinProcessId);
-        // every path below writes to the event log, so persist once at the end instead of per-return
         try {
             return evolveOnce(twin, twinProcessId, activityId, activityInstanceId, agentType);
         } finally {
@@ -1168,22 +1143,12 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         if (twinActivityId == null) {
             twin.getEventLog().add("Evolution blocked: activity " + activityId
                     + " is not connected to a twin activity");
-            // WARN with a stable, greppable prefix: these operator-actionable skips used to log at INFO alongside
-            // routine success, which is how a twin could stop silently while the human side saw only 200s.
             logger.warn("TWIN_SKIPPED: evolve blocked for activity {} on twin {}: activity not connected",
                     activityId, twinProcessId);
             return new AgentDecision(agentType, false, null,
                     "Activity not connected to twin process");
         }
 
-        // Runtime identity fix (Scope 6 P1): currentVisitId()'s most-recently-started heuristic
-        // cannot distinguish between concurrently active siblings of a parallel (non-sequential)
-        // multi-instance activity that share the same activityId. When the caller supplies an
-        // explicit activityInstanceId - the same runtime activity-instance identity
-        // bridgeActivityEvent(twinId, activityId, activityInstanceId) already accepts - trust it
-        // directly instead of resolving "the" visit by timestamp ordering. Both ids live in the
-        // same Camunda identity space (HistoricActivityInstance/ActivityInstance share their id),
-        // exactly like originalExecutionIdForVisit and loopCounterOf already assume below.
         String visitId = activityInstanceId != null && !activityInstanceId.isBlank()
                 ? activityInstanceId
                 : currentVisitId(twin, activityId);
@@ -1197,13 +1162,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     "Activity not yet reached in the original process instance");
         }
 
-        // Scope 6 lifecycle guard: currentVisitId() falls back to the newest completed
-        // historical visit when nothing is currently active - that fallback is correct
-        // for bridge semantics (forwarding what already happened) but not for evolution
-        // (changing what will execute next).  Evolving an activity on an ended original
-        // process overwrites evolvedAgent_* without any future twin execution to consume
-        // it; getActivityExecutionState then returns the new agent name alongside stale
-        // automation output from a prior run, producing a misleading EXECUTED status.
+        // Reject evolution if original process instance has already completed.
         if (!isInstanceRunning(twin.getOriginalProcessId())) {
             twin.getEventLog().add("Evolution blocked: original process instance "
                     + twin.getOriginalProcessId() + " has already ended");
@@ -1226,7 +1185,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     "Activity " + activityId + " is already being evolved");
         }
         try {
-            // runEvolution sets evolvedAgent_<twinActivityId>[_loopCounter] on approval, which is exactly the signal bridgeOnce's alreadyEvolved() checks before letting the auto-bridge (or a repeat manual bridge) stomp this visit with the default agent type - no separate bookkeeping needed here for that to work.
+            // Sets evolvedAgent variable upon approval, signaling that this visit has been bound.
             return runEvolution(twin, twinProcessId, activityId, twinActivityId,
                     loopCounterOf(twin, activityId, visitId), agentType);
         } finally {
@@ -1235,25 +1194,16 @@ public class WorkbenchServiceImpl implements WorkbenchService {
     }
 
     private static String evolutionClaim(String twinProcessId, String activityInstanceId) {
-        // twin ids are uuids, so the first colon here is always the separator
         return twinProcessId + ":" + activityInstanceId;
     }
 
-    // Bridges activity event with default agent type.
     @Override
     public AgentDecision bridgeActivityEvent(String twinProcessId, String activityId) {
         TwinProcess twin = getTwinProcess(twinProcessId);
         String visitId = currentVisitId(twin, activityId);
-        // Evolving has to move the twin too. The original's first activity starts inside
-        // startProcessInstanceById, before the twin is registered, so the auto trigger never sees it -
-        // without this the twin would wait on that first message forever.
-        // Only when the original has actually visited the activity: a null visit means it has not, and
-        // advancing anyway would put the twin ahead of what it mirrors. Deliberately not gated on
-        // isApproved() - a refused evolution says nothing about where the original's token is.
         return bridgeAndAdvance(twin, twinProcessId, activityId, visitId);
     }
 
-    // Resolves original execution ID for a visit instance.
     private String originalExecutionIdForVisit(TwinProcess twin, String activityId, String activityInstanceId) {
         if (activityInstanceId == null) {
             return null;
@@ -1270,16 +1220,13 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return null;
     }
 
-    // Bridges activity event for a specific activity instance.
     @Override
     public AgentDecision bridgeActivityEvent(String twinProcessId, String activityId, String activityInstanceId) {
         TwinProcess twin = getTwinProcess(twinProcessId);
         return bridgeAndAdvance(twin, twinProcessId, activityId, activityInstanceId);
     }
 
-    // Read-only: reconstructs what a bound ComponentExecutor has actually done for this activity,
-    // straight from the same MetaML-owned process variables TwinAutomationDelegate itself wrote
-    // (see AgentVariables) - never anything computed beyond that, never a mutation.
+    // Reconstructs execution state from process variables recorded by TwinAutomationDelegate.
     @Override
     public TwinActivityExecutionState getActivityExecutionState(String twinProcessId, String activityId) {
         TwinProcess twin = getTwinProcess(twinProcessId);
@@ -1287,10 +1234,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             throw new IllegalArgumentException("activityId must not be blank");
         }
 
-        // Runtime instance discovery (Scope 6 identity fix): a fact about the ORIGINAL process
-        // instance's live runtime state, independent of whether this activity is connected to a
-        // twin activity yet - computed unconditionally so a caller can discover concurrent
-        // siblings (and their activityInstanceId) before/without needing a completed connect step.
+        // Query active runtime instances from the original process instance.
         List<ActiveRuntimeInstance> activeInstances = activeInstancesOf(twin, activityId);
 
         String twinActivityId = twin.findTwinActivityId(activityId).orElse(null);
@@ -1299,9 +1243,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     activeInstances);
         }
 
-        // Single fetch of every MetaML-owned variable currently on the twin instance (or, once it
-        // has ended, its history) - agentName/summary/output below all read from this one map
-        // rather than three separate engine round-trips.
+        // Fetch all variables in a single query from runtime or history.
         Map<String, Object> variables = readTwinVariables(twin);
 
         Object agentNameValue = variables.get(AgentVariables.evolvedAgent(twinActivityId, null));
@@ -1327,12 +1269,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 activeInstances);
     }
 
-    // Same identity space and same live-runtime source loopCounterOf()/originalExecutionIdForVisit()
-    // already use (ActivityInstance.getId() from runtimeService.getActivityInstance(), not
-    // currentVisitId()'s historic-query heuristic) - deliberately reused rather than a second
-    // identity-resolution mechanism. Returns one entry per currently-active sibling; empty when the
-    // original process has ended, hasn't reached this activity, or the activity has already
-    // completed (a completed visit is no longer part of the live ActivityInstance tree).
     private List<ActiveRuntimeInstance> activeInstancesOf(TwinProcess twin, String activityId) {
         ActivityInstance tree = runtimeService.getActivityInstance(twin.getOriginalProcessId());
         if (tree == null) {
@@ -1352,15 +1288,12 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return instances;
     }
 
-    // Same runtime-then-history fallback idiom as evolvedAgentVariableIsSet above, but returning
-    // every variable rather than testing one - an ended twin instance has nothing left in
-    // runtimeService, only in history.
+    // Reads runtime variables, falling back to history if the instance has already ended.
     private Map<String, Object> readTwinVariables(TwinProcess twin) {
         Map<String, Object> runtime = null;
         try {
             runtime = runtimeService.getVariables(twin.getTwinProcessId());
         } catch (ProcessEngineException e) {
-            // twin instance already ended - fall through to history below
         }
         if (runtime != null && !runtime.isEmpty()) {
             return runtime;
@@ -1374,10 +1307,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return historic;
     }
 
-    // Picks out exactly the twinAutomationOutput_<name>_<twinActivityId> variables for this one
-    // activity and strips the AgentVariables encoding back down to the bare output name a
-    // ComponentExecutor actually wrote (see AgentVariables#twinAutomationOutput) - deliberately
-    // NOT a raw variable dump: every other variable on the twin instance is ignored.
     private Map<String, Object> activityOutputsFrom(Map<String, Object> variables, String twinActivityId) {
         String prefix = "twinAutomationOutput_";
         String suffix = "_" + twinActivityId;
@@ -1392,19 +1321,15 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return output;
     }
 
-    // Best-effort FAILED signal reusing the twin's own event log rather than adding new tracking -
-    // the exact prefix advanceTwinActivity's catch block below writes when correlate()/
-    // messageEventReceived() throws for this activity.
+    // Check twin event log for execution failure prefix.
     private boolean activityFailedToExecute(TwinProcess twin, String twinActivityId) {
         String marker = "Twin activity " + twinActivityId + " failed to execute:";
         return twin.getEventLog().stream().anyMatch(line -> line.startsWith(marker));
     }
 
-    // Bridges and advances twin activity under concurrency control.
     private AgentDecision bridgeAndAdvance(TwinProcess twin, String twinProcessId, String activityId,
             String activityInstanceId) {
         if (activityInstanceId == null) {
-            // nothing to advance either way - bridgeOnce's own "not reached yet" skip covers this
             AgentDecision decision;
             try {
                 decision = bridgeOnce(twin, twinProcessId, activityId, null);
@@ -1414,13 +1339,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             return decision;
         }
 
-        // Integration hold. Checked here rather than inside bridgeOnce because the advance below
-        // deliberately runs whatever bridgeOnce decides (an evolution refused by governance says
-        // nothing about where the original's token is), so refusing only the evolution would still
-        // let the twin be advanced through the activity and execute it. Both have to be suppressed
-        // for the claim to mean anything. This does NOT break lockstep: the twin stays parked on
-        // this activity's own receive task, which is exactly where the original is - it is the
-        // correlation that would move it PAST the activity, and that is what is being deferred.
+        // Hold bridging if an integration claim is pending for this activity instance.
         String heldTwinActivityId = twin.findTwinActivityId(activityId).orElse(null);
         if (heldTwinActivityId != null && integrationPendingFor(twin, heldTwinActivityId,
                 loopCounterOf(twin, activityId, activityInstanceId))) {
@@ -1452,13 +1371,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 persistState();
             }
             try {
-                // Without resolving this, a parallel multi-instance activity with more than one open sibling always
-                // falls to the plain-correlate path below and throws MismatchingMessageCorrelationException - a caller
-                // with no live ExecutionEvent has no execution id to read the way AutoBridgeTrigger does.
+                // Resolve original execution ID so parallel multi-instance siblings correlate to their specific twin counterpart.
                 advanceTwinActivity(twinProcessId, activityId,
                         originalExecutionIdForVisit(twin, activityId, activityInstanceId));
             } catch (RuntimeException e) {
-                // the bridge itself worked and is already committed, so don't turn it into a failure - advanceTwinActivity has put the reason in the twin's event log already
+                // Log warning if advance fails; bridging decision remains recorded.
                 logger.warn("Bridged activity {} on twin {} but could not move the twin through it: {}",
                         activityId, twinProcessId, e.toString());
             }
@@ -1468,7 +1385,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         }
     }
 
-    // No claim of its own any more - bridgeAndAdvance above holds one claim across both this and the advance that follows it, so a second caller for the same visit never reaches this at all.
     private AgentDecision bridgeOnce(TwinProcess twin, String twinProcessId, String activityId,
             String activityInstanceId) {
         String twinActivityId = twin.findTwinActivityId(activityId).orElse(null);
@@ -1512,15 +1428,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 DEFAULT_BRIDGE_AGENT_TYPE);
     }
 
-    // Derived from Camunda's own history, not an in-memory set a restart would wipe. Two cases,
-    // because evolvedAgent_<twinActivityId> is only visit-unique in one of them: a multi-instance
-    // visit carries a loopCounter, so the name alone is enough; a plain activity revisited through a
-    // loop-back gateway reuses the same name, so compare which numbered visit this is against how
-    // many times the variable was actually SET.
-    // Count variable SETS, not automation completions - a failed automation rolls back its own task
-    // history but not the evolve write that already committed, so counting completions would
-    // re-evolve on every retry. See ADR-012.
-    // Not disambiguated: two concurrent tokens re-entering the same plain activity.
+    // Determines if this activity visit was already evolved, deriving state from history.
     private boolean alreadyEvolved(TwinProcess twin, String originalActivityId, String activityInstanceId,
             String twinActivityId, Object loopCounter) {
         if (loopCounter != null) {
@@ -1539,7 +1447,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             }
         }
         if (visitOrdinal < 0) {
-            // shouldn't happen - the caller already resolved this activityInstanceId from the same history - but treat "can't place this visit" as "not yet evolved" rather than guess
+            // Fall back to not-yet-evolved if visit ordinal cannot be determined.
             return false;
         }
         String evolvedAgentVariable = AgentVariables.evolvedAgent(twinActivityId, null);
@@ -1555,14 +1463,13 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return evolutionCount > visitOrdinal;
     }
 
-    // durable across restarts by construction - a row in the engine's own tables, not app memory - the same "shared Camunda runtime is the source of truth" invariant everything here depends on. Falls back to history for a twin that has since ended, where runtimeService has nothing left to read.
+    // Checks whether the evolved agent variable is set in runtime or historic variable instances.
     private boolean evolvedAgentVariableIsSet(TwinProcess twin, String evolvedAgentVariable) {
         try {
             if (runtimeService.getVariable(twin.getTwinProcessId(), evolvedAgentVariable) != null) {
                 return true;
             }
         } catch (ProcessEngineException e) {
-            // twin instance already ended - fall through to history below
         }
         return historyService.createHistoricVariableInstanceQuery()
                 .processInstanceId(twin.getTwinProcessId())
@@ -1570,10 +1477,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 .count() > 0;
     }
 
-    // The twin's copy of an activity is a receive task, so its token stops there; correlating that
-    // message runs the automation and carries the token to the next stop. None of the skips below are
-    // errors - gateways and end events have no message, an unconnected activity has no twin activity,
-    // and an original that has walked past its twin has nothing to correlate.
     @Override
     public TwinAdvance advanceTwinActivity(String twinProcessId, String activityId) {
         return advanceTwinActivity(twinProcessId, activityId, null);
@@ -1590,18 +1493,12 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             return TwinAdvance.skipped(null, "Activity " + activityId + " is not connected to a twin activity");
         }
 
-        // Parallel multi-instance can have more than one twin sibling waiting on the identical message at once - plain and sequential activities never do, so this only ever resolves to something when there's genuinely more than one candidate to choose between.
+        // In parallel multi-instance activities, resolve the specific twin execution sibling.
         String messageName = TwinModelGenerator.twinMessageName(twinActivityId);
         String parallelSiblingExecutionId = originalExecutionId == null ? null
                 : resolveParallelSibling(twin, messageName, originalExecutionId);
 
-        // The twin hasn't reached the target receive task yet. Rather than jumping
-        // the token there with startBeforeActivity() — which commits in its own Camunda
-        // command and creates an orphan execution if the subsequent correlation fails
-        // skip. The twin will reach the activity
-        // naturally as it processes earlier activities and flows through the BPMN structure.
-        // Gateway variables are set explicitly, so exclusive gateways evaluate
-        // correctly when the twin reaches them without needing a process modification jump.
+        // Skip advance if the twin has not yet reached the receive task.
         if (parallelSiblingExecutionId == null && !isTwinWaitingAt(twin, twinActivityId)) {
             logger.debug("TWIN_SKIP: twin {} is not waiting at {} — twin will reach it "
                     + "naturally when earlier activities complete",
@@ -1610,9 +1507,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     "Twin has not reached activity " + twinActivityId + " yet");
         }
 
-        // Its own budget, not reserveEvolutionSlot's: that one limits agent requests, this counts every
-        // step the twin takes. Reserved after the waiting check so gateways and end events, which have
-        // nothing to advance, spend nothing.
+        // Verifies twin execution quota before proceeding with activity advance.
         GovernanceDecision reservation = governanceService.reserveTwinExecutionSlot(twinProcessId);
         if (!reservation.isAllowed()) {
             twin.getEventLog().add("Twin activity " + twinActivityId
@@ -1623,17 +1518,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             return TwinAdvance.skipped(twinActivityId, reservation.getReason());
         }
 
-        // Set gateway variables from explicit simulation context or fail explicitly.
-        // The production path is handled by TwinAutomationDelegate, which propagates
-        // ComponentExecutor outputs as bare gateway variables during correlation (same
-        // transaction). Some executors also set variables directly via execution.setVariable()
-        // (e.g. CreditRiskAssessorExecutor sets agentFlaggedRisk). This pre-correlation block
-        // is ONLY for explicit simulation values — deterministic, observable, test-oriented
-        // values that the caller or test has stored in _simulationGatewayValues. If a required
-        // gateway variable has no simulation value and no executor produces it, the gateway
-        // will fail with PropertyNotFoundException (for bare ${var} patterns) or evaluate null
-        // (for execution.getVariable(...) patterns). This is correct: MetaML must not invent
-        // a business decision merely because the process requires one.
+        // Populate gateway variables from simulation context if configured.
         try {
             BpmnModelInstance originalModel = repositoryService.getBpmnModelInstance(
                     twin.getProcessDefinitionId());
@@ -1647,22 +1532,17 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 Map<String, Object> appliedSimulation = new java.util.LinkedHashMap<>();
                 Map<String, String> missingVars = new java.util.LinkedHashMap<>();
                 for (String varName : requiredVars) {
-                    // Check if already set on the twin (by a previous executor or earlier bridge)
                     Object existing = runtimeService.getVariable(twin.getTwinProcessId(), varName);
                     if (existing != null) {
                         logger.debug("Gateway variable '{}' already set to {} on twin {} — "
                                 + "production value preserved", varName, existing, twinProcessId);
                         continue;
                     }
-                    // Check explicit simulation context
                     Object simValue = simulationValues != null ? simulationValues.get(varName) : null;
                     if (simValue != null) {
                         runtimeService.setVariable(twin.getTwinProcessId(), varName, simValue);
                         appliedSimulation.put(varName, simValue);
                     } else {
-                        // No production value, no simulation value. The executor running during
-                        // correlation may still set it (production path). If it does not, the
-                        // gateway will fail explicitly — which is correct behavior.
                         missingVars.put(varName, "no simulation value — executor must provide or gateway fails");
                     }
                 }
@@ -1679,18 +1559,16 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 }
             }
         } catch (ProcessEngineException e) {
-            // Twin instance may have already ended — not fatal, the correlation below will
-            // decide whether advancement is still possible.
             logger.warn("Could not set gateway variables on twin {} for activity {}: {}",
                     twinProcessId, activityId, e.getMessage());
         }
 
         try {
             if (parallelSiblingExecutionId != null) {
-                // targets one named execution directly, bypassing correlate()'s ambiguity - the only way proven to release exactly one parallel sibling and leave the rest waiting, since correlate() throws the instant more than one execution matches
+                // Target specific execution directly to release exactly one parallel sibling.
                 runtimeService.messageEventReceived(messageName, parallelSiblingExecutionId);
             } else {
-                // scoped to this instance, so a second twin on the same definition waiting at the same activity is not a candidate and correlate() never has to pick between them
+                // Correlate message scoped to this twin process instance.
                 runtimeService.createMessageCorrelation(messageName)
                         .processInstanceId(twin.getTwinProcessId())
                         .correlate();
@@ -1713,11 +1591,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
 
     private static final String TWIN_AUTOMATION_INCIDENT_TYPE = "twinAutomationFailure";
 
-    // A real, Cockpit-visible Incident rather than a log line. The failed correlate() has already
-    // rolled back, so the twin's receive task and its subscription sit untouched and re-bridging the
-    // same activity is a safe retry.
-    // Deliberately not a retry loop: ProjectAutomationService.execute() carries no idempotency
-    // contract, so a blanket retry could double-invoke a billed or side-effecting agent. See ADR-008.
     private void recordTwinAutomationIncident(TwinProcess twin, String twinActivityId,
             String knownExecutionId, RuntimeException failure) {
         String executionId = knownExecutionId != null ? knownExecutionId
@@ -1731,7 +1604,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             runtimeService.createIncident(TWIN_AUTOMATION_INCIDENT_TYPE, executionId, twinActivityId,
                     failure.getMessage());
         } catch (RuntimeException incidentFailure) {
-            // the original failure is still the one that matters and is already logged/rethrown by the caller - losing the incident record isn't worth masking it with a different one
+            // Log warning if incident creation fails without suppressing the primary failure.
             logger.warn("Could not record an incident for twin activity {} on twin {}: {}",
                     twinActivityId, twin.getId(), incidentFailure.toString());
             return;
@@ -1740,10 +1613,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 twinActivityId, twin.getId(), executionId, failure.toString());
     }
 
-    // The same question isTwinWaitingAt answers as a boolean, but keeps the execution id so an incident
-    // can be attached to the right place. Uses the ActivityInstance tree, not getActiveActivityIds():
-    // that can return a scope execution which merely sees the activity through a descendant, and
-    // createIncident rejects it with "activity is null" because it needs the actual leaf.
+    // Resolves waiting execution ID via ActivityInstance tree.
     private String findWaitingExecutionId(TwinProcess twin, String twinActivityId) {
         ActivityInstance tree = runtimeService.getActivityInstance(twin.getTwinProcessId());
         if (tree == null) {
@@ -1757,11 +1627,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return null;
     }
 
-    // Picks which twin sibling matches the original execution that just started, by loopCounter - both
-    // sides create multi-instance children in the same order for the same cardinality.
-    // The read must be non-local: loopCounter lives on the per-iteration scope one level above the
-    // execution holding the subscription, so a local-only getVariable misses it.
-    // Null when there is nothing to disambiguate, leaving the single-candidate path untouched.
+    // Matches twin sibling executions by loopCounter in parent iteration scope.
     private String resolveParallelSibling(TwinProcess twin, String messageName, String originalExecutionId) {
         Object originalLoopCounter = runtimeService.getVariable(originalExecutionId, "loopCounter");
         if (originalLoopCounter == null) {
@@ -1787,7 +1653,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return null;
     }
 
-    // getActiveActivityIds rather than an activityId() execution query: inside a sequential multi-instance the token sits on a child execution, and the query would only match if we already knew which one to ask.
+    // Uses getActiveActivityIds to check child executions in multi-instance constructs.
     private boolean isTwinWaitingAt(TwinProcess twin, String twinActivityId) {
         for (Execution execution : runtimeService.createExecutionQuery()
                 .processInstanceId(twin.getTwinProcessId()).list()) {
@@ -1798,7 +1664,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return false;
     }
 
-    // without this the original parks at its first task forever and evolve/bridge never unblock completes everything open, not one named task - a parallel gateway leaves several
+    // Completes open tasks on the original process instance to advance execution.
     @Override
     public List<String> completeCurrentTasks(String twinProcessId) {
         TwinProcess twin = getTwinProcess(twinProcessId);
@@ -1810,20 +1676,14 @@ public class WorkbenchServiceImpl implements WorkbenchService {
     }
 
     private List<String> completeOpenTasks(TwinProcess twin, String twinProcessId) {
-        // user tasks first
         List<Task> tasks = taskService.createTaskQuery()
                 .processInstanceId(twin.getOriginalProcessId())
                 .list();
-        // external tasks (process-independent: any BPMN with camunda:type="external")
         List<ExternalTask> externalTasks = externalTaskService.createExternalTaskQuery()
                 .processInstanceId(twin.getOriginalProcessId())
                 .notLocked()
                 .list();
-        // Analyze BPMN to determine which gateway variables each external task topic must set.
-        // Without these variables, downstream exclusive gateways would fail with
-        // PropertyNotFoundException. The target platform's workers normally supply these;
-        // the Workbench supplies explicit simulation values at the same external-task-completion
-        // boundary — real Camunda process variables, not an EL-resolver fallback.
+        // Extract downstream gateway variables to supply default evaluation values if needed.
         Map<String, Set<String>> gatewayVarsByTopic = Map.of();
         if (!externalTasks.isEmpty()) {
             try {
@@ -1835,15 +1695,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                         twin.getOriginalProcessId(), e.getMessage());
             }
         }
-        // event subscriptions: signal/message catch events that block process advancement
         List<EventSubscription> eventSubscriptions = runtimeService.createEventSubscriptionQuery()
                 .processInstanceId(twin.getOriginalProcessId())
                 .list();
         if (tasks.isEmpty() && externalTasks.isEmpty() && eventSubscriptions.isEmpty()) {
-            // Fallback: if connected activities haven't been reached and normal advancement
-            // is blocked (e.g. by gateways with missing variables, timers, conditional events),
-            // use process instance modification to place a token at the target activity directly.
-            // Generic — works for any BPMN whose normal flow can't be replayed in the Workbench.
+            // Fallback: use process instance modification if normal flow advancement is blocked.
             List<String> jumped = new ArrayList<>();
             for (ActivityLink link : twin.getActivityLinks()) {
                 if (currentVisitId(twin, link.getOriginalActivityId()) == null) {
@@ -1872,12 +1728,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             return List.of();
         }
 
-        // each complete() is its own transaction, so this list can go stale mid-loop (a second request on the same twin, a branch finishing and taking its siblings with it) - task 3 blowing up used to throw away that tasks 1 and 2 really did complete
+        // Track completions across individual transactions to preserve progress on partial failure.
         List<String> completed = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
         RuntimeException firstRealFailure = null;
         for (Task task : tasks) {
-            // definition key == the BPMN activity id, what connect/evolve key on
             String label = task.getName() == null
                     ? task.getTaskDefinitionKey()
                     : task.getName() + " (" + task.getTaskDefinitionKey() + ")";
@@ -1888,11 +1743,10 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     break;
                 } catch (ProcessEngineException e) {
                     if (isTaskGone(task.getId())) {
-                        // somebody else completed it, or its branch got cancelled out from under us
                         skipped.add(label);
                         break;
                     }
-                    // still there means the command rolled back and nothing happened. two requests racing on a shared parallel join is the way to reproduce it. one retry.
+                    // Concurrency conflict on join gateway; retry once.
                     if (attempt == 2 && firstRealFailure == null) {
                         firstRealFailure = e;
                         logger.warn("Could not complete task {} ({}) on original instance {}: {}",
@@ -1915,12 +1769,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     skipped.size(), twin.getOriginalProcessId(), twinProcessId, skipped);
         }
 
-        // External tasks: complete each one directly by its id, supplying any gateway
-        // variables that the target-platform worker would normally set. The BPMN analysis
-        // (gatewayVarsByTopic above) maps each topic to the condition variables its downstream
-        // exclusive gateway expects. Setting them here — as real Camunda process variables at the
-        // external-task completion boundary — replaces the old EL-resolver Boolean.TRUE fallback
-        // with an explicit, observable simulation mechanism.
+        // Complete external tasks, passing required gateway variables from simulation context.
         String workerId = "metaml-workbench-advance-" + twinProcessId;
         for (ExternalTask et : externalTasks) {
             String etLabel = et.getActivityId() + " (topic: " + et.getTopicName() + ")";
@@ -1931,12 +1780,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 if (requiredVars.isEmpty()) {
                     externalTaskService.complete(et.getId(), workerId);
                 } else {
-                    // Use explicit simulation values instead of Math.random().
-                    // The _simulationGatewayValues process variable on the TWIN holds
-                    // deterministic values the caller or test has declared. These are
-                    // passed as real Camunda process variables at the external-task
-                    // completion boundary — the legitimate API for providing gateway
-                    // state on the original process.
+                    // Populate gateway variables from the twin's simulation context.
                     @SuppressWarnings("unchecked")
                     Map<String, Object> simulationContext = (Map<String, Object>) runtimeService
                             .getVariable(twin.getTwinProcessId(), AgentVariables.SIMULATION_GATEWAY_VALUES);
@@ -1947,10 +1791,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                         if (simValue != null) {
                             simulationVars.put(varName, simValue);
                         } else {
-                            // No explicit simulation value for this gateway variable.
-                            // The external task completes without it — the gateway will
-                            // fail explicitly with PropertyNotFoundException for bare ${var}
-                            // patterns, or evaluate null for execution.getVariable(...) patterns.
+                            // No explicit simulation value configured; complete without variable.
                             logger.warn("MISSING_SIMULATION: no explicit value for gateway "
                                     + "variable '{}' (topic '{}') on original {} — gateway may "
                                     + "fail explicitly",
@@ -1989,8 +1830,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             }
         }
 
-        // Event subscriptions: deliver pending signals/messages to advance past catch events.
-        // Generic — any BPMN with inter-process signal/message communication benefits.
+        // Deliver pending signals and messages to advance past catch events.
         for (EventSubscription sub : eventSubscriptions) {
             String subLabel = sub.getEventType() + ":" + sub.getEventName()
                     + " (activity: " + sub.getActivityId() + ")";
@@ -2017,12 +1857,12 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     .count();
             if (evtDelivered > 0) {
                 twin.getEventLog().add("Delivered " + evtDelivered
-                        + " event subscription(s) on original process instance "
-                        + twin.getOriginalProcessId());
+                    + " event subscription(s) on original process instance "
+                    + twin.getOriginalProcessId());
             }
         }
 
-        // only surface an error if nothing at all moved, otherwise the partial progress is real and the caller needs to know about it more than it needs the stack trace
+        // Surface error only if no task completed; partial progress is preserved.
         if (completed.isEmpty() && firstRealFailure != null) {
             throw firstRealFailure;
         }
@@ -2051,17 +1891,14 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         persistState();
     }
 
-    // Every guard against doing an activity twice keys on Camunda's activity instance id, because a loop
-    // or multi-instance activity returns under the same activity id. Callers that only know the activity
-    // id - the manual Bridge and Evolve buttons - must resolve it here or their guard looks at a different
-    // namespace than the auto-bridge's. Null means the original never got there.
+    // Resolves runtime activityInstanceId to distinguish loop iterations sharing an activity ID.
     private String currentVisitId(TwinProcess twin, String activityId) {
         List<HistoricActivityInstance> visits = historyService.createHistoricActivityInstanceQuery()
                 .processInstanceId(twin.getOriginalProcessId())
                 .activityId(activityId)
                 .orderByHistoricActivityInstanceStartTime().desc()
                 .list();
-        // one it's sitting on right now is what the button means. if it already walked past, the newest finished visit is the closest thing to what the caller is pointing at.
+        // Prefer the active visit; if already completed, fall back to the most recent completed visit.
         for (HistoricActivityInstance visit : visits) {
             if (visit.getEndTime() == null) {
                 return visit.getId();
@@ -2070,11 +1907,10 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return visits.isEmpty() ? null : visits.get(0).getId();
     }
 
-    // AgentExecutionDelegate reads loopCounter straight off the execution it's completing; over here all we have is the visit, so go the long way round to the same value. Null for a plain activity, which is what keeps its variable name short.
+    // Resolves loopCounter for the activity visit; null for non-multi-instance activities.
     private Object loopCounterOf(TwinProcess twin, String activityId, String activityInstanceId) {
         ActivityInstance tree = runtimeService.getActivityInstance(twin.getOriginalProcessId());
         if (tree == null) {
-            // original already ended, so nothing is holding a loop counter any more
             return null;
         }
         for (ActivityInstance visit : tree.getActivityInstances(activityId)) {
@@ -2085,10 +1921,40 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return null;
     }
 
-    // shared tail of evolve and bridge, both have already checked linked + reached by here
+    // The exact inverse of loopCounterOf above: given a loop index, recovers the genuine Camunda
+    // activity-instance id of the live sibling carrying it (MetaML Scope 6, Phase 5).
+    //
+    // A multi-instance activity has one activityId but many concurrently live visits, and the only
+    // thing that distinguishes them at runtime is the loopCounter local variable on each visit's
+    // own execution. evolveActivity's 4-arg overload exists precisely because currentVisitId()'s
+    // most-recently-started heuristic cannot tell concurrent siblings apart (see WorkbenchService)
+    // - so a capability gap opened for one specific sibling must carry that sibling's real
+    // activity-instance id, never a fabricated stand-in. A synthesized descriptor cannot be matched
+    // back against the runtime tree by loopCounterOf, which silently collapses the binding onto the
+    // unsuffixed evolvedAgent_<activity> variable that no sibling ever reads.
+    //
+    // Reuses activeInstancesOf - the repository's own existing (activityInstanceId, loopCounter)
+    // pairing over the live activity-instance tree, already used to offer operators a targeted
+    // sibling to evolve - rather than introducing a second traversal of the same data.
+    //
+    // Returns null when loopCounter is null (a non-multi-instance activity has no sibling to
+    // disambiguate, and the existing null-activityInstanceId behaviour is already correct there)
+    // and when no live sibling carries that loop index.
+    private String activityInstanceIdForLoopCounter(TwinProcess twin, String activityId, Integer loopCounter) {
+        if (loopCounter == null) {
+            return null;
+        }
+        for (ActiveRuntimeInstance instance : activeInstancesOf(twin, activityId)) {
+            if (loopCounter.equals(instance.loopCounter())) {
+                return instance.activityInstanceId();
+            }
+        }
+        return null;
+    }
+
     private AgentDecision runEvolution(TwinProcess twin, String twinProcessId, String activityId,
             String twinActivityId, Object loopCounter, String agentType) {
-        // governance before the node manager on purpose - it can deny a type the catalog is fine with
+        // Check platform governance slot reservation before invoking node manager.
         GovernanceDecision reservation = governanceService.reserveEvolutionSlot(twinProcessId, agentType);
         if (!reservation.isAllowed()) {
             twin.getEventLog().add("Evolution blocked by governance: " + reservation.getReason());
@@ -2099,9 +1965,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
 
         boolean evolutionSucceeded = false;
         try {
-            // Ask the tenant's own policy before anything the node manager or the twin would need
-            // rolled back. A twin with no tenant has no policy to ask, so it stays ungoverned here
-            // rather than being given a made-up tenant or silently denied.
+            // Enforce tenant policy if tenant is defined on the twin process.
             if (twin.getTenantId() != null) {
                 AgentDecision tenantDecision = enforceTenantPolicy(twin, activityId, twinProcessId, twinActivityId,
                         loopCounter, agentType);
@@ -2115,16 +1979,14 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             evolutionSucceeded = decision.isApproved();
             return decision;
         } finally {
-            // fairly sure every early return and throw lands here, but if usage ever reads wrong this pairing is the first thing I'd go look at
+            // Release platform evolution slot if evolution did not succeed.
             if (!evolutionSucceeded) {
                 governanceService.releaseEvolutionSlot(twinProcessId);
             }
         }
     }
 
-    // Returns null to mean "proceed as before" (ALLOW, or evaluation could not run); a real
-    // AgentDecision means stop here. Called inside runEvolution's try/finally, so a DENY or
-    // REQUIRE_APPROVAL still releases the platform slot already reserved.
+    // Evaluates tenant policy; returns null if evolution is permitted to proceed.
     private AgentDecision enforceTenantPolicy(TwinProcess twin, String activityId, String twinProcessId,
             String twinActivityId, Object loopCounter, String agentType) {
         GovernanceRequest request = new GovernanceRequest(twin.getTenantId(), EVOLVE_TWIN_ACTION,
@@ -2134,7 +1996,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         try {
             policyDecision = policyDecisionEngine.evaluate(request);
         } catch (NoSuchElementException | PolicyEvaluationException e) {
-            // the tenant record is gone, or a stored rule is malformed - a real evaluation failure, not "no policy". Fails closed for the same reason the engine itself never turns a failure into a silent ALLOW: a broken policy must not be able to let something through that no one actually approved.
+            // Fail closed on tenant policy evaluation error to prevent unauthorized execution.
             twin.getEventLog().add("Evolution blocked: tenant policy could not be evaluated: " + e.getMessage());
             logger.warn("Tenant policy evaluation failed for activity {} on twin {} (tenant {}): {}",
                     activityId, twinProcessId, twin.getTenantId(), e.getMessage());
@@ -2150,9 +2012,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     false, PolicyEffect.DENY.name());
         }
         if (policyDecision.decision() == PolicyEffect.REQUIRE_APPROVAL) {
-            // Pin the approval to THIS policy decision: resolving it later never re-evaluates, so a
-            // tenant activating a new version cannot retroactively change what it meant.
-            // loopCounter is stored as Integer so it survives the JSON round trip.
+            // Pin approval to the specific policy version and rule matched at evaluation time.
             Integer loopCounterValue = loopCounter instanceof Integer i ? i : null;
             Approval approval = approvalService.create(twin.getTenantId(), twinProcessId, activityId,
                     twinActivityId, loopCounterValue, agentType, EVOLVE_TWIN_ACTION, policyDecision.policyId(),
@@ -2166,17 +2026,13 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     "Approval required (id " + approval.id() + "): " + policyDecision.reason(), false,
                     PolicyEffect.REQUIRE_APPROVAL.name());
         }
-        // ALLOW - fall through, existing behavior continues unchanged
         return null;
     }
 
-    // The work an evolution actually does, once platform and tenant governance have both said yes.
-    // Extracted so the approval-resume path can run the same code without re-running enforceTenantPolicy:
-    // pinning the policy decision on the Approval is precisely what stops resolution from re-evaluating
-    // under whatever the tenant's policy says now.
     private AgentDecision executeAfterGovernance(TwinProcess twin, String twinProcessId, String activityId,
             String twinActivityId, Object loopCounter, String agentType) {
         String evolvedAgentVariable = AgentVariables.evolvedAgent(twinActivityId, loopCounter);
+        String evolvedAgentTypeVariable = AgentVariables.evolvedAgentType(twinActivityId, loopCounter);
         twin.getEventLog().add("Contacting node manager for agent type " + agentType);
 
         AgentAvailabilityResult availability;
@@ -2194,41 +2050,44 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     + " unavailable: " + availability.getReason());
             logger.info("Evolve blocked for activity {} on twin {} with agent type {}",
                     activityId, twinProcessId, agentType);
+            reportRuntimeCapabilityGapIfApplicable(twin, twinProcessId, activityId, loopCounter);
             return new AgentDecision(agentType, false, null, availability.getReason());
         }
 
-        // this variable is the only real effect an evolution has. if it doesn't land (usually the twin already ended) then nothing happened, so don't say approved.
+        // Evolution is only marked approved if the variable update was accepted by the engine.
         boolean variableSet = false;
+        // Captured BEFORE either write, so a durable-persistence failure below can restore EXACTLY
+        // this - a rebind's compensation must put the previous provider back, never merely clear the
+        // activity (P7 Step 5). "Present" is tracked separately from the value itself because
+        // Map.get returning null is ambiguous between "unset" and "genuinely set to null".
+        Map<String, Object> priorEvolvedVars;
+        try {
+            priorEvolvedVars = runtimeService.getVariables(twin.getTwinProcessId(),
+                    List.of(evolvedAgentVariable, evolvedAgentTypeVariable));
+        } catch (ProcessEngineException e) {
+            priorEvolvedVars = Map.of();
+        }
+        boolean priorAgentPresent = priorEvolvedVars.containsKey(evolvedAgentVariable);
+        Object priorAgentValue = priorEvolvedVars.get(evolvedAgentVariable);
+        boolean priorAgentTypePresent = priorEvolvedVars.containsKey(evolvedAgentTypeVariable);
+        Object priorAgentTypeValue = priorEvolvedVars.get(evolvedAgentTypeVariable);
+
         try {
             runtimeService.setVariable(twin.getTwinProcessId(), evolvedAgentVariable,
                     availability.getAgentName());
             // Store the agent type alongside the name so automation dispatch can fall back
             // to type-level executor matching for multi-instance parallel activities where
             // each sibling gets a distinct agent name from the catalog.
-            runtimeService.setVariable(twin.getTwinProcessId(),
-                    AgentVariables.evolvedAgentType(twinActivityId, loopCounter), agentType);
+            runtimeService.setVariable(twin.getTwinProcessId(), evolvedAgentTypeVariable, agentType);
             twin.getEventLog().add("Set process variable '" + evolvedAgentVariable
                     + "' = " + availability.getAgentName() + " on twin process instance "
                     + twin.getTwinProcessId());
             variableSet = true;
 
-            // The binding just changed, so any execution record still sitting on this visit was
-            // produced by whatever was bound BEFORE - not by the agent now bound. Leaving it in
-            // place makes getActivityExecutionState report the new agent name alongside the old
-            // executor's summary/output and still derive EXECUTED, which is the exact
-            // "validator-agent-01 says CreditRiskAssessorExecutor ran" mismatch. The lifecycle
-            // guard above only covers the ended-process case; this covers re-binding while the
-            // original is still running. Same "supersede what this activity previously reported"
-            // rule writeAgentOutputs already applies to evolvedAgentOutput_*, and it removes a
-            // now-false attribution rather than inventing an outcome: status simply returns to
-            // BOUND until the newly bound component actually runs.
+            // Clear prior execution records to prevent stale attribution before new execution runs.
             clearPriorExecutionRecord(twin, twinActivityId, loopCounter);
 
-            // The integration this activity was being held for has now resolved into an actual
-            // binding, so the hold is released and the next bridge advances the twin through the
-            // activity with THIS agent. Only a successful binding gets here: a governance denial
-            // or an unavailable agent returns earlier, leaving the claim in place so the refused
-            // component still does not execute and the default does not silently take over.
+            // Release the integration hold now that binding has resolved.
             releaseIntegrationClaim(twin, twinActivityId, loopCounter);
 
             writeAgentOutputs(twin, twinActivityId, loopCounter, availability.getOutputs());
@@ -2247,6 +2106,20 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                             + " could not be updated (it may have already ended), so no agent was assigned");
         }
 
+        // P7 Step 5: only non-loop-scoped evolutions feed the model-level, Workbench-authoritative
+        // CapabilityBinding registry a standalone Target Platform can read (GET /transmute/bindings) -
+        // see CapabilityBinding's own documentation for why loop-scoped visits are deliberately out of
+        // this store's scope. A loop-scoped evolution (loopCounter != null) still succeeds exactly as
+        // before; it simply does not additionally become a model-level current binding.
+        if (loopCounter == null) {
+            AgentDecision persistenceFailure = recordCapabilityBindingOrCompensate(twin, twinActivityId, agentType,
+                    availability, evolvedAgentVariable, evolvedAgentTypeVariable, priorAgentPresent, priorAgentValue,
+                    priorAgentTypePresent, priorAgentTypeValue);
+            if (persistenceFailure != null) {
+                return persistenceFailure;
+            }
+        }
+
         AgentDecision decision = new AgentDecision(agentType, true, availability.getAgentName(),
                 availability.getReason(), availability.isRiskFlagged(), null);
         twin.getEventLog().add("Node manager reports agent type " + agentType
@@ -2256,8 +2129,164 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return decision;
     }
 
-    // PENDING -> REJECTED. The governed action must never run - ApprovalService's own PENDING-only guard
-    // is what actually prevents a rejected approval from being resolved later.
+    // Populates the durable, model-level CapabilityBinding registry so a standalone Target Platform
+    // can retrieve this decision without knowing this Workbench twin instance's id (P7 Step 5). On a
+    // durable-persistence failure, restores the EXACT prior evolvedAgent_*/evolvedAgentType_* state
+    // captured before this evolution wrote anything - never a blind removal, which would destroy a
+    // still-valid previous binding on a rebind failure - and returns the AgentDecision the caller
+    // must report instead of success. Returns null when there is nothing to compensate for (no
+    // CapabilityBindingRegistry bean registered - the common case in a focused unit test - or the
+    // durable write succeeded).
+    private AgentDecision recordCapabilityBindingOrCompensate(TwinProcess twin, String twinActivityId,
+            String agentType, AgentAvailabilityResult availability, String evolvedAgentVariable,
+            String evolvedAgentTypeVariable, boolean priorAgentPresent, Object priorAgentValue,
+            boolean priorAgentTypePresent, Object priorAgentTypeValue) {
+        if (capabilityBindingRegistry == null) {
+            return null;
+        }
+        String processDefinitionKey;
+        try {
+            processDefinitionKey = processDefinitionKeyOf(twin.getTwinProcessId());
+        } catch (RuntimeException e) {
+            logger.warn("Could not resolve the process definition key for twin instance {} - capability "
+                    + "binding not recorded for activity {}: {}", twin.getTwinProcessId(), twinActivityId,
+                    e.getMessage());
+            return null;
+        }
+        if (processDefinitionKey == null) {
+            return null;
+        }
+        try {
+            CapabilityBinding binding = new CapabilityBinding(processDefinitionKey, twinActivityId,
+                    availability.getAgentName(), agentType, providerVersionOf(availability.getAgentName()),
+                    providerContractOf(availability.getAgentName()), null, Instant.now());
+            capabilityBindingRegistry.upsert(binding);
+            return null;
+        } catch (CapabilityBindingPersistenceException e) {
+            logger.error("Capability binding for activity {} could not be durably persisted; restoring the "
+                    + "prior binding state on twin instance {}: {}", twinActivityId, twin.getTwinProcessId(),
+                    e.getMessage(), e);
+            restorePriorEvolvedAgentState(twin.getTwinProcessId(), evolvedAgentVariable, evolvedAgentTypeVariable,
+                    priorAgentPresent, priorAgentValue, priorAgentTypePresent, priorAgentTypeValue);
+            return new AgentDecision(agentType, false, null,
+                    "Binding could not be durably persisted; no agent was assigned");
+        }
+    }
+
+    // Best-effort: a failure here is logged, not rethrown, so it can never mask the persistence
+    // failure that caused it to run. It is the smallest correct compensation given the actual
+    // transaction boundary here - the Camunda write already committed by the time persistence is
+    // attempted, so undoing it is a second, explicit write, not a rollback.
+    private void restorePriorEvolvedAgentState(String twinProcessId, String evolvedAgentVariable,
+            String evolvedAgentTypeVariable, boolean priorAgentPresent, Object priorAgentValue,
+            boolean priorAgentTypePresent, Object priorAgentTypeValue) {
+        try {
+            if (priorAgentPresent) {
+                runtimeService.setVariable(twinProcessId, evolvedAgentVariable, priorAgentValue);
+            } else {
+                runtimeService.removeVariable(twinProcessId, evolvedAgentVariable);
+            }
+            if (priorAgentTypePresent) {
+                runtimeService.setVariable(twinProcessId, evolvedAgentTypeVariable, priorAgentTypeValue);
+            } else {
+                runtimeService.removeVariable(twinProcessId, evolvedAgentTypeVariable);
+            }
+        } catch (RuntimeException compensationFailure) {
+            logger.error("Compensation failed while restoring prior capability binding state on twin instance "
+                    + "{} for {}/{}: {}", twinProcessId, evolvedAgentVariable, evolvedAgentTypeVariable,
+                    compensationFailure.getMessage(), compensationFailure);
+        }
+    }
+
+    // The BPMN process key (portable across engines, unlike a deployment-specific process definition
+    // id) of the process definition this twin process instance is currently running - the identity a
+    // standalone generated Target Platform can also derive for itself from its own bundled BPMN, and
+    // therefore the only identity CapabilityBinding can safely be keyed by.
+    private String processDefinitionKeyOf(String twinProcessInstanceId) {
+        ProcessInstance instance = runtimeService.createProcessInstanceQuery()
+                .processInstanceId(twinProcessInstanceId).singleResult();
+        if (instance == null) {
+            return null;
+        }
+        ProcessDefinition definition = repositoryService.getProcessDefinition(instance.getProcessDefinitionId());
+        return definition == null ? null : definition.getKey();
+    }
+
+    // Binding-time provider version/contract snapshot, resolved from the same catalog
+    // CatalogCapabilityOutputContractSource already reads - never re-resolved live by the Target
+    // Platform later (see CapabilityBinding's own documentation on why).
+    private String providerVersionOf(String providerId) {
+        com.metaml.workbench.capability.CapabilityProvider provider = catalogProviderFor(providerId);
+        return provider == null ? null : provider.version();
+    }
+
+    private com.metaml.workbench.capability.CapabilityContract providerContractOf(String providerId) {
+        com.metaml.workbench.capability.CapabilityProvider provider = catalogProviderFor(providerId);
+        return provider == null
+                ? new com.metaml.workbench.capability.CapabilityContract(null, Set.of(), Set.of(),
+                        com.metaml.workbench.capability.ExecutionMode.SYNCHRONOUS, Map.of(), Set.of())
+                : provider.contract();
+    }
+
+    private com.metaml.workbench.capability.CapabilityProvider catalogProviderFor(String providerId) {
+        if (providerId == null) {
+            return null;
+        }
+        try {
+            for (com.metaml.workbench.capability.CapabilityProvider provider : listCapabilityProviders()) {
+                if (provider.providerId().equals(providerId)) {
+                    return provider;
+                }
+            }
+        } catch (RuntimeException e) {
+            logger.warn("Could not resolve provider '{}' from the capability catalog: {}", providerId,
+                    e.getMessage());
+        }
+        return null;
+    }
+
+    // MetaML Scope 6, Phase 5: runtime capability-gap detection seam. Called only from the existing
+    // node-manager agent-availability failure branch above - the one point in the existing runtime
+    // architecture where the platform already knows a requested provider is unavailable. Delegates
+    // the actual capability-vs-catalog determination to CapabilityGapService (whether some OTHER
+    // provider could still satisfy the activity, in which case this is not a gap at all); this
+    // method only resolves the values CapabilityGapService needs from data already available here.
+    // No-op when no CapabilityGapService bean is registered (tests, by default) or on any failure -
+    // never allowed to change the AgentDecision already being returned or block the caller.
+    // The gap's per-visit identity is the genuine Camunda activity-instance id, resolved from the
+    // loop index this evolution is actually running for (see activityInstanceIdForLoopCounter);
+    // it is deliberately not a descriptor synthesized from the activity id and loop counter, since
+    // CapabilityGapService.bind feeds this value straight back into evolveActivity, which can only
+    // match a real activity-instance id against the live runtime tree.
+    private void reportRuntimeCapabilityGapIfApplicable(TwinProcess twin, String twinProcessId,
+            String activityId, Object loopCounter) {
+        CapabilityGapService gapService = capabilityGapService == null ? null : capabilityGapService.getIfAvailable();
+        if (gapService == null) {
+            return;
+        }
+        try {
+            BpmnModelInstance originalModel = repositoryService.getBpmnModelInstance(twin.getProcessDefinitionId());
+            if (originalModel == null) {
+                return;
+            }
+            Integer loopCounterValue = loopCounter instanceof Integer i ? i : null;
+            // The gap's activityInstanceId must be a genuine Camunda activity-instance id, because
+            // CapabilityGapService.bind hands it straight back to evolveActivity's 4-arg overload,
+            // which resolves the visit's loopCounter from it against the live activity tree. For a
+            // non-multi-instance activity there is no sibling to disambiguate and null is already
+            // the correct, proven value (evolveOnce then resolves the single current visit itself);
+            // for a multi-instance one it is resolved from the loop index the evolution is
+            // genuinely running for.
+            String visitId = activityInstanceIdForLoopCounter(twin, activityId, loopCounterValue);
+            gapService.reportRuntimeGapIfUnsatisfied(originalModel, activityId, twin.getModelId(), visitId,
+                    loopCounterValue, twinProcessId, twin.getTenantId(), GapOrigin.RUNTIME_WORKBENCH_TWIN);
+        } catch (RuntimeException e) {
+            logger.warn("Could not evaluate capability-gap detection for activity {} on twin {}: {}",
+                    activityId, twinProcessId, e.getMessage());
+        }
+    }
+
+    // Reject pending approval; prevents subsequent resolution.
     @Override
     public AgentDecision rejectApproval(String approvalId, String tenantId) {
         Approval approval = approvalService.markRejected(approvalId, tenantId);
@@ -2271,10 +2300,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 ApprovalStatus.REJECTED.name());
     }
 
-    // PENDING -> APPROVED -> COMPLETED|FAILED. markApproved is the atomic gate: a second approve on the
-    // same id throws before this touches the twin or the node manager, so the side effect happens at
-    // most once. The platform quota is reserved freshly here - the original reservation was released
-    // when REQUIRE_APPROVAL paused it.
+    // Transitions approval to APPROVED to prevent duplicate execution.
     @Override
     public AgentDecision approveEvolution(String approvalId, String tenantId) {
         Approval approval = approvalService.markApproved(approvalId, tenantId);
@@ -2321,19 +2347,57 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         return approvalService.listForTenant(tenantId);
     }
 
-    // Reconciled both ways, not just written. Re-evolving with an ordinary agent after a credit-risk run
-    // otherwise left the old risk flag in place and the process kept escalating, while the twin showed a
-    // plain agent with nothing wrong. The index variable is what makes the previous outputs knowable.
-    // Removes the twinAutomation_/twinAutomationOutput_* record TwinAutomationDelegate wrote for
-    // THIS visit of THIS activity, so a re-binding cannot leave the previous component's results
-    // attributed to the newly bound one. Scoped exactly like activityOutputsFrom reads them -
-    // same prefix and same per-visit suffix - so a different activity's record, and a different
-    // visit of this same activity (which carries its own loopCounter in the name), are untouched.
-    // Removing a variable that was never set is a no-op, so a first-time evolution costs nothing.
+    // MetaML Scope 6, Phase 5: the execution-driven BOUND -> RESOLVED hook. Called only from
+    // TwinAutomationDelegate, only after CapabilityOutputPropagator.publish has already returned
+    // normally for this visit - so only a provider that actually ran and passed the Phase 4 output
+    // contract ever reaches here. No-op when no CapabilityGapService is wired (see the field javadoc
+    // above) or when this visit has no matching BOUND gap - CapabilityGapService itself is
+    // responsible for making that determination and for the lifecycle transition.
+    //
+    // executedProviderId is forwarded exactly as TwinAutomationDelegate resolved it, never
+    // re-derived here: this method has no way of knowing which provider that delegate actually
+    // dispatched to, and inventing a second derivation would reintroduce the very ambiguity the
+    // parameter exists to remove.
+    @Override
+    public void notifyCapabilityProviderExecutionSucceeded(String twinProcessId, String activityId,
+            Object loopCounter, String executedProviderId) {
+        CapabilityGapService gapService = capabilityGapService == null ? null : capabilityGapService.getIfAvailable();
+        if (gapService == null) {
+            return;
+        }
+        Integer loopCounterValue = loopCounter instanceof Integer i ? i : null;
+        try {
+            gapService.onProviderExecutionSucceeded(twinProcessId, activityId, loopCounterValue, executedProviderId);
+        } catch (RuntimeException e) {
+            // A capability-gap bookkeeping failure must never fail the automation that already
+            // succeeded - the provider output has already been validated and published by this
+            // point, so the twin's process token must still be allowed to advance.
+            logger.warn("Could not update capability gap lifecycle for twin {} activity {}: {}", twinProcessId,
+                    activityId, e.getMessage());
+        }
+    }
+
+    // P7 Step 5: what GET /transmute/bindings serves. Reads only the durable, model-level registry
+    // recordCapabilityBindingOrCompensate populates - never the Workbench's own live twin-instance
+    // process variables, which is precisely the thing a standalone Target Platform cannot address (it
+    // shares no processInstanceId/activityInstanceId space with this Workbench). Activities with no
+    // current binding are simply absent from the result.
+    @Override
+    public List<CapabilityBinding> listCapabilityBindings(String processDefinitionKey, List<String> activityIds) {
+        if (capabilityBindingRegistry == null || processDefinitionKey == null || activityIds == null) {
+            return List.of();
+        }
+        List<CapabilityBinding> result = new ArrayList<>();
+        for (String activityId : activityIds) {
+            capabilityBindingRegistry.current(processDefinitionKey, activityId).ifPresent(result::add);
+        }
+        return result;
+    }
+
+    // Clears prior execution variables for the activity instance visit.
     private void clearPriorExecutionRecord(TwinProcess twin, String twinActivityId, Object loopCounter) {
         String summaryVariable = AgentVariables.twinAutomation(twinActivityId, loopCounter);
-        // perVisit() is private to AgentVariables; recover the exact same encoding from the
-        // summary variable's own name rather than re-deriving the convention here.
+        // Suffix identifies variables scoped to this specific activity visit.
         String perVisitSuffix = "_" + summaryVariable.substring("twinAutomation_".length());
         String outputPrefix = "twinAutomationOutput_";
 
@@ -2341,7 +2405,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         try {
             variables = runtimeService.getVariables(twin.getTwinProcessId());
         } catch (ProcessEngineException e) {
-            // twin instance already ended - nothing live left to clear, and history is immutable
             return;
         }
 
@@ -2388,7 +2451,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     + " on twin process instance " + twin.getTwinProcessId());
         }
 
-        // absence means "this evolution reported nothing", same convention the outputs themselves use
+        // Remove index variable if no outputs were produced.
         if (current.isEmpty()) {
             runtimeService.removeVariable(twin.getTwinProcessId(), indexVariable);
         } else {

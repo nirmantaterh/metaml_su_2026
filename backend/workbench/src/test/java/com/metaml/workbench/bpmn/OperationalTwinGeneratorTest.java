@@ -71,7 +71,7 @@ class OperationalTwinGeneratorTest {
 
     @Test
     void aSecondUnrelatedSignalGatedBpmnAlsoGetsItsOwnOperationalTwinWithNoCodeChanges() {
-        // Different domain, different activity/signal names entirely - proves the derivation is
+        // Different domain, different activity/signal names entirely - verifies the derivation is
         // generic rather than shaped around one BPMN's vocabulary.
         String otherDomainBpmn = """
                 <?xml version="1.0" encoding="UTF-8"?>

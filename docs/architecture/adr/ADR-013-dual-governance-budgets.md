@@ -15,7 +15,7 @@ Two fully independent quotas, each with its own counter map and its own configur
 - **One shared counter for both** — the original, actual shape, and it broke immediately in practice: the `citibank-wire-transfer` walkthrough alone bridges seven activities on one twin, and — because every twin-execution step *also* triggers an evolution via the auto-bridge — sharing one counter against a hardcoded limit of 5 meant the sixth activity onward was refused with no cause visible to anyone watching the demo. Rejected once measured.
 - **A single, much larger shared counter** — would have papered over the immediate symptom without addressing the actual conceptual conflation: an evolution is a real external call (to the node manager, standing in for a paid/rate-limited agent request); a twin-execution step is the Twin's own token moving, which happens for *every* activity it passes through, including gateways in some counting paths. Treating them as the same budget means ordinary automation throughput silently eats the quota meant to bound external agent requests specifically.
 
-## Evidence
+## Verification
 
 `GovernanceServiceImpl`'s own constructor comment records the concrete failure mode that motivated the split, with the exact numbers (a 5-limit hardcoded default, a 7-activity walkthrough). `theTwinsOwnTokenWalksTheWireTransferAsTheOriginalIsCompleted` asserts both counters independently at the end of a full walkthrough (seven evolutions, seven twin executions on that particular model, arrived at via two separate counters, not because the numbers happen to coincide).
 
@@ -27,7 +27,7 @@ Two fully independent quotas, each with its own counter map and its own configur
 ## Consequences
 
 - Both counters use increment-then-rollback `AtomicInteger`s rather than check-then-increment, specifically to avoid a race where two concurrent requests both read "one slot left" and both take it — the same race-safety pattern applied uniformly to both budgets.
-- Neither counter map is ever cleaned up for a twin that has ended (`GovernanceServiceImpl`'s own `TODO`) — a pre-existing, open limitation (Phase 7 finding W8), not addressed by this decision.
+- Neither counter map is ever cleaned up for a twin that has ended (`GovernanceServiceImpl`'s own `TODO`) — an open limitation, not addressed by this decision.
 
 ## Future Reconsideration
 
