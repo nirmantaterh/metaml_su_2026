@@ -52,22 +52,7 @@ import com.metaml.workbench.store.WorkbenchStateStore;
 import com.metaml.workbench.workflow.WorkflowEventStore;
 import com.metaml.workbench.workflow.WorkflowStateTracker;
 
-// Scope 6 false-evidence hazard on a RUNNING original process.
-//
-// The lifecycle guard in evolveOnce() only blocks evolution when the ORIGINAL process instance has
-// ENDED. It deliberately does not (and should not) block evolution while the original is still
-// running. But an activity that has ALREADY been executed once on the twin - by the auto-bridge
-// with DEFAULT_BRIDGE_AGENT_TYPE, or by an earlier manual evolve+bridge - has already had
-// twinAutomation_<id> and twinAutomationOutput_*_<id> written by TwinAutomationDelegate. Nothing
-// in the codebase clears or invalidates those when the activity is subsequently re-bound to a
-// DIFFERENT agent, so getActivityExecutionState() combines the NEW agent name with the OLD
-// executor's summary/output and still derives status EXECUTED.
-//
-// That is exactly the reported "agent says validator-agent-01, output says CreditRiskAssessor"
-// mismatch - reproduced here on a still-running process, where the lifecycle guard does not apply.
-//
-// Not RedCollar/WireTransfer-specific: a two-task generic fixture, and the assertions are about
-// MetaML's own variable bookkeeping, not any process's business semantics.
+// Verifies that rebinding an activity ensures execution state reflects the active binding without stale outputs.
 class StaleExecutionStateOnRebindTest {
 
     @TempDir
@@ -104,9 +89,7 @@ class StaleExecutionStateOnRebindTest {
         RepositoryService repositoryService = engine.getRepositoryService();
         HistoryService historyService = engine.getHistoryService();
 
-        // Original: two sequential user tasks. The token completes task 1 and parks on task 2, so
-        // Task_Generic has a COMPLETED historic visit while the process instance is still RUNNING -
-        // precisely the state the lifecycle guard permits evolution in.
+        // Advance past first task so its visit is completed while process remains running.
         String originalBpmn = """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -127,7 +110,6 @@ class StaleExecutionStateOnRebindTest {
                 .addModelInstance("process_stale_original.bpmn", readModel(originalBpmn)).deploy();
         ProcessInstance originalPi = runtimeService.startProcessInstanceByKey("process_stale_original");
         originalProcessInstanceId = originalPi.getId();
-        // advance past Task_Generic so its visit is COMPLETED but the instance is still RUNNING
         engine.getTaskService().complete(engine.getTaskService().createTaskQuery()
                 .processInstanceId(originalProcessInstanceId).singleResult().getId());
 
@@ -202,9 +184,7 @@ class StaleExecutionStateOnRebindTest {
         }
     }
 
-    // Simulates exactly what TwinAutomationDelegate persists after a FIRST execution of this
-    // activity (see TwinAutomationDelegate#execute lines 53-58): the executor summary plus its
-    // outputs, keyed per twin activity id.
+    // Sets execution variables matching TwinAutomationDelegate completion state.
     private void simulatePriorExecutionBy(String executorName, Map<String, Object> outputs) {
         runtimeService.setVariable(twinProcessInstanceId,
                 AgentVariables.twinAutomation(TWIN_ACTIVITY_ID, null),
@@ -223,25 +203,18 @@ class StaleExecutionStateOnRebindTest {
 
     @Test
     void rebindingAnAlreadyExecutedActivityOnARunningProcessMustNotReportThePriorExecutorsOutput() {
-        // 1. A prior execution already ran and persisted its record (auto-bridge or earlier evolve).
         simulatePriorExecutionBy("CreditRiskAssessorExecutor",
                 Map.of("executor", "CreditRiskAssessorExecutor", "riskScore", 85, "riskFlagged", true));
 
-        // Precondition: that prior execution is visible, as it should be.
         TwinActivityExecutionState before = service.getActivityExecutionState(TWIN_ID, ACTIVITY_ID);
         assertThat(before.getStatus()).isEqualTo("EXECUTED");
         assertThat(before.getSummary()).contains("CreditRiskAssessorExecutor");
 
-        // 2. The AI-integrate flow now re-binds the SAME activity to a DIFFERENT component. The
-        // original process is still RUNNING, so the lifecycle guard correctly permits this.
         stubCatalog("validator", "validator-agent-01");
         AgentDecision decision = service.evolveActivity(TWIN_ID, ACTIVITY_ID, "validator");
         assertThat(decision.isApproved()).isTrue();
         assertThat(decision.getAgentName()).isEqualTo("validator-agent-01");
 
-        // 3. The reported state must not attribute the PRIOR executor's summary/output to the
-        // NEWLY bound agent. The newly bound agent has not run yet, so the truthful status is
-        // BOUND with no output - not EXECUTED carrying another component's results.
         TwinActivityExecutionState after = service.getActivityExecutionState(TWIN_ID, ACTIVITY_ID);
 
         assertThat(after.getAgentName()).isEqualTo("validator-agent-01");
@@ -256,8 +229,6 @@ class StaleExecutionStateOnRebindTest {
                 .isEmpty();
     }
 
-    // Re-binding to the SAME agent must behave identically: the prior record still describes a run
-    // that happened before this new binding, and no new execution has occurred since.
     @Test
     void rebindingToTheSameAgentAlsoClearsThePriorExecutionRecord() {
         simulatePriorExecutionBy("ValidatorExecutor",
@@ -272,8 +243,6 @@ class StaleExecutionStateOnRebindTest {
         assertThat(after.getOutput()).isEmpty();
     }
 
-    // Guard against over-clearing: a FIRST-TIME evolution of an activity that has no prior
-    // execution record must be unaffected, and must not disturb a DIFFERENT activity's record.
     @Test
     void evolutionDoesNotDisturbADifferentActivitysExecutionRecord() {
         String otherTwinActivityId = "Task_Other_twin";

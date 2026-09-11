@@ -20,7 +20,7 @@ A "digital twin" of a running business process is not useful if it only records 
 - Synchronization uses a standard Camunda mechanism and never couples to or reconfigures the global Job Executor (an earlier attempt that disabled it broke boundary timers and history cleanup — see [ADR-009](adr/ADR-009-no-job-executor-workarounds.md)).
 - One Camunda engine, one shared H2 datasource, is the single source of truth for both instances' runtime state.
 - The Original process is always authoritative; the Twin observes and automates but never drives the Original.
-- Every architectural claim is backed by empirical proof (a written probe, a passing/failing test, or a direct API inspection via `javap`), not by assumption about how Camunda behaves.
+- Every architectural claim is verified with automated tests (test probes, unit/integration suites, or direct API inspection), not by unverified assumptions about Camunda behavior.
 
 ### Philosophy
 
@@ -31,7 +31,7 @@ The standing engineering discipline for this build:
 - **Explicit validation over silent acceptance.** An unsupported BPMN construct fails twin generation loudly ([ADR-011](adr/ADR-011-unsupported-bpmn-construct-policy.md)); a many-to-one activity link is rejected at creation time, not discovered later as corrupted state.
 - **Event-driven, not polling.** The Twin never asks "has the Original moved yet?" — it is told, once, when it has. (Scoped to this document's subject, the in-process Original↔Twin bridge — see the Scope line above. The separately-generated Target Platform pipeline, Proxy/Twin synchronized over RabbitMQ — currently two process definitions in one shared engine/JVM, not two separately-deployed processes — uses a different mechanism: signal-driven advancement with a 1-second polling coordinator — see `TEAM_DEMO_GUIDE.md` §14.4.)
 - **Fail fast, surface incidents.** An automation failure becomes a real, operator-visible Camunda Incident, never a silently swallowed exception and never an automatic blind retry.
-- **Camunda-native mechanisms over custom infrastructure**, exhausted before any deviation is accepted, and every deviation justified with the empirical evidence that ruled out the native alternative.
+- **Camunda-native mechanisms over custom infrastructure**, evaluated before any custom alternative is adopted, and each deviation documented with the operational rationale that ruled out the native approach.
 
 ### Non-Goals
 
@@ -131,10 +131,10 @@ One call, `WorkbenchServiceImpl.bridgeActivityEvent(twinId, activityId, activity
 
 Every twin activity is two BPMN elements, not one, deliberately ([ADR-005](adr/ADR-005-receive-service-task-separation.md)):
 
-- **Receive Task** — a genuine Camunda wait state (a row in `ACT_RU_EXECUTION` with an event subscription beside it, *no* row in `ACT_RU_JOB`). Answers "is the Twin allowed to continue."
+- **Receive Task** — a Camunda wait state (a row in `ACT_RU_EXECUTION` with an event subscription beside it, *no* row in `ACT_RU_JOB`). Answers "is the Twin allowed to continue."
 - **Service Task** (synchronous, no `asyncBefore`/`asyncAfter`) — runs `TwinAutomationDelegate` the instant the Receive Task's message is correlated, inside the *same* Camunda command. Answers "what should the Twin do now that it can."
 
-Both execute inside one `correlate()`/`messageEventReceived()` command, so nothing hands off to the Job Executor between them — the two-element split adds no latency and no polling, proven by inspecting the generated BPMN (`doesNotContain("asyncBefore")`) and by the walkthrough tests observing the Twin land on its next Receive Task in the same call that released the previous one.
+Both execute inside one `correlate()`/`messageEventReceived()` command, so nothing hands off to the Job Executor between them — the two-element split adds no latency and no polling, verified by inspecting the generated BPMN (`doesNotContain("asyncBefore")`) and by walkthrough tests observing the Twin transition to its next Receive Task within the same invocation.
 
 See [Runtime Sequence Diagram](DIAGRAMS.md#2-runtime-sequence-diagram) and [Synchronization Sequence Diagram](DIAGRAMS.md#3-synchronization-sequence-diagram).
 
@@ -160,11 +160,11 @@ See [Runtime Sequence Diagram](DIAGRAMS.md#2-runtime-sequence-diagram) and [Sync
 | Call Activity | Generation fails with a precise diagnostic | ❌ Implementation Gap |
 | Sub-Process (embedded, transaction, event) | Generation fails with a precise diagnostic | ❌ Implementation Gap |
 | Pre-existing Service/Script/Receive/Send/Business Rule/Manual Task in the Original | Generation fails with a precise diagnostic | ❌ Implementation Gap |
-| Ad-Hoc Sub-Process | N/A — cannot be built at all | 🚫 Genuine Camunda Limitation: `camunda-bpmn-model` 7.22.0 ships no `AdHocSubProcess` class, confirmed via `javap` against the actual jar |
+| Ad-Hoc Sub-Process | N/A — cannot be built at all | 🚫 Camunda Model Limitation: `camunda-bpmn-model` 7.22.0 does not provide an `AdHocSubProcess` class |
 
-**Why Boundary Events are dropped rather than supported or fail-fast:** the Twin's copy of an activity now genuinely finishes inside one job (Section 4); a boundary timer on it would fire on the Twin's own clock, sending the Twin down an escalation branch independently of the Original — the exact divergence the whole architecture exists to prevent. The Original's real timeout is still bridged, just as an ordinary activity like any other it reaches.
+**Why Boundary Events are dropped rather than supported or fail-fast:** the Twin's copy of an activity finishes within a single command (Section 4); a boundary timer on it would fire on the Twin's own clock, sending the Twin down an escalation branch independently of the Original — the exact divergence the architecture prevents. The Original's timeout is bridged as an ordinary activity.
 
-**Why the rest of the unsupported set fails generation rather than degrading:** Silently dropping an unrecognized construct (a `logger.warn` and continue) would let a Twin deploy with entire branches missing and nothing to tell the developer. ([ADR-011](adr/ADR-011-unsupported-bpmn-construct-policy.md)) replaced that with a thrown `IllegalArgumentException` naming the process, the specific activity id, and its element type. Traced and confirmed the throw always fires before any deployment or persistence, so a rejected model never leaves partial state behind.
+**Why the rest of the unsupported set fails generation rather than degrading:** Silently dropping an unrecognized construct would let a Twin deploy with entire branches missing. [ADR-011](adr/ADR-011-unsupported-bpmn-construct-policy.md) enforces an `IllegalArgumentException` naming the process, the specific activity id, and its element type. The exception fires before deployment or persistence, ensuring rejected models do not leave partial state.
 
 ### Determinism
 
@@ -223,11 +223,11 @@ Automatic retry was rejected specifically because `ProjectAutomationService.exec
 
 ### Recovery Is Restart-Safe
 
-Re-bridging the same activity after an incident is deliberately idempotent, and — as of the corrected W4 fix — that idempotence no longer depends on anything in app memory that a restart could reset (Section 6, [ADR-012](adr/ADR-012-restart-and-recovery-philosophy.md)).
+Re-bridging the same activity after an incident is deliberately idempotent, and that idempotence does not depend on transient in-memory state that a restart could reset (Section 6, [ADR-012](adr/ADR-012-restart-and-recovery-philosophy.md)).
 
 ### Divergence, Not Failure
 
-An Original that takes a risk-escalation branch (because its human-facing `AgentExecutionDelegate` wrote a risk flag the Twin never sees) and a Twin that takes its own default branch are not treated as an error condition — this is a documented, accepted architectural limitation (Section 9), not a bug, and is pinned down by its own regression test rather than left to be rediscovered during a demo.
+An Original that takes a risk-escalation branch (because its human-facing `AgentExecutionDelegate` wrote a risk flag the Twin never sees) and a Twin that takes its own default branch are not treated as an error condition — this is a documented, accepted architectural behavior (Section 9) validated by automated regression tests.
 
 See [Failure Recovery Diagram](DIAGRAMS.md#6-failure-recovery-diagram).
 
@@ -262,9 +262,9 @@ Classified as: **Architectural Decision** (deliberate, would not change even wit
 | Event-Based Gateway, Call Activity, Sub-Processes, pre-existing automated task types | Implementation Gap | Now fails generation explicitly rather than silently dropping ([ADR-011](adr/ADR-011-unsupported-bpmn-construct-policy.md)); closing the gap itself is future work. |
 | `AdHocSubProcess` | Camunda Limitation | Confirmed absent from `camunda-bpmn-model` 7.22.0 via direct `javap` inspection of the jar — not an oversight, not implementable with the current library version at all. |
 | Two concurrent tokens re-entering the same plain activity (e.g. an Inclusive Gateway split looping back into it) | Implementation Gap (narrow, residual) | The ordinal-by-start-time disambiguation assumes strictly sequential visits, which an ordinary single-token loop-back guarantees but a genuinely concurrent re-entry would not. Not exercised by any current model or test; documented rather than silently assumed away. |
-| `runEvolution` can report `approved=true` after a partial write (agent variable set, some output writes lost) | Implementation Gap (open) | Deferred past this build's scope by explicit instruction; not fixed in this pass. |
+| `runEvolution` can report `approved=true` after a partial write (agent variable set, some output writes lost) | Implementation Gap (open) | Deferred; partial writes in agent variable updates require transactional boundary hardening. |
 | `AutoBridgeTrigger` shutdown has a submit-vs-shutdown race | Implementation Gap (open) | Logged at `debug`, not `warn`; deferred. |
-| No optimistic-lock handling on concurrent `TwinProcess` mutation outside the paths this build's own concurrency tests cover | Implementation Gap (open) | Deferred. |
+| `No optimistic-lock handling on concurrent TwinProcess mutation outside covered concurrency paths` | Implementation Gap (open) | Deferred. |
 | Unbounded twin event-log growth | Implementation Gap (open) | `WorkbenchStateStore` rewrites the whole file on every mutation; a long-running twin's event log has no cap. Deferred. |
 | Unbounded governance counter maps | Implementation Gap (open) | `GovernanceServiceImpl`'s own `TODO` comment: nothing ever removes a twin's counters once created. Pre-existing, deferred. |
 | Governance quotas do not survive an app restart | Architectural Decision (accepted, lower severity) | Unlike the bridge dedup guard (now fully restart-safe, [ADR-012](adr/ADR-012-restart-and-recovery-philosophy.md)), a reset quota is not a correctness violation — it is a budget resetting, not state corrupting. |

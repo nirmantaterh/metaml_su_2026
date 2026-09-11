@@ -20,30 +20,7 @@ import java.beans.FeatureDescriptor;
 import java.util.Iterator;
 import java.util.Map;
 
-/**
- * Generic Camunda engine plugin that prevents process advancement from failing
- * when deployed BPMN definitions reference Spring beans (task listeners,
- * execution listeners, Java delegates) that exist only in the generated target
- * platform's Spring context and not in the Workbench's own context.
- *
- * <p>When the Workbench advances an original process instance (via completeOpenTasks),
- * Camunda evaluates expressions like {@code ${manufTaskCompletionListener}}. Without
- * this resolver those evaluations throw because the bean isn't registered here.
- * This plugin installs a fallback EL resolver at the END of the resolution chain
- * that supplies a no-op listener/delegate for any unresolved top-level bean name,
- * letting the process token advance without side effects.</p>
- *
- * <p>Fully generic: no process-specific logic. Any BPMN with missing beans benefits.
- * Normal Workbench beans and process variables are resolved first (by Spring and
- * Camunda's own resolvers); this fallback fires only when nothing else handles it.</p>
- *
- * <p>Process variables (gateway conditions like {@code ${orderApproved}}) are NOT
- * handled here. Those are set as explicit Camunda process variables at the external-task
- * completion boundary by {@code WorkbenchServiceImpl.completeOpenTasks}, which analyzes
- * the BPMN structure to determine which variables each external task feeds into downstream
- * gateways. A genuinely missing process variable will cause Camunda's own
- * {@code PropertyNotFoundException} — a clear failure, not a silently invented value.</p>
- */
+/** Registers a fallback EL resolver for unresolved Spring bean expressions during process advancement. */
 @Component
 class LenientElResolverPlugin extends AbstractCamundaConfiguration {
 
@@ -64,12 +41,8 @@ class LenientElResolverPlugin extends AbstractCamundaConfiguration {
                 "references will resolve to no-op listeners/delegates during process advancement");
     }
 
-    // ---- inner classes ----
 
-    /**
-     * Expression manager that appends a no-op fallback resolver after the standard
-     * Spring/Camunda resolver chain.
-     */
+    /** Appends a no-op fallback resolver after standard Spring/Camunda resolver chain. */
     static class LenientSpringExpressionManager extends SpringExpressionManager {
 
         LenientSpringExpressionManager(ApplicationContext ctx, Map<Object, Object> beans) {
@@ -84,12 +57,7 @@ class LenientElResolverPlugin extends AbstractCamundaConfiguration {
         }
     }
 
-    /**
-     * Fallback EL resolver that catches any top-level bean reference that nothing else
-     * in the chain could handle and returns a no-op implementation. Only fires for
-     * top-level resolution (base == null) which is how Camunda resolves
-     * {@code ${beanName}} expressions.
-     */
+    /** Fallback EL resolver for top-level bean references unresolved by standard managers. */
     static class NoOpFallbackElResolver extends ELResolver {
 
         private static final Logger log = LoggerFactory.getLogger(NoOpFallbackElResolver.class);
@@ -103,13 +71,7 @@ class LenientElResolverPlugin extends AbstractCamundaConfiguration {
                     context.setPropertyResolved(true);
                     return NoOpDelegate.INSTANCE;
                 }
-                // Not a bean name — leave unresolved. Gateway variables (orderApproved,
-                // qualityPassed, etc.) are now set as real Camunda process variables at the
-                // external-task completion boundary by WorkbenchServiceImpl.completeOpenTasks
-                // and advanceTwinActivity, which analyze the BPMN to determine which variables
-                // each activity feeds into downstream gateways. A genuinely missing variable
-                // will cause PropertyNotFoundException — a clear failure, not a silently
-                // invented value.
+                // Leave non-bean properties unresolved so missing process variables fail normally.
             }
             return null;
         }
@@ -134,9 +96,7 @@ class LenientElResolverPlugin extends AbstractCamundaConfiguration {
     }
 
     /**
-     * Singleton that implements every Camunda delegate/listener interface as a no-op.
-     * When the Workbench advances a process and hits an expression that references a
-     * target-platform bean, Camunda will invoke this instead — safely doing nothing.
+     * No-op delegate implementing JavaDelegate, TaskListener, and ExecutionListener.
      */
     static class NoOpDelegate implements JavaDelegate, TaskListener, ExecutionListener {
         static final NoOpDelegate INSTANCE = new NoOpDelegate();

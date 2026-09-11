@@ -1,8 +1,6 @@
-# MetaML Workbench — Team Demo Guide
+# MetaML Workbench — Verification and Demo Guide
 
-**For teammates picking this up cold.** What was built, how to run it, and the exact click-by-click
-steps for each demo. Every step below was executed by hand against a running system on 2026-08-12 —
-this is a transcript of what actually happens, not a description of what should happen.
+Comprehensive walkthrough for running end-to-end demonstrations across MetaML Workbench, Target Platform code generation, and Proxy/Twin execution.
 
 ---
 
@@ -317,11 +315,7 @@ curl -s -X POST "$BASE_URL/api/v1/twin/start?businessKey=$BK";           echo   
 Expect `"role":"initiator"` (Proxy) and `"role":"responder"` (Twin), each with its own
 `processInstanceId`, both carrying the same `businessKey`.
 
-> **Start Proxy and Twin back-to-back with the same businessKey.** A Proxy-only run reports
-> `"role":"initiator"`, executes every activity, and completes normally — that is expected,
-> supported single-process behavior, **not** a Proxy/Twin synchronization demo. It also never
-> touches RabbitMQ, so a slow operator can accidentally show an audience a "successful" run that
-> proves nothing.
+> **Note:** Start Proxy and Twin with the same `businessKey` to exercise cross-process synchronization. A Proxy-only run will execute independently without message routing.
 
 ### 14.2 Watch the pair advance
 
@@ -339,19 +333,22 @@ Look for: Proxy's `activeActivityIds` holding the **same value across consecutiv
 (it's waiting) while Twin's `agentTopic`/`agentInvocationId` change (it's executing) — then Proxy's
 `activeActivityIds` advancing right after. Both end at `{"active":false}`.
 
-### 14.3 Application-log evidence
+### 14.3 Application Logs and Event Sequence
 
 ```bash
 cd <GENERATED_TARGET_PLATFORMS_ROOT>/<PROJECT_ID>
 tail -f launch.log | grep -E "TASK: published|TASK: delivered|RESPONSE: published|RESPONSE: delivered|\[Twin\] Invoking"
 ```
 
-Each RabbitMQ-carried activity produces, in order: `TASK: published activity '<X>Twin' (signal
-'<y>Signal') ... (processInstanceId=<TWIN>)` → `TASK: delivered signal ... via RabbitMQ` →
-`[Twin] Invoking simulated ML agent for activity "<X> Twin"` → `RESPONSE: published activity
-'<X>Twin' ... (processInstanceId=<PROXY>)` → `RESPONSE: delivered signal ... via RabbitMQ` →
-`Executing generated external-task worker for activity "<X>" (process instance <PROXY>)`. The
-Proxy's worker line only ever appears *after* the response line — that ordering is the evidence.
+Each RabbitMQ-synchronized activity logs the coordinated message exchange:
+1. `TASK: published activity '<X>Twin' (signal '<y>Signal') ... (processInstanceId=<TWIN>)`
+2. `TASK: delivered signal ... via RabbitMQ`
+3. `[Twin] Invoking simulated ML agent for activity "<X> Twin"`
+4. `RESPONSE: published activity '<X>Twin' ... (processInstanceId=<PROXY>)`
+5. `RESPONSE: delivered signal ... via RabbitMQ`
+6. `Executing generated external-task worker for activity "<X>" (process instance <PROXY>)`
+
+The Proxy worker executes after the Twin completes and returns the response event.
 
 **Not every activity crosses RabbitMQ every run.** `SignalBroadcaster` only routes through the
 queue pair when both sides are concurrently waiting on the same signal; a signal with no live

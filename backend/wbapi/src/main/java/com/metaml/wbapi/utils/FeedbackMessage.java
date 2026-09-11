@@ -1,13 +1,11 @@
 package com.metaml.wbapi.utils;
 
 public class FeedbackMessage {
-    // ======================== Start General API feedback ========================
     public static final String SUCCESS = "Success!";
     public static final String RESOURCE_ALREADY_EXISTS = "Resource already exists";
     public static final String RESOURCE_FOUND = "Resource found";
     public static final String RESOURCE_NOT_FOUND = "Resource not found";
     public static final String ERROR = "Error occurred";
-    /* ======================== End General API feedback ======================== */
 
     public static final String CREATE_PROJECT_SUCCESS = "Saved successfully";
     public static final String UPDATE_PROJECT_SUCCESS = "Project updated succesfully!";

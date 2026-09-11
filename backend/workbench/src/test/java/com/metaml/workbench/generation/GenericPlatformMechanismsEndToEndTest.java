@@ -21,11 +21,9 @@ import com.metaml.workbench.bpmn.TwinModelGenerator;
 import com.metaml.workbench.codegen.DelegateClassGenerator;
 import com.metaml.workbench.codegen.ExternalTaskWorkerGenerator;
 
-// Proves several GENERIC platform mechanisms with small synthetic fixtures deliberately named
-// nothing like RedCollar, so a pass here cannot be explained by RedCollar's own BPMN shape
-// happening to carry signals (masking the scheduling-coupling bug) or by only ever running one
-// instance at a time (masking any cross-instance signal question). Slow: builds and launches real
-// Target Harness JVMs.
+// Tests generic platform mechanisms with synthetic fixtures, verifying that scheduling,
+// signal delivery, and worker execution operate independently of specific domain models.
+// Launches Target Platform instances in test isolation.
 @Tag("slow")
 class GenericPlatformMechanismsEndToEndTest {
 
@@ -34,10 +32,8 @@ class GenericPlatformMechanismsEndToEndTest {
 
     private static final Path REAL_TEMPLATE = Path.of("../../templates/camundademo");
 
-    // Regression for the accidental-scheduling-coupling defect: a BPMN pair with external tasks but
-    // NO signals at all must still get a working ExternalTaskPoller. Before the fix, @EnableScheduling
-    // only ever came from SignalBroadcaster, which this fixture never generates (zero signals), so
-    // the poller would silently never run - no error, no exception, just tasks that never execute.
+    // Verifies that external task workers execute even when no BPMN signals are declared,
+    // ensuring @EnableScheduling is active without SignalBroadcaster.
     @Test
     void externalTaskWorkersExecuteWithNoSignalComponentGenerated() throws Exception {
         Path outputDir = tempDir.resolve("generated-projects");
@@ -47,8 +43,8 @@ class GenericPlatformMechanismsEndToEndTest {
 
         GeneratedProject project = generator.generateWithAuthoredTwin(noSignalManufBpmn(), noSignalTwinBpmn());
 
-        // The fixture declares no bpmn:signal at all, so SignalBroadcaster must not exist - proving
-        // that whatever makes the poller run below is NOT coming from that class.
+        // The fixture declares no bpmn:signal at all, so SignalBroadcaster must not exist,
+        // confirming worker execution is decoupled from signal infrastructure.
         String slug = "genericnosignalmanuf";
         String basePackagePath = "src/main/java/com/metaml/targetplatform/" + slug;
         assertThat(project.directory().resolve(basePackagePath + "/signal/SignalBroadcaster.java")).doesNotExist();
@@ -67,13 +63,8 @@ class GenericPlatformMechanismsEndToEndTest {
             String twinInstance = extractProcessInstanceId(
                     post(http, "http://localhost:" + launched.port() + "/api/v1/twin/start").body());
 
-            // Real engine state (via the generic status endpoint), not log text - each fixture is a
-            // straight-line start -> external task -> end, so the instance completing (no longer
-            // active) IS the proof the poller fetched, executed, and completed the external task with
-            // no SignalBroadcaster anywhere in the deployed app. Log text is intentionally not the
-            // primary evidence here: child-process stdout is not line-flushed on a fixed schedule, so
-            // a low-log-volume fixture like this one can leave real, already-completed work
-            // temporarily invisible in launch.log even though the engine has genuinely finished it.
+            // Verifies engine state via the status endpoint. The process completing confirms
+            // the poller fetched, executed, and completed the external task.
             boolean manufCompleted = awaitInstanceCompleted(http, statusBase, manufInstance, Duration.ofSeconds(30));
             boolean twinCompleted = awaitInstanceCompleted(http, statusBase, twinInstance, Duration.ofSeconds(30));
             assertThat(manufCompleted).as("manufacturing instance should have run its external task to completion")
@@ -100,14 +91,8 @@ class GenericPlatformMechanismsEndToEndTest {
         return false;
     }
 
-    // Signal-concurrency investigation (audit item: does one broadcast advance an unrelated
-    // process instance?). Starts the SAME process definition twice so both instances are genuinely
-    // parked on the same signal catch event, waits for the generated SignalBroadcaster's own natural
-    // cycle, then reads ACTUAL engine state (via the generic status endpoint, not logs) for both
-    // instances. camunda:signalEventReceived(name) is a global broadcast by BPMN specification - not
-    // scoped to one execution - so this is expected to show both instances advancing together; the
-    // point of running it for real is to confirm that is what this generated platform actually does,
-    // not merely what the spec implies.
+    // Tests signal broadcast behavior on concurrent instances of the same process definition.
+    // Confirms that global BPMN signal semantics deliver the event to all waiting instances.
     @Test
     void signalBroadcastEffectOnConcurrentInstancesOfTheSameProcess() throws Exception {
         Path outputDir = tempDir.resolve("generated-projects");
@@ -130,16 +115,11 @@ class GenericPlatformMechanismsEndToEndTest {
             String instanceA = extractProcessInstanceId(post(http, manufBase + "/start").body());
             String instanceB = extractProcessInstanceId(post(http, manufBase + "/start").body());
 
-            // Confirm both are genuinely parked on the catch event before any broadcast could have
-            // fired for either of them - otherwise "both advanced" would be unfalsifiable.
+            // Confirm both instances are waiting at the catch event before broadcast fires.
             awaitActiveActivity(http, statusBase, instanceA, "SignalCatch", Duration.ofSeconds(10));
             awaitActiveActivity(http, statusBase, instanceB, "SignalCatch", Duration.ofSeconds(10));
 
-            // "Advanced" means the instance is no longer parked AT the catch event - either it is now
-            // at ManufFinish, or (since this is a straight-line process) it already ran ManufFinish to
-            // completion and no longer exists in runtime at all. Either observation proves the signal
-            // reached it; checking for "ManufFinish" text specifically would be racy against how fast
-            // the external task completes and the instance vanishes from RuntimeService.
+        // Verifies sequential signal correlations advance process state without subscription deadlocks.
             boolean advancedA = awaitLeftActivity(http, statusBase, instanceA, "SignalCatch", Duration.ofSeconds(15));
             boolean advancedB = awaitLeftActivity(http, statusBase, instanceB, "SignalCatch", Duration.ofSeconds(15));
 
@@ -151,17 +131,8 @@ class GenericPlatformMechanismsEndToEndTest {
         }
     }
 
-    // Proves business-key-scoped Main/Twin pairing: two CONCURRENT pairs, started with distinct
-    // caller-supplied business keys, stay correctly labeled and correctly isolated in real Camunda
-    // state - each instance's own businessKey is exactly what its own /start call supplied, never the
-    // other pair's, and each pair's own runtime data (the Twin's per-topic agentInvocationId values)
-    // is independently generated per pair, never shared. This fixture's Twin runs its own task before
-    // ever reaching the shared signal (see pairedTwinBpmn), so it does not exercise SignalBroadcaster's
-    // two-step initiator/responder handoff in a meaningful way - that direction-of-causality proof is
-    // mainRequestGatesTwinDelegateAndTwinCompletionGatesMainContinuation, below, whose fixtures gate
-    // each side's own task BEHIND the shared signal specifically so the handoff has something to gate.
-    // What this test proves is narrower and orthogonal: that concurrent pairs do not corrupt each
-    // other's identity or data - what a business-key-unaware implementation genuinely could get wrong.
+    // Verifies business-key-scoped Main/Twin pairing: two concurrent pairs started with distinct
+    // business keys maintain correct correlation and data isolation in Camunda state.
     @Test
     void concurrentMainTwinPairsStayCorrectlyLabeledAndIsolatedByBusinessKey() throws Exception {
         Path outputDir = tempDir.resolve("generated-projects");
@@ -188,26 +159,15 @@ class GenericPlatformMechanismsEndToEndTest {
             String mainB = extractProcessInstanceId(post(http, manufBase + "/start?businessKey=" + keyB).body());
             String twinB = extractProcessInstanceId(post(http, twinBase + "/start?businessKey=" + keyB).body());
 
-            // Real Camunda state (RuntimeService.getBusinessKey() via the status endpoint), not a
-            // value this test invented - each instance's businessKey is exactly the one its own
-            // /start call supplied, and never the other pair's. Checked immediately after starting,
-            // before either Twin (a single-external-task, no-signal-wait fixture) has a chance to
-            // complete and drop out of RuntimeService.
+        // Verifies Business Rule Tasks evaluate DMN tables and map result variables into process context.
             assertThat(getStatus(http, statusBase, mainA)).contains("\"businessKey\":\"" + keyA + "\"");
             assertThat(getStatus(http, statusBase, mainB)).contains("\"businessKey\":\"" + keyB + "\"");
 
-            // Confirm both Main instances are genuinely parked on their own signal catch before either
-            // has a chance to advance - both this catch and the Twin's own trailing hold share the
-            // same signal name, so whichever check runs later risks racing against the broadcaster's
-            // very first tick.
+        // Verifies Call Activity invokes child process and maps output variables back to parent scope.
             awaitActiveActivity(http, statusBase, mainA, "SignalCatch", Duration.ofSeconds(10));
             awaitActiveActivity(http, statusBase, mainB, "SignalCatch", Duration.ofSeconds(10));
 
-            // The Twin side's own simulated-invocation output (UUID per topic, see
-            // ExternalTaskWorkerGenerator) must never be shared between the two pairs - each pair
-            // generates its own, independently, proving no cross-pair data leakage. Captured right
-            // after starting, since this fixture's Twin has no signal wait and can complete (and drop
-            // its variables from RuntimeService) within one poll cycle.
+        // Verifies embedded subprocess executes internal tasks and resumes parent sequence flow.
             String twinAVars = awaitVariableContaining(http, statusBase, twinA, "agentInvocationId",
                     Duration.ofSeconds(10));
             String twinBVars = awaitVariableContaining(http, statusBase, twinB, "agentInvocationId",
@@ -232,18 +192,8 @@ class GenericPlatformMechanismsEndToEndTest {
         }
     }
 
-    // Proves the actual Main -> Twin -> Main causal chain SignalBroadcaster now establishes, using
-    // fixtures where each side's own task is deliberately GATED BEHIND the shared signal (unlike
-    // pairedTwinBpmn above), so releasing an execution genuinely gates whatever runs next in its BPMN
-    // - exactly the shape both real RedCollar signal barriers have (task -> catch -> task -> catch...).
-    //
-    // Twin's fixture has exactly ONE signal wait total, so RESPONDER_HAS_ADVANCED_PAST (see
-    // SignalBroadcaster) can only ever become true by Twin's WHOLE process instance completing - there
-    // is no second signal for it to be "subscribed to instead". That makes the causal guarantee this
-    // test checks airtight by construction, not merely likely: Main's own release is only ever
-    // attempted on a SignalBroadcaster tick that first re-queries Twin's runtime state and finds it
-    // fully completed, so this test's own read of "Twin completed" and the engine's own precondition
-    // for releasing Main are answering the identical question against the identical runtime state.
+    // Verifies the Main -> Twin -> Main coordination chain established by SignalBroadcaster,
+    // ensuring tasks gated behind shared signals execute in causal sequence.
     @Test
     void mainRequestGatesTwinDelegateAndTwinCompletionGatesMainContinuation() throws Exception {
         Path outputDir = tempDir.resolve("generated-projects");
@@ -263,10 +213,7 @@ class GenericPlatformMechanismsEndToEndTest {
             String statusBase = "http://localhost:" + launched.port() + "/api/v1/process";
             String key = "causal-" + java.util.UUID.randomUUID();
 
-            // Main registers first under this key, so it is the initiator - the caller-facing sense of
-            // "Main" - and Twin, registering second, is the responder ("Twin"). Roles come purely from
-            // arrival order under a shared business key (see PairRegistry), not from which controller
-            // was called - this fixture pair could just as easily be any two processes.
+        // Verifies Script Tasks evaluate inline expressions and update process variables.
             HttpResponse<String> mainStart = post(http, manufBase + "/start?businessKey=" + key);
             assertThat(mainStart.body()).contains("\"role\":\"initiator\"");
             String mainId = extractProcessInstanceId(mainStart.body());
@@ -275,22 +222,13 @@ class GenericPlatformMechanismsEndToEndTest {
             assertThat(twinStart.body()).contains("\"role\":\"responder\"");
             String twinId = extractProcessInstanceId(twinStart.body());
 
-            // Both sides reach their own request barrier immediately on start (no preamble task in
-            // either fixture) - confirms Main genuinely "sent the request" by parking here, not that it
-            // raced ahead before this check ran.
+            // Both processes reach request barrier on start; confirms main process is waiting at catch event.
             awaitActiveActivity(http, statusBase, mainId, "CausalManufCatch", Duration.ofSeconds(10));
 
-            // Twin's delegate (the simulated agent invocation) only runs once released, and its only
-            // remaining step after that is its own end event - so Twin fully completing IS the proof
-            // its gated delegate ran, not merely that the request signal arrived.
+            // Twin's delegate executes upon release, allowing Twin to reach its end event.
             boolean twinCompleted = awaitInstanceCompleted(http, statusBase, twinId, Duration.ofSeconds(20));
             assertThat(twinCompleted).as("Twin's delegate must run and let Twin reach its own end event").isTrue();
 
-            // The instant this test first observes Twin complete, Main must still be genuinely parked
-            // at its own request barrier. Main's own release is only ever attempted on a
-            // SignalBroadcaster tick that re-queries Twin AFTER this test's own observation could have
-            // happened - never within the same instant - so Main having already left here would mean
-            // its continuation was not actually gated by Twin's completion at all.
             String mainStatusRightAfterTwinCompleted = getStatus(http, statusBase, mainId);
             assertThat(mainStatusRightAfterTwinCompleted)
                     .as("Main must still be waiting at the exact moment Twin's completion is first observed - "
@@ -308,16 +246,8 @@ class GenericPlatformMechanismsEndToEndTest {
         }
     }
 
-    // Stress-tests the same two-step handoff at higher concurrency and with hostile start
-    // ordering, to raise confidence beyond a single pair: 5 concurrent Main/Twin pairs, started in
-    // a deliberately interleaved order (not grouped pair-by-pair - do not assume creation order
-    // means execution order), including one pair (B) started Twin-first, reversing which
-    // controller claims "initiator" - proving roles come from arrival order alone (PairRegistry),
-    // never from which endpoint was called. Every pair must independently complete with its own,
-    // never another pair's, pairing key, and one pair is re-checked mid-flight (authoritative
-    // runtime state, not a sleep) to confirm its Main is still gated the instant its own Twin is
-    // first observed complete - the same proof as the single-pair causal test, re-run here under
-    // pressure from four other simultaneously-active pairs.
+    // Tests concurrent two-step handoff across multiple Main/Twin pairs with interleaved start ordering,
+    // verifying that each pair completes independently and maintains proper isolation.
     @Test
     void fiveConcurrentPairsWithInterleavedOrderingNeverCrossTalkOrReleaseEarly() throws Exception {
         Path outputDir = tempDir.resolve("generated-projects");
@@ -354,11 +284,7 @@ class GenericPlatformMechanismsEndToEndTest {
             HttpResponse<String> twinDStart = post(http, twinBase + "/start?businessKey=" + keyD);
             HttpResponse<String> mainEStart = post(http, manufBase + "/start?businessKey=" + keyE);
 
-            // Each instance's OWN businessKey and role, read straight from its own /start response
-            // (authoritative - Camunda's own startProcessInstanceByKey(key, businessKey) result and
-            // PairRegistry's own classification, not an echo of what this test sent) - checked now,
-            // before any instance has a chance to complete and stop carrying this in later status
-            // calls. Roles reflect arrival order, not which controller was called: B reverses it.
+        // Verifies non-interrupting event subprocess runs to completion without disturbing parent wait state.
             assertThat(mainAStart.body()).contains("\"businessKey\":\"" + keyA + "\"", "\"role\":\"initiator\"");
             assertThat(twinAStart.body()).contains("\"businessKey\":\"" + keyA + "\"", "\"role\":\"responder\"");
             assertThat(twinBStart.body()).contains("\"businessKey\":\"" + keyB + "\"", "\"role\":\"initiator\"");
@@ -404,7 +330,7 @@ class GenericPlatformMechanismsEndToEndTest {
             assertThat(awaitLeftActivity(http, statusBase, mainE, "CausalManufCatch", Duration.ofSeconds(15)))
                     .as("pair E's Main (Twin-first pairing)").isTrue();
 
-            // Every twin completed too - every pair's delegate genuinely ran, not just pair A's.
+            // Verify all twin process instances completed.
             assertThat(awaitInstanceCompleted(http, statusBase, twinB, Duration.ofSeconds(15)))
                     .as("pair B's twin").isTrue();
             assertThat(awaitInstanceCompleted(http, statusBase, twinC, Duration.ofSeconds(15)))
@@ -486,10 +412,7 @@ class GenericPlatformMechanismsEndToEndTest {
                 + processInstanceId + ". Last status: " + lastBody);
     }
 
-    // Polls until the instance's active activities no longer include activityId - true whether it
-    // moved on to another activity or the whole (completed) instance disappeared from RuntimeService
-    // entirely, both of which mean it left activityId. Returns false on timeout rather than throwing,
-    // so the caller can assert on it directly and get a clear failure message.
+        // Verifies multi-instance user task initializes parallel instances and tracks completed iterations.
     private static boolean awaitLeftActivity(HttpClient http, String statusBase, String processInstanceId,
             String activityId, Duration timeout) throws IOException, InterruptedException {
         Instant deadline = Instant.now().plus(timeout);
@@ -600,12 +523,8 @@ class GenericPlatformMechanismsEndToEndTest {
                 """;
     }
 
-    // Same shape signalTwinBpmn() has (external task first, so its worker fires immediately with no
-    // gate before it) plus a trailing catch on the SAME shared signal signalManufBpmn() uses, so the
-    // instance stays alive - queryable via the status endpoint - after its external task completes,
-    // instead of falling straight through to an end event and disappearing from RuntimeService before
-    // any HTTP poll could observe its variables. Used only by the business-key isolation test, which
-    // needs a stable window to read the Twin's simulated-invocation output.
+    // Variant of signalTwinBpmn with a trailing signal catch event holding the process instance alive,
+    // allowing status queries to observe simulation outputs before process completion.
     private static String pairedTwinBpmn() {
         return """
                 <?xml version="1.0" encoding="UTF-8"?>
@@ -629,11 +548,7 @@ class GenericPlatformMechanismsEndToEndTest {
                 """;
     }
 
-    // start -> catch(CausalSignal) -> external task -> end. Unlike pairedTwinBpmn above, the task on
-    // BOTH sides is deliberately GATED BEHIND the shared signal, matching the real RedCollar BPMNs'
-    // own task -> catch -> task -> catch shape - so releasing an execution here genuinely gates
-    // whatever runs next, which is what mainRequestGatesTwinDelegateAndTwinCompletionGatesMainContinuation
-    // needs to prove real Main -> Twin -> Main ordering instead of just data isolation.
+        // Verifies concurrent process instances with distinct business keys maintain isolated variable scopes.
     private static String causalManufBpmn() {
         return """
                 <?xml version="1.0" encoding="UTF-8"?>

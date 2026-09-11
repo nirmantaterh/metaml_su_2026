@@ -70,7 +70,7 @@ const GovernanceApprovalsPage = () => {
 
     const shouldPoll = Boolean(tenantId) && pending.length > 0;
 
-    // Same pattern as ModelPage: gated on a boolean, immediate fetch when polling starts, plain setInterval at 1000ms, cleared on cleanup. No SSE/WebSocket infrastructure exists in this backend (confirmed in the Policies page's own audit) - polling is the correct choice here, not a shortcut around a real-time mechanism that was already available.
+    // Periodic refresh while pending approvals exist, using standard interval polling cleared on unmount.
     useEffect(() => {
         if (!shouldPoll) return undefined;
         let cancelled = false;

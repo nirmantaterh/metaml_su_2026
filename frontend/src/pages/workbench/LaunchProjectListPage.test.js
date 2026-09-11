@@ -55,6 +55,7 @@ describe("LaunchProjectListPage", () => {
         expect(screen.getByText("Generated / Stopped")).toBeInTheDocument();
         expect(screen.getByText("—")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Launch" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Go to Target Platform ↗" })).not.toBeInTheDocument();
     });
 
     test("Launch starts platform, auto-opens Cockpit, sets Running status with Open button, revealing Stop after Open click", async () => {
@@ -62,7 +63,11 @@ describe("LaunchProjectListPage", () => {
             { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
         ]);
         getWorkflowState.mockResolvedValue({ stages: { GENERATE: { status: "COMPLETED", detail: "gp-1" } } });
-        launchProject.mockResolvedValue({ port: 8091, processKey: "wireTransferReview" });
+        launchProject.mockResolvedValue({
+            port: 8091,
+            processKey: "wireTransferReview",
+            targetPlatformUrl: "https://tp.acme.internal/metaml",
+        });
         global.fetch.mockImplementation(async (url) => ({
             ok: true,
             json: async () =>
@@ -87,11 +92,15 @@ describe("LaunchProjectListPage", () => {
         expect(screen.queryByText("8091")).not.toBeInTheDocument();
         expect(screen.queryByText("Started")).not.toBeInTheDocument();
 
-        // Expanding details reveals port and started status
+        // Expanding details reveals engine and Target Platform endpoints.
         const expandBtn = screen.getByRole("button", { name: "Expand details" });
         userEvent.click(expandBtn);
         expect(screen.getByText("8091")).toBeInTheDocument();
         expect(screen.getByText("Started")).toBeInTheDocument();
+        expect(screen.getByText("https://tp.acme.internal/metaml")).toBeInTheDocument();
+        const targetPlatformButton = screen.getByRole("button", { name: "Go to Target Platform ↗" });
+        userEvent.click(targetPlatformButton);
+        expect(openCockpitUrl).toHaveBeenCalledWith("https://tp.acme.internal/metaml");
 
         // Initially shows Open button, Stop is NOT shown yet
         const openBtn = screen.getByRole("button", { name: "Open" });
@@ -100,7 +109,7 @@ describe("LaunchProjectListPage", () => {
 
         // Clicking Open re-opens Cockpit and reveals Stop button
         userEvent.click(openBtn);
-        expect(openCockpitUrl).toHaveBeenCalledTimes(2);
+        expect(openCockpitUrl).toHaveBeenCalledTimes(3);
         expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     });
 

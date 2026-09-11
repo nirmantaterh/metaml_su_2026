@@ -1,6 +1,5 @@
 package com.metaml.workbench.client;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -11,7 +10,6 @@ import java.util.Map;
 
 @Data
 @NoArgsConstructor
-@AllArgsConstructor
 public class AgentAvailabilityResult {
     private String agentType;
     private boolean available;
@@ -20,6 +18,32 @@ public class AgentAvailabilityResult {
     private Map<String, Object> outputs;
     private String description;
     private List<String> capabilities;
+    // Truthful process-variable I/O contract published by the provider operator, deserialized from
+    // the node manager's own AgentAvailabilityResponse (MetaML Scope 6, Provider Contract
+    // Authorship phase). type stays a plain String here - see IoDeclarationDescriptor;
+    // CapabilityProviderCatalogReader is the only place that converts it to IoType. Missing and
+    // explicitly empty configuration both canonicalize to an empty list here, never null.
+    private List<IoDeclarationDescriptor> requiredInputs;
+    private List<IoDeclarationDescriptor> producedOutputs;
+
+    public AgentAvailabilityResult(String agentType, boolean available, String agentName, String reason,
+            Map<String, Object> outputs, String description, List<String> capabilities,
+            List<IoDeclarationDescriptor> requiredInputs, List<IoDeclarationDescriptor> producedOutputs) {
+        this.agentType = agentType;
+        this.available = available;
+        this.agentName = agentName;
+        this.reason = reason;
+        this.outputs = outputs;
+        this.description = description;
+        this.capabilities = capabilities;
+        this.requiredInputs = requiredInputs == null ? List.of() : requiredInputs;
+        this.producedOutputs = producedOutputs == null ? List.of() : producedOutputs;
+    }
+
+    public AgentAvailabilityResult(String agentType, boolean available, String agentName,
+            String reason, Map<String, Object> outputs, String description, List<String> capabilities) {
+        this(agentType, available, agentName, reason, outputs, description, capabilities, List.of(), List.of());
+    }
 
     public AgentAvailabilityResult(String agentType, boolean available, String agentName,
             String reason, Map<String, Object> outputs) {

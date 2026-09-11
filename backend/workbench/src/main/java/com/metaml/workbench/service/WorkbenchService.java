@@ -85,26 +85,15 @@ public interface WorkbenchService {
 
     TwinProcess connectActivity(String twinProcessId, String originalActivityId, String twinActivityId);
 
-    // Claims an activity for component integration, so the auto-bridge holds the twin at it instead
-    // of autonomously binding DEFAULT_BRIDGE_AGENT_TYPE and running it the moment the original
-    // reaches it. Without this claim there is no window in which an integration can win: evolution
-    // is only legal once the activity has been reached, and that is exactly when the auto-bridge
-    // fires. A null activityInstanceId claims the activity as a whole (used when the claim is made
-    // before the activity has any runtime instance); a non-null one claims just that sibling.
-    // The claim is released by the evolution that binds an agent for the visit. An activity with no
-    // claim keeps today's autonomous default-bridge behavior unchanged.
+    // Claims an activity for component integration to pause auto-bridge advancement until manual evolution.
+    // Pass null activityInstanceId to claim all instances of the activity, or a specific ID for a single sibling.
     TwinProcess requestComponentIntegration(String twinProcessId, String activityId,
             String activityInstanceId);
 
     AgentDecision evolveActivity(String twinProcessId, String activityId, String agentType);
 
-    // Evolves one specific runtime sibling of a parallel (non-sequential) multi-instance
-    // activity. currentVisitId()'s most-recently-started heuristic (used by the 3-arg overload
-    // above) cannot distinguish between concurrently active siblings that share the same
-    // activityId; this overload trusts the caller-supplied activityInstanceId directly instead,
-    // the same runtime activity-instance identity bridgeActivityEvent(twinId, activityId,
-    // activityInstanceId) already accepts. A null activityInstanceId reproduces the 3-arg
-    // overload's existing behavior exactly.
+    // Evolves a specific runtime sibling of a parallel multi-instance activity using its activityInstanceId.
+    // When activityInstanceId is null, delegates to standard activity-level evolution.
     AgentDecision evolveActivity(String twinProcessId, String activityId, String activityInstanceId,
             String agentType);
 
@@ -122,10 +111,7 @@ public interface WorkbenchService {
     // Bridges an activity event for a specific visit instance.
     AgentDecision bridgeActivityEvent(String twinProcessId, String activityId, String activityInstanceId);
 
-    // Read-only: what the bound ComponentExecutor has actually done for this activity so far, if
-    // anything - bound agent, whether automation ran, and its real output. Never mutates twin or
-    // process state. Takes the ORIGINAL activity id, exactly like evolveActivity/
-    // bridgeActivityEvent above, and resolves the twin-side activity id internally.
+    // Core service contract for model management, twin lifecycle, governance, and project generation.
     TwinActivityExecutionState getActivityExecutionState(String twinProcessId, String activityId);
 
     // Advances a twin activity by correlating its receive message.
@@ -142,4 +128,46 @@ public interface WorkbenchService {
 
     // Lists available candidate agents from the authoritative Node Manager catalog.
     List<com.metaml.workbench.client.AgentAvailabilityResult> listAvailableAgents();
+
+    // Lists the same authoritative Node Manager catalog as CapabilityProvider records, so the
+    // Phase 0 CapabilitySatisfaction mechanism can evaluate it against a Phase 1-derived
+    // CapabilityContract requirement (MetaML Scope 6, Phase 2). Default so no other implementer of
+    // this interface (test doubles included) is forced to add it.
+    default List<com.metaml.workbench.capability.CapabilityProvider> listCapabilityProviders() {
+        return com.metaml.workbench.client.CapabilityProviderCatalogReader.toCapabilityProviders(
+                listAvailableAgents());
+    }
+
+    // Notifies the capability-gap lifecycle (MetaML Scope 6, Phase 5) that a provider bound to this
+    // twin activity visit just executed successfully and passed the Phase 4 capability output
+    // contract - the one event allowed to move a BOUND capability gap to RESOLVED. Called from
+    // TwinAutomationDelegate right after CapabilityOutputPropagator.publish returns normally; never
+    // called at all when execution fails or the output contract is violated, so those cases never
+    // resolve a gap (Phase 5 section 17). Default no-op so no other implementer of this interface
+    // (test doubles included) is forced to add it - the same convention listCapabilityProviders()
+    // above already establishes.
+    //
+    // executedProviderId is the identity of the provider that actually ran for this visit - the
+    // providerId of the CapabilityProvider TwinAutomationDelegate resolved and whose declared
+    // contract the Phase 4 boundary just enforced - or null when no provider contract governed this
+    // execution at all (the default/fallback automation path). It is carried here rather than
+    // re-derived downstream so the gap lifecycle compares the provider that genuinely executed
+    // against the one the gap is bound to; without it, "some automation succeeded at this visit"
+    // would be indistinguishable from "the bound provider executed", and default automation could
+    // resolve a gap it never satisfied.
+    default void notifyCapabilityProviderExecutionSucceeded(String twinProcessId, String activityId,
+            Object loopCounter, String executedProviderId) {
+    }
+
+    // The Workbench-authoritative, model-level current CapabilityBinding for each of the given
+    // activity ids of the given (portable, BPMN-key-addressed) process definition, as populated by
+    // WorkbenchServiceImpl.executeAfterGovernance from either evolution path (P7 Step 5). Activities
+    // with no current binding are simply absent from the result - never fabricated, never an error.
+    // Default empty so no other implementer of this interface (test doubles included) is forced to
+    // add it, the same convention listCapabilityProviders() and
+    // notifyCapabilityProviderExecutionSucceeded above already establish.
+    default List<com.metaml.workbench.capability.runtime.CapabilityBinding> listCapabilityBindings(
+            String processDefinitionKey, List<String> activityIds) {
+        return List.of();
+    }
 }

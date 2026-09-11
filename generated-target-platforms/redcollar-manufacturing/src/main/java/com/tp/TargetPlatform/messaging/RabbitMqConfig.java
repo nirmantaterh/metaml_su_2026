@@ -14,7 +14,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-// RabbitMQ topology for this generated platform's proxy<->twin synchronization: one task queue and one response queue per shared BPMN signal (see TargetPlatformMessagingGenerator.assignSignalQueues), scoped to this generated project so two independently generated platforms can never physically share a queue. Enabled only with metaml.messaging.enabled=true. Reliability hardening (Pass 1): every task/response queue dead-letters to this project's own DLX (see DLX_EXCHANGE) instead of a message that exhausts consumer retries (spring.rabbitmq.listener.simple.retry.* in this project's application.properties) silently vanishing. The RabbitTemplate wiring below (mandatory + a returns callback) is configured exactly once here, not per-publisher, since TaskQueuePublisher and ResponseQueuePublisher share the one autoconfigured RabbitTemplate bean - setting it in more than one place would just have the last constructor to run silently win.
+// Configures RabbitMQ exchange, queues, DLX routing, and publisher confirms for synchronization.
 @Configuration
 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
 public class RabbitMqConfig {

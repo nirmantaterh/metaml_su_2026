@@ -8,7 +8,7 @@ import ProcessSpinner from "../../components/common/ProcessSpinner";
 import NoDataAvailable from "../../components/common/NoDataAvailable";
 import DeleteConfirmationModal from "../../components/modals/DeleteConfirmationModal";
 
-// New scope item 1 (Navigation & UI): "Edit Existing Project" needs something to actually pick from, not a box where you paste in an id you already have to know from somewhere else. Delete lives here rather than in the editor: this is the page that already answers "which of my models is this", which is the question you have to have answered before deleting one.
+// Model management view providing project selection for editing or deletion.
 const EditProjectListPage = () => {
     const [models, setModels] = useState([]);
     const [loading, setLoading] = useState(true);

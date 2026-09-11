@@ -16,14 +16,7 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 
-// Runs against the actual RedCollar BPMNs the professor supplied. RedCollar is the validation case
-// for external-task-worker generation, not a fixture to be simplified: its processes are built
-// entirely from camunda:type="external" tasks, which is exactly the shape DelegateClassGenerator
-// produces nothing for.
-//
-// The BPMNs are not committed to the repository (professor-supplied, not ours to redistribute) -
-// resolved from redcollar.bpmn.dir / REDCOLLAR_BPMN_DIR / the repo root, same convention as
-// RedCollarEndToEndTest. Skips (not fails) when neither file is found there.
+        // Verifies generated external task worker registers component and calls complete with variables.
 class ExternalTaskWorkerGeneratorTest {
 
     private static final Path REPO_ROOT = redCollarBpmnDir();
@@ -42,7 +35,7 @@ class ExternalTaskWorkerGeneratorTest {
         Assumptions.assumeTrue(Files.isRegularFile(REPO_ROOT.resolve("Manuf-camunda.bpmn"))
                         && Files.isRegularFile(REPO_ROOT.resolve("Twin-camunda.bpmn")),
                 "RedCollar BPMNs not found at " + REPO_ROOT.toAbsolutePath()
-                        + " - point redcollar.bpmn.dir or REDCOLLAR_BPMN_DIR at the professor-supplied files");
+                        + " - configure redcollar.bpmn.dir or REDCOLLAR_BPMN_DIR to point to the BPMN files");
     }
 
     @Test
@@ -63,21 +56,21 @@ class ExternalTaskWorkerGeneratorTest {
                 .contains("package com.metaml.targetplatform.twin.worker;")
                 .contains("implements GeneratedExternalTaskWorker")
                 .contains("return \"SamplingTwin\"")
-                // The decision is delegated to an OPTIONALLY injected, pluggable TwinDecisionAgent -
-                // not hardcoded inline - so a real model/agent can be wired in with no generated
-                // code to touch (see SpringBootProjectGenerator.writeTwinDecisionAgentInterface).
-                // ObjectProvider (not TwinDecisionAgent directly) is what makes zero implementations
-                // a safe, non-fatal case - see renderTwinWorkerSource's own comment for why.
+                // Delegated to optional TwinDecisionAgent.
                 .contains("private final ObjectProvider<TwinDecisionAgent> agentProvider")
-                .contains("public SamplingTwinWorker(ObjectProvider<TwinDecisionAgent> agentProvider)")
                 .contains("agentProvider.getIfAvailable()")
                 .contains("[Twin] Invoking decision agent")
                 .contains("agent.decide(\"SamplingTwin\", task)")
-                // ...and the built-in fallback still exists for when nobody has registered one.
                 .contains("No TwinDecisionAgent registered")
                 .contains("externalTaskService.complete(task.getId(), \"generated-worker\", variables)")
                 .doesNotContain("\"PASS\"")
-                .doesNotContain("\"FAIL\"");
+                .doesNotContain("\"FAIL\"")
+                // P7 Step 5: CapabilityDispatcher attempted first; TwinDecisionAgent above is reached
+                // only when dispatch() found nothing bound.
+                .contains("private final ObjectProvider<CapabilityDispatcher> capabilityDispatcherProvider")
+                .contains("public SamplingTwinWorker(ObjectProvider<TwinDecisionAgent> agentProvider,")
+                .contains("dispatcher.dispatch(context, ACTIVITY_ID, null)")
+                .contains("CapabilityBindingRequiredException");
     }
 
     @Test
@@ -115,9 +108,12 @@ class ExternalTaskWorkerGeneratorTest {
         // VerifyOrder immediately precedes the gateway checking ${orderApproved}
         GeneratedWorker verifyOrder = workers.stream().filter(w -> w.topic().equals("VerifyOrder")).findFirst()
                 .orElseThrow();
-        // Generated workers fail explicitly when gateway variables have no
-        // legitimate producer — no Math.random(), no Boolean.TRUE, no fabricated state.
+        // Generated workers call a pluggable GatewayOutputProvider first - the legitimate-producer
+        // boundary - and only fail when no such producer is registered. No Math.random(), no
+        // Boolean.TRUE, no fabricated state either way.
         assertThat(verifyOrder.sourceCode())
+                .contains("ObjectProvider<GatewayOutputProvider> outputProvider")
+                .contains("provider.provide(\"VerifyOrder\", task)")
                 .contains("Gateway variable 'orderApproved' must be set by a legitimate producer")
                 .contains("throw new IllegalStateException")
                 .contains("if (!variables.containsKey(\"orderApproved\"))")
@@ -131,8 +127,19 @@ class ExternalTaskWorkerGeneratorTest {
         GeneratedWorker checking = workers.stream().filter(w -> w.topic().equals("Checking")).findFirst()
                 .orElseThrow();
         assertThat(checking.sourceCode())
+                .contains("ObjectProvider<GatewayOutputProvider> outputProvider")
+                .contains("provider.provide(\"Checking\", task)")
                 .contains("Gateway variable 'qualityPassed' must be set by a legitimate producer")
                 .contains("throw new IllegalStateException")
+                .doesNotContain("Math.random()");
+
+        // The pluggable extension point itself is emitted once, alongside the workers, generic and
+        // reusable for any gateway-guarded topic - not tied to VerifyOrder or Checking specifically.
+        GeneratedWorker gatewayOutputProvider = workers.stream()
+                .filter(w -> w.className().equals("GatewayOutputProvider")).findFirst().orElseThrow();
+        assertThat(gatewayOutputProvider.sourceCode())
+                .contains("public interface GatewayOutputProvider")
+                .contains("Map<String, Object> provide(String topic, LockedExternalTask task);")
                 .doesNotContain("Math.random()");
     }
 
@@ -158,15 +165,8 @@ class ExternalTaskWorkerGeneratorTest {
         assertThat(gatewayVars).doesNotContainKey("OrderMgmtInitialization");
     }
 
-    // The bug this exists to catch: RedCollar's own hand-authored Twin-camunda.bpmn happens to have
-    // no gateways at all (see twinBpmnHasNoGatewayVariables above), so the RedCollar fixture tests
-    // never exercised a twin worker that precedes an exclusive gateway. TargetPlatformTwinMirrorGenerator
-    // auto-derives a twin by preserving the proxy's gateway structure verbatim (only topics get a
-    // "Twin" suffix), so a mirrored twin worker CAN precede a gateway - and simulateMlAgent=true
-    // workers were rendered from a template that never wrote the condition variable at all, so the
-    // gateway threw "Cannot resolve identifier" the moment a real instance reached it. Regression
-    // test for that: this incident was only found live, in Cockpit, on a real generated
-    // RedCollarTP instance - not by any prior automated test.
+    // Verifies that when a twin worker precedes an exclusive gateway, the condition variables
+    // required by subsequent sequence flows are identified and handled by the worker generator.
     @Test
     void twinWorkerPrecedingAGatewaySetsTheSameConditionVariablesAsTheProxyWorkerWould() {
         String xml = """
@@ -227,12 +227,7 @@ class ExternalTaskWorkerGeneratorTest {
         assertThat(gatewayVars).isEmpty();
     }
 
-    // ---- detectGatewayVariablesByActivityId tests ----
-
-    // Maps by BPMN element ID rather than topic, covering any activity type.
-    // Verifies that the Workbench simulation can use an activity's element ID
-    // (from ExternalTask.getActivityId() or a TwinProcess activity link) to
-    // determine which gateway variables to set as explicit process variables.
+    // Maps gateway condition variables by predecessor activity ID.
     @Test
     void detectsByActivityIdMapsElementIdToConditionVariables() {
         String xml = """
@@ -284,10 +279,10 @@ class ExternalTaskWorkerGeneratorTest {
                     id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
                   <bpmn2:process id="proc" isExecutable="true">
                     <bpmn2:startEvent id="Start" />
-                    <bpmn2:sequenceFlow id="f1" sourceRef="Start" targetRef="Task1" />
-                    <bpmn2:serviceTask id="Task1" name="Do work"
+                    <bpmn2:sequenceFlow id="f1" sourceRef="Start" targetRef="Task_DoWork" />
+                    <bpmn2:serviceTask id="Task_DoWork" name="Do work"
                         camunda:type="external" camunda:topic="Work" />
-                    <bpmn2:sequenceFlow id="f2" sourceRef="Task1" targetRef="End" />
+                    <bpmn2:sequenceFlow id="f2" sourceRef="Task_DoWork" targetRef="End" />
                     <bpmn2:endEvent id="End" />
                   </bpmn2:process>
                 </bpmn2:definitions>
@@ -488,5 +483,67 @@ class ExternalTaskWorkerGeneratorTest {
         Map<String, Set<String>> byActivity = ExternalTaskWorkerGenerator.detectGatewayVariablesByActivityId(model);
         assertThat(byActivity).containsKey("Task_A");
         assertThat(byActivity.get("Task_A")).containsExactlyInAnyOrder("qualityPassed", "riskLevel");
+    }
+
+    // A generic synthetic process - no RedCollar/manufacturing vocabulary - proving the plain/proxy
+    // worker for a gateway-guarded topic tries the SAME generic CapabilityDispatcher mechanism the
+    // Twin worker already uses, before falling through to GatewayOutputProvider. This is the fix for
+    // the traced gap: a plain worker previously had no way to reach a bound capability provider at
+    // all, regardless of what binding was supplied.
+    @Test
+    void gatewayPrecedingPlainWorkerTriesCapabilityDispatcherBeforeGatewayOutputProvider() throws Exception {
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+                  <bpmn2:process id="genericDecisionProcess" isExecutable="true">
+                    <bpmn2:serviceTask id="DecideOutcome" name="Decide Outcome"
+                        camunda:type="external" camunda:topic="DecideOutcome">
+                      <bpmn2:outgoing>f1</bpmn2:outgoing>
+                    </bpmn2:serviceTask>
+                    <bpmn2:exclusiveGateway id="GW">
+                      <bpmn2:incoming>f1</bpmn2:incoming>
+                      <bpmn2:outgoing>f2</bpmn2:outgoing>
+                      <bpmn2:outgoing>f3</bpmn2:outgoing>
+                    </bpmn2:exclusiveGateway>
+                    <bpmn2:sequenceFlow id="f1" sourceRef="DecideOutcome" targetRef="GW" />
+                    <bpmn2:sequenceFlow id="f2" sourceRef="GW" targetRef="End1">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${decisionApproved}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:sequenceFlow id="f3" sourceRef="GW" targetRef="End2">
+                      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">${!decisionApproved}</bpmn2:conditionExpression>
+                    </bpmn2:sequenceFlow>
+                    <bpmn2:endEvent id="End1">
+                      <bpmn2:incoming>f2</bpmn2:incoming>
+                    </bpmn2:endEvent>
+                    <bpmn2:endEvent id="End2">
+                      <bpmn2:incoming>f3</bpmn2:incoming>
+                    </bpmn2:endEvent>
+                  </bpmn2:process>
+                </bpmn2:definitions>
+                """;
+
+        List<GeneratedWorker> workers = generator.generate(xml, "com.metaml.targetplatform.generic.worker", false);
+
+        GeneratedWorker decideOutcome = workers.stream().filter(w -> w.topic().equals("DecideOutcome")).findFirst()
+                .orElseThrow();
+        assertThat(decideOutcome.sourceCode())
+                // Tries the real, generic capability runtime first - same mechanism, same adapter, same
+                // fail-nothing-fabricated discipline the Twin worker already uses.
+                .contains("ObjectProvider<CapabilityDispatcher> capabilityDispatcherProvider")
+                .contains("new ExternalTaskExecutionContext(task, runtimeService)")
+                .contains("dispatcher.dispatch(context, ACTIVITY_ID, null)")
+                .contains("satisfiedByCapability = true")
+                // Only consults GatewayOutputProvider when capability dispatch found nothing.
+                .contains("if (!satisfiedByCapability)")
+                .contains("ObjectProvider<GatewayOutputProvider> outputProvider")
+                .contains("provider.provide(\"DecideOutcome\", task)")
+                // Still fails explicitly if NEITHER producer supplied the gateway's required variable.
+                .contains("if (!variables.containsKey(\"decisionApproved\"))")
+                .contains("throw new IllegalStateException")
+                .doesNotContain("Math.random()")
+                .doesNotContain("Boolean.TRUE");
     }
 }

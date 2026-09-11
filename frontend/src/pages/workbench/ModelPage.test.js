@@ -73,10 +73,7 @@ const GENERATED = {
     },
 };
 
-// the backend's record is a moving target during a run, so the mock reads a variable the test
-// advances at the point the real backend would have advanced it - rather than a fixed queue of
-// mockResolvedValueOnce values, which would depend on exactly how many times polling happened to
-// fire before the assertion
+        // Verifies unowned models save successfully and display confirmation with model ID.
 let backendWorkflowState;
 
 const button = (name) => screen.getByRole("button", { name });
@@ -150,15 +147,15 @@ describe("ModelPage - save", () => {
             expect(await screen.findByText(/Save failed: Boom/)).toBeInTheDocument();
         });
 
-        test("only Back to project processes and Save appear - no Generate or Launch button here",
+        test("Back to project processes, Save, Generate, and Launch buttons appear",
             async () => {
                 renderPage();
                 await screen.findByRole("option", { name: "RedCollar Suits" });
 
                 expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
                 expect(screen.getByRole("button", { name: "Back to project processes" })).toBeInTheDocument();
-                expect(screen.queryByRole("button", { name: "Generate" })).not.toBeInTheDocument();
-                expect(screen.queryByRole("button", { name: "Launch" })).not.toBeInTheDocument();
+                expect(screen.getByRole("button", { name: "Generate" })).toBeInTheDocument();
+                expect(screen.getByRole("button", { name: "Launch" })).toBeInTheDocument();
             });
 
         test("a status message never shares its row with the action buttons", async () => {

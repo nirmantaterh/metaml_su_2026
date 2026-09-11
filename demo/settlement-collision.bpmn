@@ -1,21 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Demo fixture for the element-specific generation failure.
-
-  Both service tasks carry a DIFFERENT delegate expression, but both sanitise to the SAME Java
-  class name: DelegateClassGenerator.toClassName maps every character that is illegal in a Java
-  identifier to '_', so
-
-      ${settle_payment}   ->  Settle_payment
-      ${settle-payment}   ->  Settle_payment
-
-  Only one class file can exist at that path. Task_SettleA is encountered first and names the
-  class, so Task_SettleB is the element that loses - its bean would silently never exist at
-  runtime. Camunda accepts both expressions at save/deploy time, which is exactly why this has to
-  be caught at generation: nothing upstream rejects it.
-
-  Do not "fix" the expressions in this file - the collision is the point. The recovery step in
-  DEMO_PROTOCOL.md renames Task_SettleB's expression to ${settlePaymentRetry} in the editor.
+  Demo fixture representing colliding delegate expressions for generation conflict testing.
 -->
 <bpmn2:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"

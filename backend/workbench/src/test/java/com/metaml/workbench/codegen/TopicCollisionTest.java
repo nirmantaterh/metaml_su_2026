@@ -166,9 +166,9 @@ class TopicCollisionTest {
     @Test
     void writeWorkersThrowsExceptionIfDuplicateWorkerClassNameAttempted() {
         // Construct two workers artificially sharing the same class name to verify writeWorkers fails fast
-        GeneratedWorker worker1 = new GeneratedWorker("CollidingWorker", "Topic-A",
+        GeneratedWorker worker1 = new GeneratedWorker("CollidingWorker", "Topic-A", "Activity_A",
                 "package com.tp.test.worker;\npublic class CollidingWorker {}");
-        GeneratedWorker worker2 = new GeneratedWorker("CollidingWorker", "Topic_A",
+        GeneratedWorker worker2 = new GeneratedWorker("CollidingWorker", "Topic_A", "Activity_B",
                 "package com.tp.test.worker;\npublic class CollidingWorker {}");
 
         Path testProjectDir = tempDir.resolve("duplicate-test-project");

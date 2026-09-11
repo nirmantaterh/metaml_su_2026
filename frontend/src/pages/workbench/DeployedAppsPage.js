@@ -7,7 +7,7 @@ import { WorkbenchRoutes } from "../../routes";
 import ProcessSpinner from "../../components/common/ProcessSpinner";
 import NoDataAvailable from "../../components/common/NoDataAvailable";
 
-// New scope item 5 (Evolve Workflow): "connect to an existing deployed application" and "support modifying and evolving previously generated applications". Reads the same running-projects registry the launcher's own stop-project/launch-project endpoints already maintain - this page adds no new backend capability of its own beyond carrying modelId through (see WorkbenchServiceImpl.listRunningProjects), it's a UI on top of what already exists. "Evolving" a deployed app is deliberately NOT an in-place code edit here - that would mean an in-browser editor for the generated delegate stubs plus live recompile/redeploy, a much bigger feature this doesn't attempt to guess at. Evolving means going back to the model that produced this app, changing it, and running Generate -> Launch again - the same real pipeline every other generated app goes through, not a special second path. "Evolve this" below just gets you there without having to already know the model's id.
+// Management page for active generated Target Platform applications, providing status monitoring, termination, and model navigation.
 const DeployedAppsPage = () => {
     const [running, setRunning] = useState([]);
     const [loading, setLoading] = useState(true);

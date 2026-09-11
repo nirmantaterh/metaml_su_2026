@@ -5,14 +5,7 @@ import {
     loadExecutionEvidence,
 } from "./WorkbenchService";
 
-// Mocks below deliberately model the REAL backend response: every Workbench endpoint returns the
-// ApiResponse envelope { message, data }, so axios' own .data is that envelope and the payload is
-// one level deeper. An earlier version of these tests returned the payload directly and therefore
-// passed against a composition that was broken in the live UI - the envelope is the contract.
-//
-// Same seam as WorkbenchService.test.js: the axios instance, not the network. These pin the
-// contract this module owns for runtime execution evidence - which existing endpoints it reuses,
-// and that it reports exactly what the runtime returned rather than deriving anything.
+// Mocks verify the API response envelope and runtime execution status mapping.
 jest.mock("../../components/config/api", () => ({
     api: { get: jest.fn(), post: jest.fn() },
 }));

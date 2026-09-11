@@ -127,7 +127,9 @@ public class TwinModelGenerator {
         AbstractFlowNodeBuilder cursor = Bpmn.createExecutableProcess(twinProcessId(process))
                 .name(twinProcessName(process))
                 .startEvent(start.getId());
-        cursor = copyGraph(cursor, flows, copied, process.getId(), subProcessWrappedActivityIds(process));
+        Set<String> subProcessWrapped = subProcessWrappedActivityIds(process);
+        cursor = copyGraph(cursor, flows, copied, process.getId(), subProcessWrapped,
+                syncThenAutomateActivityIds(process, subProcessWrapped));
 
         BpmnModelInstance twin = cursor.done();
         twin.getDocument().registerNamespace(
@@ -305,7 +307,8 @@ public class TwinModelGenerator {
     // Repeated passes because document order puts a join's second input before its branch exists.
     @SuppressWarnings("rawtypes")
     private static AbstractFlowNodeBuilder copyGraph(AbstractFlowNodeBuilder cursor,
-            List<SequenceFlow> flows, Set<String> copied, String processId, Set<String> subProcessWrapped) {
+            List<SequenceFlow> flows, Set<String> copied, String processId, Set<String> subProcessWrapped,
+            Set<String> syncThenAutomateIds) {
         List<SequenceFlow> pending = new ArrayList<>(flows);
         boolean madeProgress = true;
         while (madeProgress && !pending.isEmpty()) {
@@ -317,7 +320,7 @@ public class TwinModelGenerator {
                 if (source == null || target == null || !copied.contains(source.getId())) {
                     continue;
                 }
-                String moveToId = exitNodeId(source.getId(), subProcessWrapped);
+                String moveToId = exitNodeId(source.getId(), subProcessWrapped, syncThenAutomateIds);
                 if (copied.contains(target.getId())) {
                     pass.remove();
                     madeProgress = true;
@@ -346,9 +349,53 @@ public class TwinModelGenerator {
         return cursor;
     }
 
-    // moveToNode() is scope-blind; later flows must exit from the wrapper, not the nested receive task.
-    private static String exitNodeId(String activityId, Set<String> subProcessWrapped) {
-        return subProcessWrapped.contains(activityId) ? wrapperId(activityId) : activityId;
+    // moveToNode() is scope-blind; later flows must exit from the wrapper, not the nested receive
+    // task - and, for an activity converted into a plain (non-wrapped) receive/automation pair, from
+    // the automation task, not the receive task. A flow leaving from the receive task would become
+    // enabled as soon as the receive task itself completes, concurrently with (and possibly before)
+    // the automation task actually running and publishing the activity's declared output - so a
+    // downstream gateway whose condition depends on that output could evaluate it before it exists.
+    // Exiting from the automation task instead means the flow is only enabled once that task - and
+    // therefore the capability output boundary that runs inside it (see TwinAutomationDelegate /
+    // CapabilityOutputPropagator) - has already completed.
+    private static String exitNodeId(String activityId, Set<String> subProcessWrapped,
+            Set<String> syncThenAutomateIds) {
+        if (subProcessWrapped.contains(activityId)) {
+            return wrapperId(activityId);
+        }
+        if (syncThenAutomateIds.contains(activityId)) {
+            return automationTaskId(activityId);
+        }
+        return activityId;
+    }
+
+    // Every activity id the twin represents as a receive-task/automation-task pair (see
+    // append()/appendSynchronizedActivity()/appendSyncThenAutomate() above) without a multi-instance
+    // subprocess wrapper - i.e. every activity a later flow must exit from the automation task for,
+    // per exitNodeId's javadoc above. Mirrors that dispatch logic's own criteria exactly: a
+    // non-wrapped UserTask, any ReceiveTask or ServiceTask on the original model (both always become
+    // receive/automation pairs - see append()), or a bare BusinessRuleTask (isBareBusinessRuleTask).
+    // subProcessWrapped is subtracted first so a multi-instance-wrapped UserTask keeps exiting from
+    // its wrapper, exactly as it already did.
+    private static Set<String> syncThenAutomateActivityIds(Process process, Set<String> subProcessWrapped) {
+        Set<String> ids = new HashSet<>();
+        for (UserTask task : process.getChildElementsByType(UserTask.class)) {
+            if (!subProcessWrapped.contains(task.getId())) {
+                ids.add(task.getId());
+            }
+        }
+        for (ReceiveTask task : process.getChildElementsByType(ReceiveTask.class)) {
+            ids.add(task.getId());
+        }
+        for (ServiceTask task : process.getChildElementsByType(ServiceTask.class)) {
+            ids.add(task.getId());
+        }
+        for (BusinessRuleTask rule : process.getChildElementsByType(BusinessRuleTask.class)) {
+            if (isBareBusinessRuleTask(rule)) {
+                ids.add(rule.getId());
+            }
+        }
+        return ids;
     }
 
     private static Set<String> subProcessWrappedActivityIds(Process process) {

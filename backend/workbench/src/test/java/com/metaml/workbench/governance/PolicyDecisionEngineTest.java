@@ -20,8 +20,7 @@ class PolicyDecisionEngineTest {
         return service.activateVersion(draft.id(), tenantId);
     }
 
-    // Section 13's own acceptance test: same $7000 amount, two tenants, two different
-    // thresholds, no hardcoded tenant name anywhere in the engine
+    // Evaluates tenant-specific policy thresholds dynamically.
     @Test
     void allowWhenNoRuleThresholdIsCrossed() {
         TenantPolicyService service = newTenantPolicyService();

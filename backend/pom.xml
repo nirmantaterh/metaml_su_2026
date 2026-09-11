@@ -9,6 +9,12 @@
     <packaging>pom</packaging>
     
     <modules>
+        <!-- Provider-agnostic capability model + output boundary. Shared by the workbench and by
+             every generated standalone Target Platform, which must not depend on the workbench. -->
+        <module>capability-core</module>
+        <!-- Reference ComponentExecutor implementations. Depends on capability-core only, so a
+             generated Target Platform can carry them without the workbench runtime. -->
+        <module>providers</module>
         <module>workbench</module> <!-- Workbench Library and API -->
         <module>wbapi</module> <!-- Workbench Entry-Point/REST APIs to workbench libraries -->
         <module>nodemanager</module> <!-- Node manager server (P2P node) - agent catalog stub -->

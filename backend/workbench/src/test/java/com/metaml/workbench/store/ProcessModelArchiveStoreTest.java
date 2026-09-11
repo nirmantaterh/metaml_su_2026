@@ -17,9 +17,6 @@ import com.metaml.workbench.model.ProcessModelArchive;
 import com.metaml.workbench.repository.ProcessModelArchiveRepository;
 import com.metaml.workbench.repository.ProjectRepository;
 
-// Pure Mockito, no Spring context - findAllSummaries() is a plain stream mapping over what
-// JpaRepository.findAll() already gives back, so what's actually worth proving is the mapping and
-// ordering, not Spring Data's own generated query.
 @ExtendWith(MockitoExtension.class)
 class ProcessModelArchiveStoreTest {
 
@@ -65,9 +62,7 @@ class ProcessModelArchiveStoreTest {
         assertThat(summary.getProjectDisplayName()).isEqualTo("RedCollar Suits");
     }
 
-    // Every real archive row has a project (see ProcessModelArchiveStore.save, which always
-    // resolves or creates one) - this is defensive for whatever data an older row might carry,
-    // not a case the picker UI is expected to render meaningfully.
+    // Fallback handling for archive records lacking project associations.
     @Test
     void anArchiveWithNoProjectAssociationStillProducesASummaryWithNullProjectFields() {
         when(archiveRepository.findAll()).thenReturn(List.of(

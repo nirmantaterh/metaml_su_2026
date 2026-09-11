@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
-// JSON message envelope shared across the Manufacturing, Twin, Gateway, and Machines flows. <p>Uses a POJO for predictable Jackson serialization. Timestamps are ISO-8601 strings and no tenant field is included because generated platforms are single-project runtimes.
+// Message envelope exchanged between Manufacturing, Twin, Gateway, and Machine services.
 public class HarnessMessage {
 
     public enum Type {
@@ -17,27 +17,26 @@ public class HarnessMessage {
         QC_RESPONSE
     }
 
-    // Unique to this message; distinct from correlationId which is shared across a full exchange.
+    // Unique identifier for this message.
     private String messageId;
-    // Preserve correlation across the full message round trip.
+    // Correlation identifier preserved across request-response exchanges.
     private String correlationId;
     private Type type;
     private String source;
     private String destination;
-    // Camunda process instance; without it, concurrent instances are ambiguous.
+    // Target Camunda process instance identifier.
     private String processInstanceId;
-    // BPMN element ID, same identity Camunda and the generated delegates key on.
+    // BPMN activity identifier.
     private String activityId;
-    // Free-text outcome on responses (e.g. "PASS"); null on requests.
+    // Response status or outcome (e.g. PASS).
     private String status;
     private Map<String, Object> payload = new LinkedHashMap<>();
-    // ISO-8601, UTC.
+    // UTC ISO-8601 timestamp.
     private String timestamp;
 
     public HarnessMessage() {
     }
 
-    // Creates a request with fresh IDs and timestamp.
     public static HarnessMessage request(Type type, String source, String destination,
             String processInstanceId, String activityId) {
         HarnessMessage message = new HarnessMessage();
@@ -52,7 +51,6 @@ public class HarnessMessage {
         return message;
     }
 
-    // Creates a response while preserving correlation and activity identity.
     public HarnessMessage reply(Type replyType, String replySource, String replyDestination, String replyStatus) {
         HarnessMessage message = new HarnessMessage();
         message.messageId = UUID.randomUUID().toString();

@@ -25,19 +25,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-// Doesn't spin up a real Spring Boot + Camunda app - that would make every run of this suite take
-// the better part of a minute per test. Instead stands in a fake "mvnw.cmd" that just opens a raw
-// TCP listener on the port SpringBootProjectLauncher hands it via the SERVER_PORT environment
-// variable and sits there, which is enough to exercise everything this class is actually
-// responsible for: picking a free port, waiting for something to start listening on it, tracking
-// it, and tearing the whole process tree down again on stop(). The real "does the generated app
-// itself come up and serve traffic" question is a template/generator concern, already covered by
-// the real mvn compile verification done against templates/camundademo elsewhere.
+// Uses a lightweight TCP listener script standing in for mvnw.cmd to test port selection,
+// readiness polling, process tracking, and process tree teardown without full Spring boot time.
 class SpringBootProjectLauncherTest {
 
-    // PowerShell TCP listener standing in for a real Spring Boot app - reads the same SERVER_PORT
-    // the launcher sets for the real command, so this fake never has to know anything about Maven's
-    // own argument parsing
+    // TCP listener script simulating application startup by listening on SERVER_PORT.
     private static final String FAKE_LISTENER_SCRIPT = """
             @echo off
             powershell -NoProfile -Command "$l = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, [int]$env:SERVER_PORT); $l.Start(); Start-Sleep -Seconds 300; $l.Stop()"
@@ -128,10 +120,8 @@ class SpringBootProjectLauncherTest {
         assertThat(shortTimeoutLauncher.find("p1")).isEmpty();
     }
 
-    // stopActuallyFreesThePortNotJustForgetsAboutIt above proves the port goes quiet, which is not
-    // quite the same claim: a listener can go away while the process tree that owned it is still
-    // alive. This one holds on to the actual Process the launcher was tracking and checks the OS
-    // reaped it and everything it spawned.
+    // Verifies that process termination reaps the entire process tree, not just releasing the
+    // listening socket. Checks that the tracked OS process and its descendants have terminated.
     @Test
     void stopLeavesNoLiveProcessOrDescendantBehindNotJustAQuietPort() throws Exception {
         LaunchedProject launched = launcher.launch(fakeProject("p1"));
@@ -163,12 +153,8 @@ class SpringBootProjectLauncherTest {
         assertStopsListening(second.port());
     }
 
-    // H3. Two threads launching the SAME projectId at once used to both get past the stop() at the
-    // top of launch(), both spawn a child, and whichever put() landed second silently orphaned the
-    // other one's process - unreachable through find()/listRunning(), so unkillable through stop(),
-    // with its port held until the workbench itself died. Proven by the negative here, not by
-    // eyeballing the lock: after both threads return, exactly one of the two ports they were handed
-    // is still listening, and it's the one the launcher is actually tracking.
+    // Concurrent launches for the same projectId must serialize cleanly so exactly
+    // one process survives and no orphaned child processes remain.
     @Test
     void twoConcurrentLaunchesOfTheSameProjectLeaveExactlyOneProcessAlive() throws Exception {
         GeneratedProject project = fakeProject("p1");
@@ -203,11 +189,8 @@ class SpringBootProjectLauncherTest {
         }
     }
 
-    // H4. A generated project that fails to compile - the likeliest failure in a live demo, since
-    // the delegates come from whatever the user modelled - exits within seconds, but awaitReady
-    // only ever looked at the port, so the caller sat out the entire readiness timeout and then got
-    // a message that said nothing about why. The 30s timeout here is the load-bearing part of the
-    // test: if the fix regressed, this would take 30s instead of the couple it takes now.
+    // When a generated project exits immediately on failure, awaitReady detects process exit
+    // promptly rather than waiting out the full readiness timeout.
     @Test
     void aProjectWhoseProcessDiesImmediatelyFailsRightAwayInsteadOfWaitingOutTheTimeout() throws IOException {
         Files.writeString(projectDir.resolve("mvnw.cmd"), "@echo off\r\nexit /b 3\r\n", StandardCharsets.UTF_8);
@@ -225,12 +208,8 @@ class SpringBootProjectLauncherTest {
         assertThat(launcherWithLongTimeout.find("p1")).isEmpty();
     }
 
-    // Liveness (the real defect this phase fixes): find()/listRunning() used to trust the registry
-    // blindly, so a generated app that died on its own - not through stop() - kept reading as
-    // running forever. Killed the same way a real external death was reproduced live against the
-    // actual system: the tracked Process itself (and its descendants, the same tree destroyTree()
-    // would walk), not through the launcher's own stop() - stop() dying correctly proves nothing
-    // about a process that died WITHOUT going through it.
+    // Verifies that find() and listRunning() detect external process termination and update
+    // the registry accordingly.
     @Test
     void findExcludesAProcessThatDiedOnItsOwn() throws Exception {
         launcher.launch(fakeProject("p1"));
@@ -255,9 +234,7 @@ class SpringBootProjectLauncherTest {
         launcher.stop("p2");
     }
 
-    // find()/listRunning() self-heal the registry as a side effect of noticing death - this proves
-    // that removal actually happened (not just that a later find() would independently say "empty"
-    // again), by reaching into the same registry the reflection helpers already use
+    // Confirms that terminated processes are pruned from the internal registry:
     @Test
     void aDeadProcessIsRemovedFromTheRegistryNotJustHiddenFromReads() throws Exception {
         launcher.launch(fakeProject("p1"));
@@ -292,9 +269,7 @@ class SpringBootProjectLauncherTest {
         assertThat(launcher.stop("p1")).isFalse();
     }
 
-    // relaunching under the same projectId is the one case forgetIfStillDead's conditional remove
-    // exists for: a find()/listRunning() call racing against a fresh relaunch must never delete the
-    // NEW live entry just because it observed the OLD one's Process object was dead
+    // Relaunching after external termination registers the new process in the tracking table.
     @Test
     void relaunchingAfterAnExternalDeathIsTrackedAsTheNewLiveProcessNotForgotten() throws Exception {
         GeneratedProject project = fakeProject("p1");
@@ -309,8 +284,7 @@ class SpringBootProjectLauncherTest {
         launcher.stop("p1");
     }
 
-    // --- runIfIdle (retention safety gate) ---
-
+    // runIfIdle retention safety gate tests.
     @Test
     void runIfIdleRunsTheActionForAProjectThatWasNeverLaunched() {
         AtomicBoolean ran = new AtomicBoolean(false);
@@ -343,8 +317,7 @@ class SpringBootProjectLauncherTest {
         assertThat(ran).isTrue();
     }
 
-    // an externally-killed JVM is idle for exactly the same reason find() already reports it as not
-    // running - the retention gate reuses that mechanism rather than inventing a second one
+    // Externally-terminated processes are treated as idle by the retention gate.
     @Test
     void runIfIdleTreatsAnExternallyDeadProjectAsIdle() throws Exception {
         launcher.launch(fakeProject("p1"));
@@ -355,12 +328,7 @@ class SpringBootProjectLauncherTest {
         assertThat(ran).isTrue();
     }
 
-    // THE case this gate exists for, and the one find() alone cannot answer: launch() does not
-    // publish into `running` until the app is actually listening, so for the whole startup window a
-    // project reads as "not running" while a child JVM is booting out of its directory. A cleanup
-    // that deleted on find() alone would delete a starting project's own source from under it.
-    // Proven with a deliberately slow fake app and a real concurrent launch, not by inspecting the
-    // lock: runIfIdle must refuse for the entire time the launch is in flight, then succeed after.
+    // runIfIdle must refuse execution while a launch is in flight prior to socket readiness.
     @Test
     void runIfIdleRefusesWhileALaunchIsStillInFlightBeforeTheAppIsListening() throws Exception {
         // takes ~6s to start listening, so the assertions below land while launch() is mid-flight
@@ -373,8 +341,7 @@ class SpringBootProjectLauncherTest {
         AtomicBoolean ran = new AtomicBoolean(false);
         try {
             Future<LaunchedProject> launching = pool.submit(() -> launcher.launch(project));
-            // wait until the launch has genuinely started (the lock is held) but the app is not yet
-            // listening - find() reports empty here, which is exactly the trap
+            // Wait for launch to begin while application has not yet started listening.
             sleep(2000);
             assertThat(launcher.find("p1")).as("app should not be listening yet").isEmpty();
 
@@ -419,10 +386,7 @@ class SpringBootProjectLauncherTest {
         }
     }
 
-    // The previous version of this helper
-    // polled for up to 15s and then just RETURNED whether or not the port had actually gone quiet,
-    // so every caller that "verified" a stop was really only verifying that 15 seconds could
-    // elapse. It has to fail the test when the port is still up, which is the whole point of it.
+    // Asserts that the specified port stops listening within a 15-second timeout, throwing if still open.
     private static void assertStopsListening(int port) {
         long deadline = System.currentTimeMillis() + 15_000;
         while (System.currentTimeMillis() < deadline) {

@@ -19,10 +19,8 @@ public class Camundacontroller {
         this.runtimeService = runtimeService;
     }
 
-    // create a rest api to start the process instance
     @PostMapping(BPMNProcessRESTMappings.START_LOAN_PROCESS)
     public String startProcessInstance() {
-        // Start the process instance using Camunda's RuntimeService
         ProcessInstance processInstance = runtimeService.startProcessInstanceByKey("loanApproval");
         return "Process instance started with ID: " + processInstance.getId();
     }

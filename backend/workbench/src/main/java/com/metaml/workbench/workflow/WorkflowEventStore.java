@@ -19,11 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-// Durable half of WorkflowStateTracker's event log; same file pattern as WorkbenchStateStore next to
-// it. Kept separate because the two serialize different shapes - workflow events are keyed by model
-// id and grow over a model's lifetime, twins are a flat list.
-// Instants are stored as epoch millis rather than left to Jackson, so a round-tripped value cannot
-// disagree with the in-memory one on nanos-vs-millis precision.
+// Persists workflow event log; timestamps are stored as epoch millis to avoid Jackson serialization drift.
 @Component
 public class WorkflowEventStore {
 

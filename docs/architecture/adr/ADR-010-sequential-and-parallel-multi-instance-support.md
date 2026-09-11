@@ -4,31 +4,32 @@
 
 ## Context
 
-The Original can contain a multi-instance User Task (sequential or parallel, e.g. a committee-review step visited more than once). Preserving that semantic in the Twin, without introducing a different execution model than the rest of the generator uses, required deciding how a "visit N times" characteristic can span the Receive Task + Service Task pair (ADR-005) that every other activity becomes.
+The Original process definition may contain multi-instance User Tasks (sequential or parallel, such as multi-reviewer evaluation tasks). Preserving these semantics in the Twin, without diverging from the standard generator architecture, requires enabling multi-instance execution over the Receive Task + Service Task pair ([ADR-005](ADR-005-receive-service-task-separation.md)) generated for each activity.
 
 ## Decision
 
-A multi-instance User Task becomes an **embedded sub-process** wrapping the same `[Receive Task, Service Task]` pair, with Camunda's own `multiInstanceLoopCharacteristics` attached to the sub-process itself (`.sequential()` or `.parallel()` as the Original specifies), restricted to a **literal** loop cardinality. A non-literal (variable or collection-expression) cardinality falls back to a single Twin visit, logged, rather than failing generation — the Twin simply has no variable to evaluate such an expression against.
+A multi-instance User Task is transformed into an **embedded sub-process** wrapping the `[Receive Task, Service Task]` pair. Camunda's `multiInstanceLoopCharacteristics` are attached to the sub-process scope (`.sequential()` or `.parallel()`), constrained to **literal** loop cardinalities. Non-literal (dynamic expression or collection-driven) cardinalities gracefully fall back to a single Twin visit with diagnostic logging, as the Twin environment lacks access to the Original process instance's variable state at generation time.
 
 ## Alternatives Investigated
 
-- **Attaching multi-instance characteristics directly to a single flow node spanning both Receive and Service** — not possible: Camunda's multi-instance characteristics attach to exactly one activity, and there is no standard way to make "visit N times" span two sequential nodes without a sub-process scope around them. This is a structural fact about the BPMN spec/Camunda's model, not a design preference.
-- **Carrying over non-literal (expression/collection) cardinality by evaluating it against Original process variables** — investigated and rejected: the Twin process instance has no such variable (it is a separate process instance with its own variable scope), so the expression would either fail to evaluate or evaluate against the wrong data. A single-visit fallback, clearly logged, was judged safer than guessing.
-- **Rejecting multi-instance activities from generation entirely** (fail-fast, matching the general unsupported-construct policy, [ADR-011](ADR-011-unsupported-bpmn-construct-policy.md)) — not chosen for the literal-cardinality case, since it is fully supportable and was made to work; reserved instead for the genuinely non-literal case only as a graceful degradation, not a hard failure, because losing repeat visits is a smaller functional loss than losing the whole activity.
+- **Attaching multi-instance characteristics directly to flow nodes:** In Camunda BPMN models, multi-instance attributes attach to a single activity node. Spanning two sequential nodes requires an enclosing sub-process scope.
+- **Evaluating dynamic collection expressions against Original process variables:** Investigated and rejected because the Twin process instance executes in its own isolated execution context. Dynamic evaluation across instances introduces fragile coupling and data inconsistency risks.
+- **Rejecting all multi-instance activities:** Rejected because literal-cardinality multi-instance tasks represent standard business patterns and are reliably supported via sub-process wrapping.
 
-## Evidence
+## Technical Validation
 
-Proven with a dedicated probe before being relied upon: two correlated visits of a sequential multi-instance activity, asserting the Service Task read `loopCounter` 0 then 1, and that the outer flow only continued once both visits finished — confirming the built-in multi-instance variables remain visible to both wrapped elements. For parallel multi-instance specifically, disambiguation by `loopCounter` (ADR-007) was separately proven with three concurrently-waiting siblings. `stabilizeMultiInstanceIds` was added after a dedicated adversarial review caught that the wrapper's `multiInstanceLoopCharacteristics`/`loopCardinality` elements were, like several other builder-generated elements, non-deterministically id'd across repeated `generate()` calls — verified by generating the same model's Twin twice and diffing the XML before and after the fix.
+Validated via integration tests demonstrating sequential multi-instance execution, where wrapped Service Tasks observe sequential `loopCounter` increments (0, 1, ...) and the enclosing flow proceeds only after all iterations finish. Parallel multi-instance execution was validated using concurrent sibling correlation ([ADR-007](ADR-007-execution-targeted-messaging.md)). Furthermore, `stabilizeMultiInstanceIds` ensures that `multiInstanceLoopCharacteristics` and `loopCardinality` elements receive deterministic identifiers across repeated `generate()` invocations.
 
 ## Trade-offs
 
-- **Gained:** full sequential and parallel multi-instance fidelity for the common case (literal cardinality), using entirely standard Camunda mechanisms, no custom looping logic.
-- **Given up:** non-literal cardinality is a known, accepted, logged degradation rather than a supported feature — judged an acceptable scope boundary rather than something worth the complexity of evaluating arbitrary expressions against a process instance that structurally cannot supply their inputs.
+- **Gained:** Full sequential and parallel multi-instance execution fidelity for literal cardinalities using standard Camunda constructs.
+- **Given up:** Dynamic collection-based cardinality evaluates to a single iteration fallback with explicit diagnostic logging.
 
 ## Consequences
 
-- `LITERAL_CARDINALITY` (a simple digit-only regex) is the exact boundary between "fully supported" and "single-visit fallback" — any BPMN author relying on collection-based multi-instance in the Original should expect the Twin to visit that activity only once, and this is logged clearly enough to be discoverable rather than silently surprising.
+- Literal cardinality definitions execute deterministically in both sequential and parallel modes.
+- Model authors using dynamic collection-based multi-instance constructs are notified via diagnostic logs that twin mirroring operates in single-visit fallback mode.
 
 ## Future Reconsideration
 
-Extending to collection-based cardinality would require deciding what Twin-side collection an expression should evaluate against — a genuinely open design question, not merely an implementation gap, and would warrant its own ADR rather than an incremental patch to this one.
+Extending support to dynamic collection expressions would require defining a declarative variable-mapping contract between primary and twin runtime contexts.

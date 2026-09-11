@@ -35,6 +35,21 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- Capability model, execution context adapters and the output-contract boundary. Carries no
+             Spring, no persistence and no Workbench dependency, so this stays a standalone app. -->
+        <dependency>
+            <groupId>com.metaml</groupId>
+            <artifactId>capability-core</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <!-- Legitimate provider implementations, resolved at runtime by provider identity. Swap or
+             extend this with any jar of ComponentExecutor beans; see CapabilityConfig's
+             metaml.capability.provider-packages. -->
+        <dependency>
+            <groupId>com.metaml</groupId>
+            <artifactId>reference-providers</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>

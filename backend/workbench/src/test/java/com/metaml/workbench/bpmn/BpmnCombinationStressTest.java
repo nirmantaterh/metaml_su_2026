@@ -44,7 +44,7 @@ class BpmnCombinationStressTest {
     void setUp() {
         ProcessEngineConfiguration config = ProcessEngineConfiguration
                 .createStandaloneInMemProcessEngineConfiguration();
-        config.setJdbcUrl("jdbc:h2:mem:phase10-" + java.util.UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+        config.setJdbcUrl("jdbc:h2:mem:bpmn-stress-" + java.util.UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
         config.setJdbcDriver("org.h2.Driver");
         config.setJdbcUsername("sa");
         config.setJdbcPassword("");

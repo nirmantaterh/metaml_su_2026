@@ -58,8 +58,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 
-// full walkthrough against a real embedded engine - only the node manager is stubbed
-// mem db, not the file one the app uses - same url as WbapiApplicationTests so they share a context
+// Integration walkthrough using an embedded Camunda engine with stubbed NodeManagerClient.
 @IsolatedWorkbenchTest
 @TestPropertySource(properties = {
         "spring.datasource.url=jdbc:h2:mem:metaml-test;DB_CLOSE_DELAY=-1"
@@ -75,11 +74,7 @@ class WireTransferWalkthroughTest {
     private static final String EXECUTE = "Task_Execute";
     private static final String NOTIFY = "Task_Notify";
 
-    // what the bridge picks when no caller supplied a type, and what the real catalog answers
     private static final String BRIDGE_AGENT = "validator-agent-01";
-
-    // the one catalog entry that comes back with a flag raised, and the variable that flag turns
-    // into on the original once the delegate has run
     private static final String RISK_AGENT_TYPE = "credit-risk-assessor";
     private static final String RISK_FLAG = "agentFlaggedRisk";
 
@@ -127,22 +122,12 @@ class WireTransferWalkthroughTest {
     void stubTheCatalogAndOpenTheQuota() {
         given(nodeManagerClient.checkAgentAvailability(anyString())).willAnswer(call -> {
             String type = call.getArgument(0);
-            // same rule the real NodeManagerServiceImpl catalog uses: only the credit assessor
-            // ever comes back flagged
             return new AgentAvailabilityResult(type, true, type + "-agent-01", "stub catalog",
                     RISK_AGENT_TYPE.equals(type));
         });
-        // seven activities get bridged on one twin below, well past the default cap of 5, so
-        // the quota needs raising first.
         governanceService.updatePolicy(Set.of(), 20);
     }
 
-    // Joanna's new scope doc, item 2 (Project Saving): the Generate/Spring-Boot-Generation step
-    // needs a real .bpmn file on the server filesystem it can copy into a generated project, not
-    // just the copy of the XML that WorkbenchStateStore already embeds inside its own shared
-    // workbench-state.json. Proven end to end here, through the real service, not just against
-    // ProcessModelFileStore in isolation (that's covered separately in
-    // com.metaml.workbench.store.ProcessModelFileStoreTest).
     @Test
     void savingAModelWritesItsBpmnAsARealFileOnTheServerFilesystem() throws IOException {
         ProcessModel model = workbenchService.saveProcessModel(null, "file store test", citibankBpmn());
@@ -152,11 +137,6 @@ class WireTransferWalkthroughTest {
         assertThat(onDisk).isEqualTo(citibankBpmn());
     }
 
-    // The id on a save request is client-supplied, and it becomes a filename under
-    // workbench.models.directory. Rejected up front, before the deploy, so a traversal attempt
-    // can't even leave a deployment behind on its way out - and asserting the throw on its own
-    // would be a weak test here, since the whole risk is a file appearing somewhere it shouldn't,
-    // so this checks the target directory is genuinely still empty afterwards.
     @Test
     void aTraversalShapedModelIdIsRejectedAndWritesNothingOutsideTheModelsDirectory() throws IOException {
         Path modelsDir = Path.of("./target/test-data/models").toAbsolutePath().normalize();
@@ -174,14 +154,12 @@ class WireTransferWalkthroughTest {
 
         assertThat(escapeTarget).doesNotExist();
         assertThat(modelsDir.getParent().resolve("absolute-escaped.bpmn")).doesNotExist();
-        // and nothing landed inside the directory under a mangled name either
         try (var entries = Files.list(modelsDir)) {
             assertThat(entries.map(p -> p.getFileName().toString()))
                     .noneMatch(name -> name.contains("escaped"));
         }
     }
 
-    // New scope item 1 (Navigation & UI): "Edit Existing Project" needs a real list to pick from.
     @Test
     void listProcessModelsReturnsEveryModelNewestFirst() throws IOException {
         ProcessModel first = workbenchService.saveProcessModel(null, "first saved", citibankBpmn());
@@ -192,16 +170,9 @@ class WireTransferWalkthroughTest {
         assertThat(models).extracting(ProcessModel::getId).contains(first.getId(), second.getId());
         int firstIndex = models.indexOf(models.stream().filter(m -> m.getId().equals(first.getId())).findFirst().get());
         int secondIndex = models.indexOf(models.stream().filter(m -> m.getId().equals(second.getId())).findFirst().get());
-        // second was saved after first, so it should come back before it
         assertThat(secondIndex).isLessThan(firstIndex);
     }
 
-    // New scope item 3 (BPMN Processing), proven through the real saved-model path rather than
-    // against DelegateClassGenerator in isolation (that's covered separately in
-    // com.metaml.workbench.codegen.DelegateClassGeneratorTest). Neither example model in this repo
-    // exercises this - both use user tasks with a taskListener delegateExpression
-    // (agentExecutionDelegate) for agent execution, not a service task with a direct
-    // delegateExpression the way Joanna's own example does - so this needs its own small fixture.
     @Test
     void generateDelegatesReadsTheRealSavedModelNotJustARawXmlString() {
         ProcessModel model = workbenchService.saveProcessModel(null, "delegate generation test",
@@ -215,11 +186,6 @@ class WireTransferWalkthroughTest {
         assertThat(generated.get(0).className()).isEqualTo("CalculateInterestService");
     }
 
-    // New scope item 4 (Spring Boot Generation), proven through the real saved-model path against
-    // the real template on disk - not the synthetic fixture SpringBootProjectGeneratorTest uses -
-    // so this is the one place that would have caught the delegate package/directory mismatch bug
-    // (see DelegateClassGenerator.DEFAULT_PACKAGE's own comment) if the earlier fix hadn't already
-    // been proven by a real mvn compile of a generated project.
     @Test
     void generateSpringBootProjectProducesADelegateWhosePackageMatchesWhereItsActuallyWritten() throws IOException {
         ProcessModel model = workbenchService.saveProcessModel(null, "project generation test",
@@ -229,10 +195,6 @@ class WireTransferWalkthroughTest {
                 workbenchService.generateSpringBootProject(model.getId());
 
         assertThat(project.processKey()).isEqualTo("loanApproval");
-        // Generated projects are now packaged per project (com.metaml.targetplatform.<processKey
-        // slug>) and split into manufacturing/twin sides, so the delegate no longer lands under the
-        // template's own com.example.camundademo. The invariant this test exists for is unchanged:
-        // the package statement inside the file must match the directory it was written to.
         java.nio.file.Path delegateFile = project.directory().resolve(
                 "src/main/java/com/metaml/targetplatform/loanapproval/delegate/manufacturing/"
                         + "CalculateInterestService.java");
@@ -242,11 +204,6 @@ class WireTransferWalkthroughTest {
         assertThat(project.directory().resolve("src/main/resources/processes/loanApproval.bpmn")).exists();
     }
 
-    // Proves the breadcrumb is real, not a UI-side guess - every stage recorded through the actual
-    // service methods, not against WorkflowStateTracker in isolation (that's covered separately in
-    // com.metaml.workbench.workflow.WorkflowStateTrackerTest). Each stage's real detail (the actual
-    // generated project id, the actual launched port) has to show up, not just a bare COMPLETED,
-    // since a caller reading this back needs those to do anything useful with it.
     @Test
     void theWorkflowBreadcrumbReflectsWhatActuallyHappenedAtEveryRealStage() {
         ProcessModel model = workbenchService.saveProcessModel(null, "breadcrumb test", loanApprovalBpmn());
@@ -273,10 +230,6 @@ class WireTransferWalkthroughTest {
                 .isEqualTo(com.metaml.workbench.workflow.StageStatus.COMPLETED);
         assertThat(afterLaunch.stages().get(com.metaml.workbench.workflow.WorkflowStage.LAUNCH).detail())
                 .contains(String.valueOf(launched.port()));
-        // the full history is the actual point of an event log over a snapshot - every real
-        // transition should still be there, not just the latest one per stage: MODEL/IN_PROGRESS,
-        // MODEL/COMPLETED, GENERATE/IN_PROGRESS, GENERATE/COMPLETED, LAUNCH/IN_PROGRESS,
-        // LAUNCH/COMPLETED
         assertThat(afterLaunch.history()).hasSize(6);
 
         workbenchService.stopGeneratedProject(project.projectId());
@@ -286,11 +239,6 @@ class WireTransferWalkthroughTest {
                 .isEqualTo(com.metaml.workbench.workflow.StageStatus.STOPPED);
     }
 
-    // New scope item 5 (Evolve Workflow): "connect to an existing deployed application" needs to
-    // point back at the model that produced it, which means launchGeneratedProject and
-    // listRunningProjects both have to carry the real modelId, not just projectId/port -
-    // SpringBootProjectLauncher itself has no notion of a model, so this is specifically proving
-    // WorkbenchServiceImpl's own enrichment layer on top of it.
     @Test
     void runningProjectsCarryTheRealModelIdTheyWereGeneratedFrom() {
         ProcessModel model = workbenchService.saveProcessModel(null, "evolve workflow test", loanApprovalBpmn());
@@ -309,13 +257,6 @@ class WireTransferWalkthroughTest {
         workbenchService.stopGeneratedProject(project.projectId());
     }
 
-    // The actual new capability: workflow history is now genuinely persisted (WorkflowEventStore),
-    // not just backfilled for MODEL. Simulates a real restart end to end - saves, generates, and
-    // launches a project through one service instance sharing REAL (non-mocked, non-disabled)
-    // WorkbenchStateStore and WorkflowEventStore instances against real temp files, then constructs
-    // a second WorkbenchServiceImpl against those same files with fresh in-memory maps - exactly
-    // what a real process restart produces - and confirms every stage's real status, timestamp,
-    // and detail survives, not just MODEL.
     @Test
     void workflowHistorySurvivesARealBackendRestartForEveryStageNotJustModel(
             @org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
@@ -336,13 +277,6 @@ class WireTransferWalkthroughTest {
                 beforeRestart.launchGeneratedProject(project.projectId());
         beforeRestart.stopGeneratedProject(project.projectId());
 
-        // a fresh WorkbenchServiceImpl with fresh in-memory maps, but pointed at the SAME real
-        // files on disk - this is what a real process restart produces, nothing carried over in
-        // memory. WorkflowStateTracker's own @PostConstruct restore() has to be driven by hand too
-        // - Spring calls it automatically for a real bean, but constructing this one directly via
-        // `new` (the only way to get a SECOND, independent instance sharing the same files) bypasses
-        // Spring's lifecycle entirely, same reason WorkbenchServiceImpl's restoreState() needs the
-        // same reflection treatment just below.
         com.metaml.workbench.workflow.WorkflowStateTracker restartedTracker =
                 new com.metaml.workbench.workflow.WorkflowStateTracker(realEventStore);
         invokePostConstructOn(restartedTracker, "restore");
@@ -364,22 +298,9 @@ class WireTransferWalkthroughTest {
                 .isEqualTo(com.metaml.workbench.workflow.StageStatus.STOPPED);
         assertThat(state.stages().get(com.metaml.workbench.workflow.WorkflowStage.LAUNCH).detail())
                 .contains(String.valueOf(launched.port()));
-        // the full real sequence, not just the latest snapshot per stage: MODEL/IN_PROGRESS,
-        // MODEL/COMPLETED, GENERATE/IN_PROGRESS, GENERATE/COMPLETED, LAUNCH/IN_PROGRESS,
-        // LAUNCH/COMPLETED, LAUNCH/STOPPED
         assertThat(state.history()).hasSize(7);
     }
 
-    // Generated-project persistence: proves the actual capability, not just that a map got
-    // repopulated. generateSpringBootProject + launchGeneratedProject through ONE service
-    // instance, then a second instance built the same way the restart test above builds one
-    // (fresh in-memory maps, real WorkbenchStateStore/WorkflowEventStore backed by the same temp
-    // files) - but reusing the real, Spring-injected springBootProjectGenerator/
-    // springBootProjectLauncher beans, since those two already point at the real, shared
-    // output/template directories a genuine restart would leave untouched (they hold no
-    // in-memory generated-project state of their own - see SpringBootProjectGenerator.scanExisting()).
-    // The actual proof is launchGeneratedProject succeeding for real against the SAME projectId
-    // through the restarted instance, not merely that generatedProjects.containsKey() would say yes.
     @Test
     void aGeneratedProjectSurvivesARealBackendRestartAndCanActuallyBeLaunchedAgain(
             @org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
@@ -397,7 +318,6 @@ class WireTransferWalkthroughTest {
         com.metaml.workbench.generation.GeneratedProject project =
                 beforeRestart.generateSpringBootProject(model.getId());
 
-        // the physical artifact restoreGeneratedProjects() is supposed to find again
         assertThat(project.directory().resolve("src/main/resources/processes/loanApproval.bpmn")).exists();
 
         com.metaml.workbench.workflow.WorkflowStateTracker restartedTracker =
@@ -416,8 +336,6 @@ class WireTransferWalkthroughTest {
                 .stages().get(com.metaml.workbench.workflow.WorkflowStage.GENERATE).detail())
                 .isEqualTo(project.projectId());
 
-        // Test 2: the actual capability - launchGeneratedProject against the SAME projectId,
-        // through the RESTARTED instance, genuinely starts the SAME generated application
         try {
             com.metaml.workbench.generation.LaunchedProject launched =
                     restartedService.launchGeneratedProject(project.projectId());
@@ -425,8 +343,6 @@ class WireTransferWalkthroughTest {
             assertThat(launched.projectId()).isEqualTo(project.projectId());
             assertThat(launched.processKey()).isEqualTo(project.processKey());
             assertThat(launched.port()).isPositive();
-            // modelIdByProjectId reconstruction, not just generatedProjects - the breadcrumb this
-            // launch records has to land on the SAME model the original generate() came from
             assertThat(launched.modelId()).isEqualTo(model.getId());
 
             com.metaml.workbench.workflow.WorkflowState state = restartedService.getWorkflowState(model.getId());
@@ -437,10 +353,6 @@ class WireTransferWalkthroughTest {
         }
     }
 
-    // Missing artifact (Test 4): a project directory the registry would otherwise have resolved
-    // is gone entirely - proves the restarted registry does not silently fall back to some other
-    // project for the same id, it just doesn't have it, the same clear failure as an id that was
-    // never real.
     @Test
     void aGeneratedProjectWhoseDirectoryIsGoneIsNotRecoveredAfterRestart(
             @org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
@@ -458,9 +370,6 @@ class WireTransferWalkthroughTest {
         com.metaml.workbench.generation.GeneratedProject project =
                 beforeRestart.generateSpringBootProject(model.getId());
 
-        // simulates the directory having been cleaned up (disk cleanup, manual deletion, ...)
-        // between the original generate and the restart - not simulated by mocking, the actual
-        // directory recursively removed
         deleteRecursively(project.directory());
 
         com.metaml.workbench.workflow.WorkflowStateTracker restartedTracker =
@@ -493,20 +402,6 @@ class WireTransferWalkthroughTest {
         }
     }
 
-    // The backfill mechanism's real remaining job now that real persistence exists: a model whose
-    // workflow history genuinely predates it (never recorded to WorkflowEventStore - simulated here
-    // by writing the model straight into the H2 archive, bypassing saveProcessModel entirely, the
-    // same way a model saved by an old build actually would have been). Confirms restoreState()
-    // still recognizes "no persisted workflow history at all for this model" and backfills MODEL
-    // rather than leaving it stuck PENDING - but does NOT redo the backfill for a model that
-    // already has real history, which the test above already proves implicitly (its GENERATE/LAUNCH
-    // details would have been wiped by a redundant backfill if it did).
-    //
-    // Seeded through processModelArchiveStore, the model's single authoritative persistence. This
-    // used to seed through WorkbenchStateStore's JSON snapshot instead, back when that snapshot
-    // carried a redundant second copy of every model and restoreState() consulted it as a fallback;
-    // both were removed as implementation baggage. The behaviour under test - the MODEL-stage
-    // backfill - is unchanged, and is what these assertions still check.
     @Test
     void aModelWithNoPersistedWorkflowHistoryAtAllStillGetsItsModelStageBackfilled(
             @org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
@@ -534,9 +429,7 @@ class WireTransferWalkthroughTest {
         com.metaml.workbench.workflow.WorkflowState state = restartedService.getWorkflowState(legacyModel.getId());
         assertThat(state.stages().get(com.metaml.workbench.workflow.WorkflowStage.MODEL).status())
                 .isEqualTo(com.metaml.workbench.workflow.StageStatus.COMPLETED);
-        // the RESTORED model's own createdAt, not the original in-memory legacyCreatedAt -
-        // persistence truncates Instant precision, so comparing against the pre-persistence
-        // nanosecond value would fail for a reason that has nothing to do with the backfill itself
+        // Compare against deserialized createdAt to account for persistence timestamp truncation.
         ProcessModel restoredModel = restartedService.getProcessModel(legacyModel.getId());
         assertThat(state.stages().get(com.metaml.workbench.workflow.WorkflowStage.MODEL).timestamp())
                 .isEqualTo(restoredModel.getCreatedAt());
@@ -553,11 +446,6 @@ class WireTransferWalkthroughTest {
         method.invoke(target);
     }
 
-    // Same reflection-construction pattern bridgeDedupeIsSafeAcrossACompletelyFreshServiceInstance
-    // already uses above, here to get a SpringBootProjectGenerator pointed at a template directory
-    // that doesn't exist - the one way to make generateSpringBootProject genuinely fail through
-    // the real service rather than short-circuit before recording anything (a bad modelId, for
-    // instance, throws before the pipeline even starts, so it never touches the breadcrumb at all).
     @Test
     void aRealGenerateFailureIsRecordedAsFailedWithTheRealErrorNotSilentlySwallowed() throws Exception {
         var brokenGenerator = new com.metaml.workbench.generation.SpringBootProjectGenerator(
@@ -619,29 +507,22 @@ class WireTransferWalkthroughTest {
         assertThat(twin.getStatus()).isEqualTo("RUNNING");
         assertThat(openActivities(twin)).containsExactly(KYC);
 
-        // KYC is the one you bridge by hand. Its start event fires inside startProcessInstanceById,
-        // before launchProcess has put the twin in the map, so the trigger has nothing to look up.
+        // Manually bridge initial task since process start event fires before twin mapping registration.
         workbenchService.connectActivity(twin.getId(), KYC, KYC);
         AgentDecision kyc = workbenchService.bridgeActivityEvent(twin.getId(), KYC);
         assertThat(kyc.isApproved()).isTrue();
         assertThat(kyc.getAgentName()).isEqualTo(BRIDGE_AGENT);
         assertThat(evolvedAgent(twin, KYC)).isEqualTo(BRIDGE_AGENT);
 
-        // connect before completing. the start event for an activity fires once and doesn't come
-        // back, so anything connected afterwards needs the manual bridge button instead.
+        // Connect activities before completing predecessor to enable auto-bridge on start.
         connect(twin, AML, OFAC, CREDIT);
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
 
-        // the "complete" task listener on Task_KYC fires here, on the real (original) instance
-        // finishing the task - proves the agent execution delegate actually ran, not just deployed
         assertThat(agentExecuted(twin, KYC)).isEqualTo(BRIDGE_AGENT);
-        // and it's in the event log, so the UI shows it like every other operation
         assertThat(twin.getEventLog()).anyMatch(entry -> entry.contains("agentExecuted_" + KYC));
 
-        // genuine parallel split - three tasks open at the same time, not one after another
         assertThat(openActivities(twin)).containsExactlyInAnyOrder(AML, OFAC, CREDIT);
 
-        // nobody called bridge for any of these three. this is the whole point of the trigger.
         assertThat(evolvedAgent(twin, AML)).isEqualTo(BRIDGE_AGENT);
         assertThat(evolvedAgent(twin, OFAC)).isEqualTo(BRIDGE_AGENT);
         assertThat(evolvedAgent(twin, CREDIT)).isEqualTo(BRIDGE_AGENT);
@@ -663,30 +544,22 @@ class WireTransferWalkthroughTest {
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
         assertThat(openActivities(twin)).isEmpty();
         assertThat(reached(twin, "EndEvent_Success")).isTrue();
-        // never went down either rejection branch or the approval timeout
         assertThat(reached(twin, "EndEvent_RejectedIdentity")).isFalse();
         assertThat(reached(twin, "EndEvent_RejectedCompliance")).isFalse();
         assertThat(reached(twin, "Task_EscalateTimeout")).isFalse();
 
-        // This used to assert TWIN_RUNNING_ORIGINAL_ENDED, back when the twin was a second copy of
-        // the human process and sat on its own KYC task forever. Launch gives the twin a generated
-        // definition of its own now, so it walked the same route and finished a step ahead of the
-        // original - the twin does an activity when the original reaches it, not when it leaves it.
         assertThat(workbenchService.getTwinProcess(twin.getId()).getStatus()).isEqualTo("ENDED");
         assertThat(twinReached(twin, KYC)).isTrue();
         assertThat(twinReached(twin, "Gateway_ParallelJoin")).isTrue();
         assertThat(twinReached(twin, "EndEvent_Success")).isTrue();
         assertThat(twinAutomation(twin, NOTIFY)).isNotNull();
 
-        // seven activities, seven slots. a double-count would show up here before anywhere else.
         assertThat(governanceService.getUsage(twin.getId()).getEvolutionCount()).isEqualTo(7);
 
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).isEmpty();
     }
 
-    // A model saved with a tenantId is the owned resource. A twin launched from it never picks its
-    // own tenant, it inherits the model's - exercised through the real save -> launch path rather
-    // than by setting the field directly.
+    // Twins launched from tenant-owned models inherit the model's tenantId.
     @Test
     void savingAModelWithATenantIdCarriesItThroughToTheLaunchedTwin() throws IOException {
         ProcessModel model = workbenchService.saveProcessModel(null, "citi wire transfer owned",
@@ -696,14 +569,10 @@ class WireTransferWalkthroughTest {
         TwinProcess twin = workbenchService.launchProcess(model.getId());
 
         assertThat(twin.getTenantId()).isEqualTo("tenant-citibank");
-        // this is the same twin object runEvolution() itself receives - proves the tenant is
-        // actually obtainable at the real Evolve entry point, not just on the model
         assertThat(workbenchService.getTwinProcess(twin.getId()).getTenantId()).isEqualTo("tenant-citibank");
     }
 
-    // the existing 3-arg saveProcessModel (every pre-tenancy caller, including every other test in
-    // this file) must keep producing exactly what it always did - an unowned twin, not an invented
-    // "default" tenant standing in for a real one
+    // Untenanted models produce unowned twins without defaulting to an implicit tenant.
     @Test
     void legacyModelsWithNoTenantIdProduceUnownedTwinsNotAnInventedDefault() throws IOException {
         ProcessModel model = workbenchService.saveProcessModel(null, "citi wire transfer legacy",
@@ -715,9 +584,6 @@ class WireTransferWalkthroughTest {
         assertThat(twin.getTenantId()).isNull();
     }
 
-    // same real-restart convention as workflowHistorySurvivesARealBackendRestartForEveryStageNotJustModel
-    // just below - a fresh WorkbenchServiceImpl, same files on disk, restore() driven by hand the
-    // way Spring would drive it on a real process restart
     @Test
     void tenantOwnershipSurvivesARealBackendRestart(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir)
             throws Exception {
@@ -750,11 +616,6 @@ class WireTransferWalkthroughTest {
         assertThat(restartedService.getTwinProcess(twin.getId()).getTenantId()).isEqualTo("tenant-redcollar");
     }
 
-    // A PENDING approval has to survive the same real restart everything
-    // else here does. Tenant/policy state comes from the shared autowired beans (that continuity
-    // is covered elsewhere) - only WorkbenchStateStore and ApprovalStore are
-    // freshly file-backed and genuinely restarted, because those are what this test is actually
-    // about.
     @Test
     void pendingApprovalSurvivesARealBackendRestart(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir)
             throws Exception {
@@ -800,9 +661,7 @@ class WireTransferWalkthroughTest {
         assertThat(restored.get(0).twinId()).isEqualTo(twin.getId());
     }
 
-    // JVM died between markApproved and executeAfterGovernance ever running -
-    // the operation genuinely never happened. Reconciliation on restart must run it for real, not
-    // pretend it already occurred.
+    // Reconciles approved governance actions on restart if interrupted prior to execution.
     @Test
     void anApprovalThatNeverExecutedIsSafelyRunOnRestartReconciliation(
             @org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
@@ -829,10 +688,6 @@ class WireTransferWalkthroughTest {
         beforeCrash.evolveActivity(twin.getId(), KYC, "validator");
         String approvalId = beforeCrash.listApprovals(tenant.id()).get(0).id();
 
-        // simulates the exact crash window: approve() reached "mark APPROVED" and nothing past
-        // it - executeAfterGovernance never ran, no node manager call, no variable ever set.
-        // Calling ApprovalService directly (not WorkbenchServiceImpl.approveEvolution) is what
-        // makes that true.
         realApprovalService.markApproved(approvalId, tenant.id());
         assertThat(evolvedAgent(twin, KYC)).isNull();
 
@@ -853,11 +708,8 @@ class WireTransferWalkthroughTest {
         org.mockito.Mockito.verify(nodeManagerClient, org.mockito.Mockito.times(1)).checkAgentAvailability("validator");
     }
 
-    // JVM died AFTER the real side effect landed but BEFORE COMPLETED was
-    // persisted. Reconciliation must recognize it already happened - via Camunda's own committed
-    // variable history, not the approval's own (crashed, stale) status - and must NOT run it
-    // again. Node-manager call count is the proof: exactly one call total, from the original real
-    // approve(), none from reconciliation.
+    // Restart reconciliation: recognizes when an approval operation completed prior to shutdown,
+    // reconciling status without re-executing external agent calls.
     @Test
     void anApprovalThatAlreadyExecutedIsRecognizedNotReRunOnRestartReconciliation(
             @org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
@@ -884,16 +736,10 @@ class WireTransferWalkthroughTest {
         beforeCrash.evolveActivity(twin.getId(), KYC, "validator");
         String approvalId = beforeCrash.listApprovals(tenant.id()).get(0).id();
 
-        // the real operation genuinely runs here - setVariable really happens, exactly like
-        // production. This is not a simulation of execution, only of what gets persisted after.
         AgentDecision realDecision = beforeCrash.approveEvolution(approvalId, tenant.id());
         assertThat(realDecision.isApproved()).isTrue();
         assertThat(evolvedAgent(twin, KYC)).isEqualTo("validator-agent-01");
 
-        // NOW simulate the crash: force the persisted record back to APPROVED, as if the
-        // markCompleted() write never landed - the one write that COULD plausibly not survive a
-        // crash occurring in that exact instant, since the real side effect (setVariable) already
-        // committed to Camunda's own store by this point, independently of this file.
         Approval completed = realApprovalService.get(approvalId, tenant.id());
         Approval revertedToApproved = completed.withStatus(ApprovalStatus.APPROVED, completed.resolvedAt(), null);
         realApprovalStore.save(List.of(revertedToApproved));
@@ -904,7 +750,7 @@ class WireTransferWalkthroughTest {
         ApprovalService restartedApprovalService = new ApprovalService(realApprovalStore);
         invokePostConstructOn(restartedApprovalService, "restore");
         assertThat(restartedApprovalService.get(approvalId, tenant.id()).status())
-                .isEqualTo(ApprovalStatus.APPROVED); // confirms the simulated crash state really took
+                .isEqualTo(ApprovalStatus.APPROVED);
 
         WorkbenchServiceImpl restartedService = new WorkbenchServiceImpl(nodeManagerClient, governanceService,
                 policyDecisionEngine, restartedApprovalService, runtimeService, repositoryService, historyService,
@@ -914,14 +760,10 @@ class WireTransferWalkthroughTest {
 
         Approval reconciled = restartedApprovalService.get(approvalId, tenant.id());
         assertThat(reconciled.status()).isEqualTo(ApprovalStatus.COMPLETED);
-        // the real proof: still exactly one call, from the original approveEvolution() above -
-        // reconciliation recognized the variable was already set and did not call it again
         org.mockito.Mockito.verify(nodeManagerClient, org.mockito.Mockito.times(1)).checkAgentAvailability("validator");
     }
 
-    // A small helper so the four tests below don't each
-    // repeat tenant/policy/version/rule/activate by hand. Returns the real Tenant, not just its
-    // id, since a couple of callers want the name too.
+    // Configures and activates a tenant policy containing an EVOLVE_TWIN rule.
     private Tenant tenantWithEvolveTwinRule(String tenantName, PolicyEffect effect) {
         Tenant tenant = tenantPolicyService.createTenant(tenantName);
         Policy policy = tenantPolicyService.createTenantPolicy(tenant.id(), "Evolve Policy");
@@ -931,9 +773,6 @@ class WireTransferWalkthroughTest {
         return tenant;
     }
 
-    // Section 5's acceptance criterion: DENY must actually stop the real side effect, not just
-    // come back with a denied-looking response. evolvedAgent_<activityId> is that side effect
-    // (see runEvolution's own comment) - proven absent, not just the JSON checked.
     @Test
     void tenantPolicyDenyActuallyBlocksTheRealEvolveSideEffect() throws IOException {
         Tenant tenant = tenantWithEvolveTwinRule("Deny Tenant", PolicyEffect.DENY);
@@ -946,13 +785,10 @@ class WireTransferWalkthroughTest {
 
         assertThat(decision.isApproved()).isFalse();
         assertThat(decision.getGovernanceDecision()).isEqualTo("DENY");
-        // stopped before the node manager, not just before the variable write
         org.mockito.Mockito.verify(nodeManagerClient, org.mockito.Mockito.never()).checkAgentAvailability(anyString());
         assertThat(evolvedAgent(twin, KYC)).isNull();
     }
 
-    // Section 6: ALLOW must not merely say yes, the existing Evolve behavior has to actually run -
-    // same real path, same real side effect, nothing test-only about how it gets there.
     @Test
     void tenantPolicyAllowLetsTheRealEvolveSideEffectHappen() throws IOException {
         Tenant tenant = tenantWithEvolveTwinRule("Allow Tenant", PolicyEffect.ALLOW);
@@ -968,9 +804,6 @@ class WireTransferWalkthroughTest {
         assertThat(evolvedAgent(twin, KYC)).isEqualTo("validator-agent-01");
     }
 
-    // Section 7: the difference has to come entirely from which tenant owns the twin - no
-    // tenant-name conditional anywhere in the production code, same engine, same rule shape,
-    // opposite persisted effect
     @Test
     void tenantADenyDoesNotAffectTenantBAllow() throws IOException {
         Tenant tenantA = tenantWithEvolveTwinRule("Tenant A", PolicyEffect.DENY);
@@ -995,8 +828,6 @@ class WireTransferWalkthroughTest {
         assertThat(evolvedAgent(twinB, KYC)).isEqualTo("validator-agent-01");
     }
 
-    // Section 8/Step 3: REQUIRE_APPROVAL is not implemented yet, but it must never quietly become
-    // ALLOW - the action must not execute, and the result must say why in a way DENY doesn't
     @Test
     void requireApprovalDoesNotExecuteAndIsNotTheSameAsDeny() throws IOException {
         Tenant tenant = tenantWithEvolveTwinRule("Approval Tenant", PolicyEffect.REQUIRE_APPROVAL);
@@ -1011,7 +842,6 @@ class WireTransferWalkthroughTest {
         assertThat(decision.getGovernanceDecision()).isEqualTo("REQUIRE_APPROVAL");
         assertThat(evolvedAgent(twin, KYC)).isNull();
 
-        // A real, persistent PENDING approval, not just a refused response
         List<Approval> pending = approvalService.listForTenant(tenant.id());
         assertThat(pending).hasSize(1);
         assertThat(pending.get(0).status()).isEqualTo(ApprovalStatus.PENDING);
@@ -1019,8 +849,6 @@ class WireTransferWalkthroughTest {
         assertThat(pending.get(0).activityId()).isEqualTo(KYC);
     }
 
-    // Approving is not "run the evolve request again from scratch" - it resumes the
-    // exact paused operation and the real side effect actually happens, same as an ALLOW would
     @Test
     void approvingAnApprovalActuallyExecutesTheOriginalOperation() throws IOException {
         Tenant tenant = tenantWithEvolveTwinRule("Approve Tenant", PolicyEffect.REQUIRE_APPROVAL);
@@ -1038,7 +866,6 @@ class WireTransferWalkthroughTest {
         assertThat(approvalService.get(approvalId, tenant.id()).status()).isEqualTo(ApprovalStatus.COMPLETED);
     }
 
-    // Rejection is permanent and the action must never run
     @Test
     void rejectingAnApprovalPermanentlyStopsIt() throws IOException {
         Tenant tenant = tenantWithEvolveTwinRule("Reject Tenant", PolicyEffect.REQUIRE_APPROVAL);
@@ -1054,15 +881,11 @@ class WireTransferWalkthroughTest {
         assertThat(approvalService.get(approvalId, tenant.id()).status()).isEqualTo(ApprovalStatus.REJECTED);
         assertThat(evolvedAgent(twin, KYC)).isNull();
 
-        // rejected is terminal - approving it afterward must not be possible
         assertThatThrownBy(() -> workbenchService.approveEvolution(approvalId, tenant.id()))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(evolvedAgent(twin, KYC)).isNull();
     }
 
-    // The second approve() call must not be able
-    // to run the operation a second time. Node-manager call count is the actual proof - if
-    // executeAfterGovernance ran twice, it would have been contacted twice.
     @Test
     void approvingTheSameApprovalTwiceCannotExecuteTwice() throws IOException {
         Tenant tenant = tenantWithEvolveTwinRule("Double Approve Tenant", PolicyEffect.REQUIRE_APPROVAL);
@@ -1082,8 +905,7 @@ class WireTransferWalkthroughTest {
         org.mockito.Mockito.verify(nodeManagerClient, org.mockito.Mockito.times(1)).checkAgentAvailability("validator");
     }
 
-    // An approval is tenant-owned exactly like a policy is - same "not found"
-    // message whether it doesn't exist or belongs to someone else
+    // Approvals are tenant-scoped and return not found across tenant boundaries.
     @Test
     void tenantBCannotResolveTenantAsApproval() throws IOException {
         Tenant tenantA = tenantWithEvolveTwinRule("Isolation Tenant A", PolicyEffect.REQUIRE_APPROVAL);
@@ -1100,13 +922,10 @@ class WireTransferWalkthroughTest {
         assertThatThrownBy(() -> workbenchService.rejectApproval(approvalId, tenantB.id()))
                 .isInstanceOf(java.util.NoSuchElementException.class);
         assertThat(approvalService.listForTenant(tenantB.id())).isEmpty();
-        // still genuinely pending - tenant B's failed attempts didn't touch it
         assertThat(approvalService.get(approvalId, tenantA.id()).status()).isEqualTo(ApprovalStatus.PENDING);
     }
 
-    // Activating a new policy version after an approval was created must not
-    // retroactively change what that approval means - it executes under the decision that was
-    // actually pinned when the human was asked, not whatever the tenant's policy says now
+    // Pending approvals execute under their pinned policy version, unaffected by subsequent version activations.
     @Test
     void approvalExecutesUnderItsOriginalPolicyVersionNotALaterOne() throws IOException {
         Tenant tenant = tenantPolicyService.createTenant("Version Pin Tenant");
@@ -1123,20 +942,16 @@ class WireTransferWalkthroughTest {
         String approvalId = approvalService.listForTenant(tenant.id()).get(0).id();
         assertThat(approvalService.get(approvalId, tenant.id()).policyVersionNumber()).isEqualTo(1);
 
-        // now the tenant activates a stricter version - a fresh request would be denied
         PolicyVersion v2 = tenantPolicyService.createDraftVersion(policy.id(), tenant.id());
         tenantPolicyService.addRule(v2.id(), tenant.id(), "action", "==", "EVOLVE_TWIN", PolicyEffect.DENY);
         tenantPolicyService.activateVersion(v2.id(), tenant.id());
 
-        // the OLD approval still executes - it was never asked about v2
         AgentDecision decision = workbenchService.approveEvolution(approvalId, tenant.id());
         assertThat(decision.isApproved()).isTrue();
         assertThat(evolvedAgent(twin, KYC)).isEqualTo("validator-agent-01");
     }
 
-    // up to now an evolution was pure bookkeeping - it recorded which agent was picked and the
-    // original ran exactly the same either way. Task_Credit is the one activity where the agent's
-    // answer steers the process, so these two runs differ in nothing but which agent evolved it.
+    // Tests routing when agent decision sets riskFlagged variable driving exclusive gateway evaluation.
     @Test
     void aRiskFlaggingAgentSendsTheTransferToTheComplianceOfficer() throws IOException {
         TwinProcess plain = walkToTheComplianceChecks("citi wire transfer plain credit check");
@@ -1145,7 +960,6 @@ class WireTransferWalkthroughTest {
         assertThat(originalVariable(plain, RISK_FLAG)).isNull();
         assertThat(openActivities(plain)).containsExactly(APPROVE);
         assertThat(reached(plain, ESCALATE)).isFalse();
-        // and out the far end the way it always did
         assertThat(workbenchService.completeCurrentTasks(plain.getId())).hasSize(1);
         assertThat(workbenchService.completeCurrentTasks(plain.getId())).hasSize(1);
         assertThat(workbenchService.completeCurrentTasks(plain.getId())).hasSize(1);
@@ -1164,9 +978,6 @@ class WireTransferWalkthroughTest {
         assertThat(reached(flagged, APPROVE)).isFalse();
     }
 
-    // Evolving with an ordinary
-    // agent after a flagged one left the old flag sitting on the twin, so the UI would show a
-    // plain agent assigned while the process kept escalating anyway
     @Test
     void reEvolvingWithAnOrdinaryAgentClearsAnEarlierRiskFlag() throws IOException {
         TwinProcess twin = walkToTheComplianceChecks("citi wire transfer re-evolved credit check");
@@ -1181,8 +992,7 @@ class WireTransferWalkthroughTest {
         assertThat(reached(twin, ESCALATE)).isFalse();
     }
 
-    // the shared front half of both runs above: launch, bridge KYC by hand, and stop with the
-    // three compliance checks open and connected
+    // Advances process execution to the parallel compliance gateway.
     private TwinProcess walkToTheComplianceChecks(String modelName) throws IOException {
         ProcessModel model = workbenchService.saveProcessModel(null, modelName, citibankBpmn());
         TwinProcess twin = workbenchService.launchProcess(model.getId());
@@ -1194,7 +1004,6 @@ class WireTransferWalkthroughTest {
         return twin;
     }
 
-    // connect() above always maps id to itself, so it never catches original/twin ids differing
     @Test
     void agentExecutionResolvesThroughANonIdentityActivityLink() throws IOException {
         ProcessModel model = workbenchService.saveProcessModel(null,
@@ -1233,13 +1042,6 @@ class WireTransferWalkthroughTest {
         assertThat(governanceService.getUsage(twin.getId()).getEvolutionCount()).isEqualTo(used);
     }
 
-    // Checking evolvedAgent_<twinActivityId>[_loopCounter] alone is correct for a multi-instance
-    // visit, where loopCounter makes the name visit-unique (the test above covers that), but wrong
-    // for a PLAIN
-    // activity revisited through an ordinary loop-back gateway: no multi-instance, no loopCounter,
-    // every visit writes the identical variable name. That made visit #2 look "already forwarded"
-    // the instant visit #1 succeeded - exactly what the deleted forwardedBridgeActivities Set's own
-    // comment had warned about.
     @Test
     void aPlainActivityRevisitedThroughALoopBackGatewayBridgesEveryVisitNotJustTheFirst() throws IOException {
         AtomicInteger nextAgent = new AtomicInteger();
@@ -1253,8 +1055,7 @@ class WireTransferWalkthroughTest {
         TwinProcess twin = workbenchService.launchProcess(model.getId());
         workbenchService.connectActivity(twin.getId(), "Task_Redo", "Task_Redo");
 
-        // visit #1's start event fires during launchProcess, before the twin is tracked - same
-        // reason KYC gets bridged by hand elsewhere in this file
+        // First iteration starts during launchProcess prior to twin registration; manually bridged.
         assertThat(workbenchService.bridgeActivityEvent(twin.getId(), "Task_Redo").isApproved()).isTrue();
         assertThat(evolvedAgent(twin, "Task_Redo")).isEqualTo("validator-agent-01");
 
@@ -1262,13 +1063,11 @@ class WireTransferWalkthroughTest {
                 .processInstanceId(twin.getOriginalProcessId()).singleResult();
         taskService.complete(firstVisit.getId(), Map.of("redo", true));
 
-        // completing visit #1 with redo=true sends the token back through the gateway into the
-        // same activity a second time - same activityId, no loopCounter, a brand new activityInstanceId
+        // Looping back creates a new activity instance for the same activity definition.
         Task secondVisit = taskService.createTaskQuery()
                 .processInstanceId(twin.getOriginalProcessId()).singleResult();
         assertThat(secondVisit.getId()).isNotEqualTo(firstVisit.getId());
 
-        // visit #2 must not be skipped as "already forwarded"
         assertThat(governanceService.getUsage(twin.getId()).getEvolutionCount()).isEqualTo(2);
         assertThat(evolvedAgent(twin, "Task_Redo")).isEqualTo("validator-agent-02");
 
@@ -1276,16 +1075,6 @@ class WireTransferWalkthroughTest {
         assertThat(reached(twin, "EndEvent_1")).isTrue();
     }
 
-    // The old forwardedBridgeActivities guard lived only in
-    // WorkbenchServiceImpl's own memory, so a plain app restart wiped it and reopened every
-    // already-bridged visit to a second evolution. It's gone now - the guard is derived from
-    // evolvedAgent_<twinActivityId> on the twin's own Camunda runtime state instead, which is a row
-    // in the engine's tables, not app memory. Proven here with a second WorkbenchServiceImpl built
-    // directly rather than through Spring: its own twinProcesses map starts with nothing but the
-    // TwinProcess object itself (id, activity links - exactly what restoreState() reconstructs from
-    // the state file on a real reboot), no evolutionsInFlight claim and no per-visit dedup state of
-    // any kind carried over, because TwinProcess no longer has anywhere to carry one. If the
-    // duplicate is still refused here, it can only be because the check reads Camunda's own tables.
     @Test
     void bridgeDedupeIsSafeAcrossACompletelyFreshServiceInstance() throws Exception {
         ProcessModel model = workbenchService.saveProcessModel(null, "restart dedupe test", citibankBpmn());
@@ -1308,14 +1097,11 @@ class WireTransferWalkthroughTest {
         AgentDecision secondBridge = freshService.bridgeActivityEvent(twin.getId(), KYC);
         assertThat(secondBridge.isApproved()).isFalse();
         assertThat(secondBridge.getReason()).contains("already forwarded");
-        // exactly the one call the first, genuine bridge made - the fresh instance never asked again
         org.mockito.Mockito.verify(nodeManagerClient, org.mockito.Mockito.times(1))
                 .checkAgentAvailability(anyString());
     }
 
-    // the delegate used to read the twin's variables blind and let the engine throw. the catch
-    // around it never helped: the transaction is rollback-only by then, so completing the task
-    // failed with UnexpectedRollbackException and the real cause only showed up as a warn line
+    // Gracefully handles missing twin process instance during delegate execution.
     @Test
     void completingATaskStillWorksAfterTheTwinInstanceIsGone() throws IOException {
         ProcessModel model = workbenchService.saveProcessModel(null, "citi wire transfer lost twin",
@@ -1333,9 +1119,7 @@ class WireTransferWalkthroughTest {
         assertThat(agentExecuted(twin, KYC)).isNull();
     }
 
-    // the delegate looked the twin activity up with a resolver that fell back to the activity's
-    // own id, so completing an activity nobody connected read whatever agent another link had
-    // parked under that name and reported it as executed
+    // Unconnected activities must not report agent executions from unlinked twins.
     @Test
     void anUnconnectedActivityNeverReportsAnAgentExecution() throws IOException {
         ProcessModel model = workbenchService.saveProcessModel(null, "citi wire transfer unconnected",
@@ -1347,7 +1131,6 @@ class WireTransferWalkthroughTest {
         assertThat(evolvedAgent(twin, AML)).isEqualTo(BRIDGE_AGENT);
 
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
-        // Task_AML is one of the three that just opened, and it was never connected to anything
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(3);
 
         assertThat(agentExecuted(twin, AML)).isNull();
@@ -1360,8 +1143,6 @@ class WireTransferWalkthroughTest {
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
         assertThat(openActivities(twin)).hasSize(3);
 
-        // both requests take their task snapshot before either one completes anything, which is
-        // what a double click on Complete current task(s) does at the compliance-check step
         CyclicBarrier gate = new CyclicBarrier(2);
         Callable<List<String>> complete = () -> {
             gate.await(10, TimeUnit.SECONDS);
@@ -1375,7 +1156,6 @@ class WireTransferWalkthroughTest {
             for (Future<List<String>> result : results) {
                 all.addAll(result.get(30, TimeUnit.SECONDS));
             }
-            // each task completed exactly once, split between the two however it landed
             assertThat(all).hasSize(3);
         } finally {
             pool.shutdownNow();
@@ -1384,7 +1164,6 @@ class WireTransferWalkthroughTest {
         assertThat(openActivities(twin)).containsExactly(APPROVE);
     }
 
-    // stubbed catalog parks whoever gets in first, guaranteeing the second one arrives mid-evolution
     @Test
     void evolveAndBridgeAtOnceOnlyBurnOneSlot() throws Exception {
         assertOneSlotWhenRacing(true);
@@ -1433,11 +1212,6 @@ class WireTransferWalkthroughTest {
         assertThat(governanceService.getUsage(twin.getId()).getEvolutionCount()).isEqualTo(1);
     }
 
-    // AdvanceTwinActivity used to run unconditionally once the
-    // evolutionsInFlight claim was released, so the LOSER of two concurrent bridge calls for the
-    // identical visit could advance the twin's token before the WINNER's own evolution had actually
-    // finished - running automation with evolvedAgent_KYC still unset, and losing the winner's real
-    // node-manager round trip outright when its later setVariable() found the twin already moved on.
     @Test
     void aSecondConcurrentBridgeForTheSameVisitNeverAdvancesBeforeTheFirstEvolutionFinishes() throws Exception {
         ProcessModel model = workbenchService.saveProcessModel(null,
@@ -1463,14 +1237,9 @@ class WireTransferWalkthroughTest {
             assertThat(firstIsInside.await(20, TimeUnit.SECONDS)).isTrue();
 
             Future<AgentDecision> secondCall = pool.submit(() -> workbenchService.bridgeActivityEvent(twin.getId(), KYC));
-            // loses the claim immediately and returns fast - the fix means it never even attempts
-            // to advance the twin, rather than blocking until the winner finishes
             AgentDecision secondDecision = secondCall.get(10, TimeUnit.SECONDS);
             assertThat(secondDecision.isApproved()).isFalse();
 
-            // the proof the bug is fixed: at this exact point, with the winning evolution still
-            // parked mid-flight, the twin must NOT have been advanced by the loser, and no agent
-            // must have been recorded yet either
             assertThat(runtimeService.getActiveActivityIds(twin.getTwinProcessId())).containsExactly(KYC);
             assertThat(evolvedAgent(twin, KYC)).isNull();
 
@@ -1486,13 +1255,8 @@ class WireTransferWalkthroughTest {
         }
     }
 
-    // forwardedBridgeActivities used to key on activityId alone, so visit #2 looked like a
-    // duplicate. Then the guard got fixed but the variables didn't: both visits still wrote
-    // evolvedAgent_Task_Loop, so visit #2 quietly overwrote visit #1 and two real evolutions
-    // were indistinguishable from one.
     @Test
     void multiInstanceActivityBridgesEveryVisitNotJustTheFirst() throws IOException {
-        // a different agent per call, so a variable that survived from the wrong visit shows up
         AtomicInteger nextAgent = new AtomicInteger();
         given(nodeManagerClient.checkAgentAvailability(anyString())).willAnswer(call -> {
             String type = call.getArgument(0);
@@ -1504,41 +1268,31 @@ class WireTransferWalkthroughTest {
         TwinProcess twin = workbenchService.launchProcess(model.getId());
         workbenchService.connectActivity(twin.getId(), "Task_Loop", "Task_Loop");
 
-        // visit #1's start event fires during launchProcess, before the twin is tracked - same
-        // reason KYC gets bridged by hand elsewhere in this file
+        // Initial iteration starts before twin tracking is active; manually bridged.
         AgentDecision firstVisit = workbenchService.bridgeActivityEvent(twin.getId(), "Task_Loop");
         assertThat(firstVisit.isApproved()).isTrue();
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
 
-        // completing visit #1 opens visit #2 - same activityId, different activityInstanceId
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
 
         assertThat(reached(twin, "EndEvent_1")).isTrue();
         assertThat(governanceService.getUsage(twin.getId()).getEvolutionCount()).isEqualTo(2);
 
-        // both evolutions still there at the end, each with the agent its own visit was given
         assertThat(evolvedAgent(twin, "Task_Loop_0")).isEqualTo("validator-agent-01");
         assertThat(evolvedAgent(twin, "Task_Loop_1")).isEqualTo("validator-agent-02");
         assertThat(agentExecuted(twin, "Task_Loop_0")).isEqualTo("validator-agent-01");
-        // the unsuffixed name is what the old one-per-activity write used
         assertThat(evolvedAgent(twin, "Task_Loop")).isNull();
         assertThat(agentExecuted(twin, "Task_Loop")).isNull();
 
-        // The twin walked both visits of its own copy of the loop, one message per visit, and its
-        // second visit is bridged the moment the original's second visit opens - which is before
-        // the original completes it. So the twin has already reached its end event by the time
-        // AgentExecutionDelegate runs for visit #2, and the delegate leaves a finished twin alone.
+        // Twin may reach completion before the original; finished twin instances are ignored.
         assertThat(twinAutomation(twin, "Task_Loop_0")).isNotNull();
         assertThat(twinAutomation(twin, "Task_Loop_1")).isNotNull();
         assertThat(twinReached(twin, "EndEvent_1")).isTrue();
         assertThat(agentExecuted(twin, "Task_Loop_1")).isNull();
     }
 
-    // Parallel multi-instance through the real bridge/governance/twin-advance path.
-    // Camunda's correlate() throws the instant more than one execution matches a message name,
-    // which is exactly what three parallel siblings waiting on the identical name produce.
-    // advanceTwinActivity resolves that by loopCounter, using messageEventReceived(name,
-    // executionId) to target one sibling at a time.
+    // Parallel multi-instance activities require execution-scoped message delivery;
+    // correlate() throws when multiple siblings wait on the same message name.
     @Test
     void parallelMultiInstanceActivityAdvancesEachSiblingIndependently() throws IOException {
         AtomicInteger nextAgent = new AtomicInteger();
@@ -1554,24 +1308,19 @@ class WireTransferWalkthroughTest {
         workbenchService.connectActivity(twin.getId(), "Task_Gate", "Task_Gate");
         workbenchService.connectActivity(twin.getId(), "Task_Parallel", "Task_Parallel");
 
-        // Task_Gate's start event fires during launchProcess, before the twin is tracked - same
-        // registration-order gap the very first activity always has, sequential or not
+        // Initial task starts prior to twin registration; manually bridged.
         assertThat(workbenchService.bridgeActivityEvent(twin.getId(), "Task_Gate").isApproved()).isTrue();
 
-        // completing the gate opens all three parallel branches on the original at once, and the
-        // twin's own three siblings get created the moment its Task_Gate automation ran above -
-        // AutoBridgeTrigger fires once per branch, each individually resolved by loopCounter
+        // Completing gate task spawns parallel branches correlated individually via loopCounter.
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
         assertThat(openActivities(twin)).containsExactly("Task_Parallel", "Task_Parallel", "Task_Parallel");
 
-        // all three twin siblings advanced independently - none collided, none left behind
         assertThat(twinAutomation(twin, "Task_Parallel_0")).isNotNull();
         assertThat(twinAutomation(twin, "Task_Parallel_1")).isNotNull();
         assertThat(twinAutomation(twin, "Task_Parallel_2")).isNotNull();
         assertThat(evolvedAgent(twin, "Task_Parallel_0")).isNotNull();
         assertThat(evolvedAgent(twin, "Task_Parallel_1")).isNotNull();
         assertThat(evolvedAgent(twin, "Task_Parallel_2")).isNotNull();
-        // each branch really got its own agent rather than three writes landing on one variable
         assertThat(List.of(evolvedAgent(twin, "Task_Parallel_0"), evolvedAgent(twin, "Task_Parallel_1"),
                 evolvedAgent(twin, "Task_Parallel_2"))).doesNotHaveDuplicates();
 
@@ -1581,14 +1330,7 @@ class WireTransferWalkthroughTest {
         assertThat(governanceService.getUsage(twin.getId()).getEvolutionCount()).isEqualTo(4);
     }
 
-    // Before this pass,
-    // the manual "Bridge selected activity" button against a parallel activity would throw on
-    // every click, since advanceTwinActivity had no execution id to disambiguate with. The
-    // two-argument convenience overload (bridge "whichever visit I'm sitting on") still can't tell
-    // several simultaneously-open parallel siblings apart on its own - currentVisitId resolves to
-    // the same not-yet-ended visit every time, so repeated clicks with no way to name a different
-    // one keep landing on the first sibling and correctly report "already forwarded" rather than
-    // making anything up or corrupting state.
+    // Calling bridgeActivityEvent without an activity instance ID resolves to the first active sibling.
     @Test
     void manualBridgeWithNoVisitSelectorKeepsResolvingTheSameParallelSibling() throws IOException {
         given(nodeManagerClient.checkAgentAvailability(anyString())).willAnswer(call -> {
@@ -1607,21 +1349,13 @@ class WireTransferWalkthroughTest {
         int usedAfterFirst = governanceService.getUsage(twin.getId()).getTwinExecutionCount();
         assertThat(usedAfterFirst).isEqualTo(1);
 
-        // repeated clicks resolve to the same already-forwarded visit - no crash, no slot leak,
-        // but no further progress either
         AgentDecision second = workbenchService.bridgeActivityEvent(twin.getId(), "Task_Parallel");
         assertThat(second.isApproved()).isFalse();
         assertThat(second.getReason()).contains("already forwarded");
         assertThat(governanceService.getUsage(twin.getId()).getTwinExecutionCount()).isEqualTo(usedAfterFirst);
     }
 
-    // What actually closes the gap the test above documents: bridgeActivityEvent's three-argument
-    // overload (originally AutoBridgeTrigger's own entry point) takes the exact visit to bridge as
-    // an activityInstanceId, and now advances the twin through that specific visit too - the same
-    // consolidation that let AutoBridgeTrigger drop its separate advanceTwinActivity call entirely.
-    // A caller who can name which of several open parallel siblings they mean - a future frontend
-    // listing three distinct open tasks with three distinct ids, or this test reading them off
-    // history the same way currentVisitId would - reaches all three individually, cleanly.
+    // Supplying an explicit activityInstanceId bridges each parallel sibling independently.
     @Test
     void bridgeActivityEventWithAnExplicitVisitReachesEveryParallelSibling() throws IOException {
         AtomicInteger nextAgent = new AtomicInteger();
@@ -1666,8 +1400,7 @@ class WireTransferWalkthroughTest {
         assertThatThrownBy(() -> workbenchService.saveProcessModel(null, "not bpmn", "<nope/>"))
                 .isInstanceOf(IllegalArgumentException.class);
 
-        // we can't tell a model is unusable until it's already deployed, so the reject path has
-        // to take the deployment back out again or cockpit slowly fills up with junk
+        // Deployments are rolled back if model validation fails post-deployment.
         long deploymentsBefore = repositoryService.createDeploymentQuery().count();
         String notExecutable = citibankBpmn().replace("isExecutable=\"true\"", "isExecutable=\"false\"");
         assertThatThrownBy(() -> workbenchService.saveProcessModel(null, "not executable", notExecutable))
@@ -1698,8 +1431,7 @@ class WireTransferWalkthroughTest {
                 .toList();
     }
 
-    // via history like originalVariable below, and for the same reason: the twin now walks along
-    // with the original and reaches its own end event first, so a runtimeService read on it throws
+    // Queried via HistoryService because completed instances cannot be read from RuntimeService.
     private Object evolvedAgent(TwinProcess twin, String twinActivityId) {
         HistoricVariableInstance variable = historyService.createHistoricVariableInstanceQuery()
                 .processInstanceId(twin.getTwinProcessId())
@@ -1708,7 +1440,6 @@ class WireTransferWalkthroughTest {
         return variable == null ? null : variable.getValue();
     }
 
-    // what the twin's own automation left behind on the activity it walked through
     private Object twinAutomation(TwinProcess twin, String twinActivityId) {
         HistoricVariableInstance variable = historyService.createHistoricVariableInstanceQuery()
                 .processInstanceId(twin.getTwinProcessId())
@@ -1728,8 +1459,7 @@ class WireTransferWalkthroughTest {
         return originalVariable(twin, "agentExecuted_" + activityId);
     }
 
-    // via history, not runtimeService - the original has already ended by the time some of these
-    // assertions run and reading a variable off a finished instance throws
+    // Queried via HistoryService because completed process instances throw in RuntimeService.
     private Object originalVariable(TwinProcess twin, String variableName) {
         HistoricVariableInstance variable = historyService.createHistoricVariableInstanceQuery()
                 .processInstanceId(twin.getOriginalProcessId())
@@ -1745,7 +1475,6 @@ class WireTransferWalkthroughTest {
                 .count() > 0;
     }
 
-    // walk up to find examples/ instead of copying the bpmn into test resources and letting them drift
     private static String citibankBpmn() throws IOException {
         Path dir = Path.of("").toAbsolutePath();
         while (dir != null) {
@@ -1759,10 +1488,6 @@ class WireTransferWalkthroughTest {
                 + Path.of("").toAbsolutePath());
     }
 
-    // small enough to just inline rather than another file in examples/ - only exists to give a
-    // real sequential multi-instance activity for the bridge-tracking regression test above.
-    // Carries the same complete listener as the two example models, or the test would only ever
-    // exercise the bridge and never the delegate.
     private static String loopBpmn() {
         return """
                 <?xml version="1.0" encoding="UTF-8"?>
@@ -1793,9 +1518,7 @@ class WireTransferWalkthroughTest {
                 """;
     }
 
-    // a plain (non-multi-instance) activity a token can revisit more than once - an ordinary
-    // exclusive-gateway loop-back, not a loop characteristic - so there is no loopCounter anywhere
-    // on either side to tell visit #1 and visit #2 apart by name
+    // BPMN fixture for an exclusive-gateway loop-back without multi-instance characteristics.
     private static String loopBackBpmn() {
         return """
                 <?xml version="1.0" encoding="UTF-8"?>
@@ -1829,10 +1552,7 @@ class WireTransferWalkthroughTest {
                 """;
     }
 
-    // Task_Gate first so Task_Parallel's three branches open via the ordinary AFTER_COMMIT path
-    // rather than the launch-time registration race every first activity has - the parallel
-    // regression test above is about disambiguating three simultaneous siblings, not about that
-    // separate, already-covered gap.
+    // Leading task gates parallel execution until after transaction commit.
     private static String parallelLoopBpmn() {
         return """
                 <?xml version="1.0" encoding="UTF-8"?>
@@ -1871,10 +1591,7 @@ class WireTransferWalkthroughTest {
                 """;
     }
 
-    // parallel MI with nothing ahead of it, so all three branches hit the same registration-order
-    // gap the very first activity always has, and only the manual bridge button can reach any of
-    // them - exactly the shape needed to see what that button can and can't do against a parallel
-    // activity none of whose siblings have completed yet.
+    // Ungated parallel multi-instance fixture testing manual bridge before sibling completion.
     private static String parallelFirstBpmn() {
         return """
                 <?xml version="1.0" encoding="UTF-8"?>

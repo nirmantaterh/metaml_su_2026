@@ -57,11 +57,6 @@ class ProcessModelFileStoreTest {
         assertThat(store.exists("model-1")).isTrue();
     }
 
-    // The modelId reaching this class is client-supplied all the way from the save endpoint's JSON
-    // body, and pathFor() resolves it straight into the configured directory - so a traversal-
-    // shaped id used to write the model's BPMN wherever it pointed. Asserting the throw alone isn't
-    // enough here: the whole risk is a file appearing outside the directory, so the test checks the
-    // directory the id was aiming at is still empty afterwards.
     @Test
     void aTraversalShapedModelIdCannotWriteOutsideTheModelsDirectory() {
         Path modelsDir = tempDir.resolve("models");

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>3.5.16</version>
+		<relativePath/>
+	</parent>
+	<groupId>com.metaml</groupId>
+	<artifactId>capability-core</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>capability-core</name>
+	<description>
+		Provider-agnostic capability model and runtime output boundary, shared by the Workbench and by
+		every generated standalone Target Platform.
+
+		This module exists so a generated Target Platform can execute a legitimate provider without
+		depending on the Workbench runtime. It therefore contains no Spring, no persistence, no
+		governance, no provider catalog and no BPMN generation - only the capability contract model,
+		provider identity, the output-contract boundary, and the demand-side BPMN contract reader.
+
+		Nothing here may gain a dependency on the workbench module. That direction is the whole point:
+		workbench -> capability-core, never the reverse.
+	</description>
+
+	<properties>
+		<!-- 17, not the workbench's 24: a generated Target Platform compiles at 17 (see the template
+		     pom's java.version) and has to be able to consume this jar. -->
+		<java.version>17</java.version>
+		<!-- Matches the generated Target Platform template, which is the lower of the two consumers.
+		     Only long-stable engine API is used here (DelegateExecution, the BPMN model API), so the
+		     workbench's newer engine reads these classes without issue. -->
+		<camunda.version>7.20.0</camunda.version>
+	</properties>
+
+	<dependencies>
+		<!-- All provided: this is a library, so each consumer supplies its own engine and logging
+		     binding. The workbench runs Camunda 7.22, a generated Target Platform runs 7.20, and
+		     neither should have the other's version dragged onto its classpath by this module. -->
+		<dependency>
+			<groupId>org.camunda.bpm</groupId>
+			<artifactId>camunda-engine</artifactId>
+			<version>${camunda.version}</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.camunda.bpm.model</groupId>
+			<artifactId>camunda-bpmn-model</artifactId>
+			<version>${camunda.version}</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+			<scope>provided</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- Test-only: backs a standalone in-memory Camunda engine (no Spring context) so the
+		     dispatcher can be proven against a real engine's own commit boundary rather than a mock -
+		     the same approach ExternalTaskRetrySemanticsTest already uses in the workbench module. -->
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+</project>

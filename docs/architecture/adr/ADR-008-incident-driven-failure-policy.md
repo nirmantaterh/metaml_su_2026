@@ -17,20 +17,20 @@ The Twin's automation Service Task (`TwinAutomationDelegate`, dispatching to a `
 - **Job Executor–based retry/incident** — Camunda's native job-retry mechanism is exclusively a Job Executor concept, requiring the Service Task to be asynchronous. Making it async to get that machinery back would reopen the exact coupling ADR-009 exists to avoid (the earlier `asyncBefore` design that required disabling the Job Executor and broke boundary timers/history cleanup).
 - **BPMN-native Error Boundary Event retry loop** — genuinely investigated and proven viable: Error Boundary Events were empirically confirmed to catch even a plain unchecked exception thrown inside a synchronous Service Task, not just an explicitly-thrown `BpmnError`, opening a real possibility for a BPMN-modeled retry loop. Deliberately **not** built, because it would mean generating retry-loop BPMN structure into every Twin definition regardless of whether any given project's automation actually benefits from bounded retry — a policy decision that, per the Retry rejection above, belongs inside a specific project's own automation, not imposed uniformly by the generator.
 
-## Evidence
+## Verification
 
 Proven, not assumed: a throwaway probe made an automation delegate throw, confirmed the Receive Task's event subscription survived unchanged (the whole Camunda command — correlation plus automation — rolls back together), then manually created and resolved an Incident against that same execution and successfully retried the identical correlation. `TwinAutomationIncidentTest.automationFailureRecordsAnIncidentLeavesTheOriginalUntouchedAndSupportsRetry` codifies all five required properties: a real resolvable Incident is created, the Original is completely unaffected, the Twin does not advance past the failure, no duplicate execution occurs on retry, and zero Job Executor involvement occurs at any point.
 
 ## Trade-offs
 
 - **Gained:** operator-visible, Cockpit-native failure surfacing; zero risk of double-invoking a non-idempotent automation; zero Job Executor coupling.
-- **Given up:** no automatic self-healing for genuinely transient failures — an operator (or a future scheduled job outside this architecture) must notice and act on the Incident. Accepted as the smallest mechanism that fits without guessing at automation idempotency it has no way to verify.
+- **Given up:** no automatic self-healing for transient failures — an operator (or an external orchestrator) must notice and act on the Incident. Accepted as the smallest mechanism that fits without assuming automation idempotency.
 
 ## Consequences
 
-- Recovery must be idempotent-safe to repeat, which is exactly what the W4 correction (Phase 7.5, [ADR-012](ADR-012-restart-and-recovery-philosophy.md)) had to guarantee independently of this decision.
-- A project whose automation genuinely needs bounded retry for a known-transient dependency must implement that retry *inside* its own `ProjectAutomationService`, where it can actually reason about its own idempotency — this architecture will not do it on that project's behalf.
+- Recovery must be idempotent-safe to repeat, which is guaranteed by engine-backed bridge deduplication ([ADR-012](ADR-012-restart-and-recovery-philosophy.md)).
+- A project whose automation requires bounded retry for a known-transient dependency must implement that retry *inside* its own `ProjectAutomationService`, where it can reason about its own idempotency.
 
 ## Future Reconsideration
 
-If a future project's automation demonstrates a real, recurring need for transient-failure retry that individual `ProjectAutomationService` implementations keep reinventing, that would be grounds to revisit — but the burden of proof is on a demonstrated need, not a hypothetical convenience.
+If a future project's automation demonstrates a recurring need for transient-failure retry that individual `ProjectAutomationService` implementations keep reinventing, that would be grounds to revisit based on concrete operational requirements rather than hypothetical convenience.

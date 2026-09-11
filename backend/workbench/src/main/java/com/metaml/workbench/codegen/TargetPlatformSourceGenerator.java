@@ -22,24 +22,23 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-// Generates the Spring beans the fixed com.tp.TargetPlatform template expects. The BPMN is normalised
-// to reference each generated bean by BPMN element id, so delegateExpression and class inputs behave
-// the same way in the target platform.
-//
-// Lockstep synchronization for delegate-expression BPMNs: those have no signal catch events, so the
-// proxy runs straight through with no wait state and the twin's receiveTask/message subscriptions are
-// invisible to SignalBroadcaster, which only queries signals. This generator therefore inserts a
-// signal intermediateCatchEvent after each proxy serviceTask, and replaces each twin receiveTask with
-// a catch event on the SAME sync_<activityId> name, giving the existing REQUEST/RESPONSE handoff two
-// subscription points to pair.
-// Load-bearing assumption: SignalBroadcaster only concludes the twin has advanced from state read
-// after signalEventReceived() returns, which is a valid proof only because the twin's _automate
-// delegate runs synchronously in the same Camunda transaction. An automation delegate that hands work
-// to another thread and returns early would silently break that invariant.
+    // Generates the Java source tree (delegates, listeners, broadcasters, status controller) for a target platform.
 @Component
 public class TargetPlatformSourceGenerator {
     private static final String CAMUNDA_NS = "http://camunda.org/schema/1.0/bpmn";
+    private static final String BPMNDI_NS = "http://www.omg.org/spec/BPMN/20100524/DI";
+    private static final String DI_NS = "http://www.omg.org/spec/DD/20100524/DI";
+    private static final String DC_NS = "http://www.omg.org/spec/DD/20100524/DC";
+    private static final double SYNC_EVENT_SIZE = 36d;
+    private static final double SYNC_EVENT_GAP = 28d;
     static final String SYNC_SIGNAL_PREFIX = "sync_";
+
+    // The exact set TargetPlatformTwinMirrorGenerator turns into an executable Twin serviceTask. On the
+    // Proxy side these carry no camunda:delegateExpression and no camunda:class, so the delegate scan
+    // below skips them entirely - which is why, before this, a Proxy made of human work produced no
+    // sync signal at all and its Twin ran the whole process through while the human was still on the
+    // first task. Keyed on BPMN element type only: no process, activity or domain name appears here.
+    private static final Set<String> MIRRORED_AUTOMATED_TASKS = Set.of("userTask", "manualTask", "task");
 
     public record GeneratedSource(String relativeDirectory, String className, String source) { }
     public record Result(String bpmnXml, List<GeneratedSource> sources,
@@ -65,15 +64,23 @@ public class TargetPlatformSourceGenerator {
                 if (localName == null) continue;
                 boolean activity = localName != null && localName.endsWith("Task");
                 boolean event = localName.endsWith("Event");
+                // Gate the Proxy's human/inert activities too, before the delegate filter below drops
+                // them: the Twin mirrors each of these as an automated task, so each needs the same
+                // rendezvous point the delegated ones already get. The Twin half is inserted by
+                // insertTwinSyncSignalsBefore, in front of the mirrored activity rather than after it,
+                // which is what makes "Twin task N cannot start until the human finished Proxy task N".
+                if (!twin && MIRRORED_AUTOMATED_TASKS.contains(localName)) {
+                    String mirroredId = element.getAttribute("id");
+                    if (mirroredId != null && !mirroredId.isBlank() && !proxyServiceTaskIds.contains(mirroredId)) {
+                        proxyServiceTaskIds.add(mirroredId);
+                    }
+                }
                 String expression = element.getAttributeNS(CAMUNDA_NS, "delegateExpression");
                 String javaClass = element.getAttributeNS(CAMUNDA_NS, "class");
                 if ((!activity && !event) || (expression.isBlank() && javaClass.isBlank())) continue;
                 String id = element.getAttribute("id");
                 if (id == null || id.isBlank()) throw new IllegalArgumentException("Delegated BPMN element has no id");
-                // The twin side always gets its own bean name: an authored twin is free to reuse the proxy's activity
-                // ids, and Spring's @Component("...") registers by that literal string regardless of package, so two
-                // classes claiming one bean name fail startup with ConflictingBeanDefinitionException.
-                // Class names are left unqualified - Java tolerates identical simple names across packages.
+                // Twin delegates receive distinct bean names to avoid Spring registration collisions.
                 String beanName = twin ? camel(id) + "Twin" : camel(id);
                 String className = pascal(id);
                 // A fixed template needs a deterministic, component-scanned bean name. Normalising also makes a camunda:class task usable without requiring an arbitrary FQCN.
@@ -86,7 +93,7 @@ public class TargetPlatformSourceGenerator {
                 sources.add(new GeneratedSource(directory, className, render(packageName, className, beanName, label)));
 
                 // Track proxy service task IDs for lockstep sync (not events, not twin _automate tasks)
-                if (activity && !twin) {
+                if (activity && !twin && !proxyServiceTaskIds.contains(id)) {
                     proxyServiceTaskIds.add(id);
                 }
             }
@@ -103,7 +110,17 @@ public class TargetPlatformSourceGenerator {
                     syncActivityIds.add(sn.substring(SYNC_SIGNAL_PREFIX.length()));
                 }
             } else if (twin && syncActivityIdsFromProxy != null && !syncActivityIdsFromProxy.isEmpty()) {
-                syncSignalNames = replaceTwinReceiveTasksWithSignals(document, syncActivityIdsFromProxy);
+                // An authored Twin models its own wait state as a receiveTask, so that one is rewritten
+                // in place. A mirrored Twin has no receiveTask at all - the mirror produced a plain
+                // serviceTask carrying the same activity id - so the rendezvous has to be inserted in
+                // front of it instead. Whichever produced the Twin, both halves end up subscribed to the
+                // same sync_<activityId>, which is all SignalBroadcaster's existing protocol needs.
+                Set<String> fromReceiveTasks = replaceTwinReceiveTasksWithSignals(document,
+                        syncActivityIdsFromProxy);
+                Set<String> notCoveredByReceiveTask = new LinkedHashSet<>(syncActivityIdsFromProxy);
+                notCoveredByReceiveTask.removeIf(id -> fromReceiveTasks.contains(SYNC_SIGNAL_PREFIX + id));
+                syncSignalNames = new LinkedHashSet<>(fromReceiveTasks);
+                syncSignalNames.addAll(insertTwinSyncSignalsBefore(document, notCoveredByReceiveTask));
                 syncActivityIds.addAll(syncActivityIdsFromProxy);
             }
 
@@ -185,6 +202,7 @@ public class TargetPlatformSourceGenerator {
 
             process.appendChild(catchEvent);
             process.appendChild(bridgeFlow);
+            addProxySyncDiagramElements(document, catchEventId, newFlowId, outgoingFlows);
 
             // Signal declaration on the definitions element - must appear BEFORE BPMNDiagram per XSD
             Element signal = document.createElementNS(bpmnNs, qname(prefix, "signal"));
@@ -195,10 +213,7 @@ public class TargetPlatformSourceGenerator {
         return signalNames;
     }
 
-    // Lockstep, twin side: replace TwinModelGenerator's receiveTasks - whose message subscriptions
-    // SignalBroadcaster cannot poll - with signal catch events on the same sync_<activityId> names the
-    // proxy waits on. The receiveTask's implicit parallel split is preserved: one branch fires the
-    // _automate delegate, the other advances to the next gate.
+    // Replaces twin receive tasks with sync signal catch events matching proxy wait states.
     private Set<String> replaceTwinReceiveTasksWithSignals(Document document, Set<String> activityIds) {
         Set<String> signalNames = new LinkedHashSet<>();
         Element definitions = document.getDocumentElement();
@@ -263,6 +278,119 @@ public class TargetPlatformSourceGenerator {
         return signalNames;
     }
 
+    // Lockstep, mirrored-Twin side: put an intermediateCatchEvent on sync_<activityId> immediately
+    // BEFORE the Twin's automated activity, so the activity is unreachable until the signal arrives.
+    // Deliberately the mirror image of insertProxySyncSignals, which puts its catch event AFTER the
+    // Proxy activity: the Proxy therefore parks only once the human has genuinely completed task N,
+    // and the Twin parks before it has executed anything of task N. SignalBroadcaster then pairs the
+    // two subscriptions, releases the Twin (REQUEST), watches it advance, and only then releases the
+    // Proxy (RESPONSE) - which is what makes the Twin structurally incapable of reaching task N+1
+    // while the Proxy is still waiting at task N.
+    //
+    // Skips silently where the Twin has no element with that id: an authored Twin is free to mirror
+    // only part of the Proxy, and a Proxy signal with no Twin subscriber is a case SignalBroadcaster
+    // already handles (partnerNotComing -> plain delivery) rather than a generation failure.
+    private Set<String> insertTwinSyncSignalsBefore(Document document, Set<String> activityIds) {
+        Set<String> signalNames = new LinkedHashSet<>();
+        if (activityIds.isEmpty()) {
+            return signalNames;
+        }
+        Element definitions = document.getDocumentElement();
+        String bpmnNs = definitions.getNamespaceURI();
+        String prefix = definitions.getPrefix();
+
+        NodeList processes = document.getElementsByTagNameNS(bpmnNs, "process");
+        if (processes.getLength() == 0) return signalNames;
+        Element process = (Element) processes.item(0);
+
+        for (String activityId : activityIds) {
+            Element activity = findElementById(document, activityId);
+            if (activity == null) continue;
+            // Incoming flows are what the catch event is spliced into; with none there is nothing to
+            // gate (a start-event-less fragment), and inserting an unreachable catch event would only
+            // add a signal nobody can ever be waiting at.
+            List<Element> incomingFlows = findFlowsByTargetRef(document, bpmnNs, activityId);
+            if (incomingFlows.isEmpty()) continue;
+
+            String signalName = SYNC_SIGNAL_PREFIX + activityId;
+            ensureSignalNameAvailable(document, bpmnNs, signalName, activityId);
+            String catchEventId = uniqueId(document, "sync_evt_" + activityId);
+            String bridgeFlowId = uniqueId(document, "sync_flow_" + activityId);
+            String signalId = uniqueId(document, "Signal_sync_" + activityId);
+            String signalEventDefId = uniqueId(document, "SED_sync_" + activityId);
+
+            signalNames.add(signalName);
+
+            // BPMN 2.0 XSD element order on a catch event: incoming/outgoing first, then the event
+            // definition - the same ordering insertProxySyncSignals observes.
+            Element catchEvent = document.createElementNS(bpmnNs, qname(prefix, "intermediateCatchEvent"));
+            catchEvent.setAttribute("id", catchEventId);
+
+            // Every flow that used to arrive at the activity now arrives at the catch event instead.
+            for (Element flow : incomingFlows) {
+                flow.setAttribute("targetRef", catchEventId);
+                Element incomingElem = document.createElementNS(bpmnNs, qname(prefix, "incoming"));
+                incomingElem.setTextContent(flow.getAttribute("id"));
+                catchEvent.appendChild(incomingElem);
+            }
+            Element outgoingElem = document.createElementNS(bpmnNs, qname(prefix, "outgoing"));
+            outgoingElem.setTextContent(bridgeFlowId);
+            catchEvent.appendChild(outgoingElem);
+
+            Element signalEventDef = document.createElementNS(bpmnNs, qname(prefix, "signalEventDefinition"));
+            signalEventDef.setAttribute("id", signalEventDefId);
+            signalEventDef.setAttribute("signalRef", signalId);
+            catchEvent.appendChild(signalEventDef);
+
+            // The activity's own <incoming> now names only the bridge flow from the catch event.
+            removeChildElementsByLocalName(activity, "incoming");
+            Element newIncoming = document.createElementNS(bpmnNs, qname(prefix, "incoming"));
+            newIncoming.setTextContent(bridgeFlowId);
+            insertIncomingInSchemaOrder(activity, newIncoming);
+
+            Element bridgeFlow = document.createElementNS(bpmnNs, qname(prefix, "sequenceFlow"));
+            bridgeFlow.setAttribute("id", bridgeFlowId);
+            bridgeFlow.setAttribute("sourceRef", catchEventId);
+            bridgeFlow.setAttribute("targetRef", activityId);
+
+            process.appendChild(catchEvent);
+            process.appendChild(bridgeFlow);
+            addTwinSyncDiagramElements(document, catchEventId, bridgeFlowId, incomingFlows);
+
+            Element signal = document.createElementNS(bpmnNs, qname(prefix, "signal"));
+            signal.setAttribute("id", signalId);
+            signal.setAttribute("name", signalName);
+            insertBeforeDiagram(definitions, signal);
+        }
+        return signalNames;
+    }
+
+    // tFlowNode orders its children extensionElements, then incoming, then outgoing. Appending would
+    // put the rewritten <incoming> after <outgoing>, so it goes in front of the first <outgoing>
+    // instead (and at the end when the activity has none).
+    private static void insertIncomingInSchemaOrder(Element activity, Element incoming) {
+        NodeList children = activity.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            if (children.item(i) instanceof Element el && "outgoing".equals(el.getLocalName())) {
+                activity.insertBefore(incoming, el);
+                return;
+            }
+        }
+        activity.appendChild(incoming);
+    }
+
+    private static List<Element> findFlowsByTargetRef(Document document, String bpmnNs, String targetRef) {
+        NodeList flows = document.getElementsByTagNameNS(bpmnNs, "sequenceFlow");
+        List<Element> result = new ArrayList<>();
+        for (int i = 0; i < flows.getLength(); i++) {
+            Element flow = (Element) flows.item(i);
+            if (targetRef.equals(flow.getAttribute("targetRef"))) {
+                result.add(flow);
+            }
+        }
+        return result;
+    }
+
     private void removeTwinAdvanceMessages(Document document, String bpmnNs, Set<String> activityIds) {
         NodeList messages = document.getElementsByTagNameNS(bpmnNs, "message");
         List<Element> toRemove = new ArrayList<>();
@@ -283,6 +411,148 @@ public class TargetPlatformSourceGenerator {
 
     // ── DOM helpers ────────────────────────────────────────────────────────────
 
+    // The sync insertion changes a direct activity-to-activity flow into two flows with an
+    // intermediate catch event. Preserve a complete BPMN DI graph at the same time so bpmn-js can
+    // render the generated execution model instead of showing disconnected business activities.
+    private static void addProxySyncDiagramElements(Document document, String catchEventId,
+            String bridgeFlowId, List<Element> outgoingFlows) {
+        List<Element> diagramEdges = diagramEdgesFor(document, outgoingFlows);
+        if (diagramEdges.isEmpty()) return;
+
+        Point source = average(diagramEdges, true);
+        Point target = average(diagramEdges, false);
+        Point direction = direction(source, target);
+        Point center = move(source, direction, SYNC_EVENT_GAP + SYNC_EVENT_SIZE / 2d);
+        Element plane = (Element) diagramEdges.get(0).getParentNode();
+        appendSyncEventShape(document, plane, catchEventId, center);
+
+        for (Element edge : diagramEdges) {
+            Point edgeTarget = edgePoint(edge, false);
+            setEdgePoint(edge, true, boundary(center, direction(center, edgeTarget), true));
+        }
+        appendEdge(document, plane, bridgeFlowId, source, boundary(center, direction, false));
+    }
+
+    private static void addTwinSyncDiagramElements(Document document, String catchEventId,
+            String bridgeFlowId, List<Element> incomingFlows) {
+        List<Element> diagramEdges = diagramEdgesFor(document, incomingFlows);
+        if (diagramEdges.isEmpty()) return;
+
+        Point source = average(diagramEdges, true);
+        Point target = average(diagramEdges, false);
+        Point direction = direction(source, target);
+        Point center = move(target, direction, -(SYNC_EVENT_GAP + SYNC_EVENT_SIZE / 2d));
+        Element plane = (Element) diagramEdges.get(0).getParentNode();
+        appendSyncEventShape(document, plane, catchEventId, center);
+
+        for (Element edge : diagramEdges) {
+            Point edgeSource = edgePoint(edge, true);
+            setEdgePoint(edge, false, boundary(center, direction(edgeSource, center), false));
+        }
+        appendEdge(document, plane, bridgeFlowId, boundary(center, direction, true), target);
+    }
+
+    private static List<Element> diagramEdgesFor(Document document, List<Element> flows) {
+        List<Element> result = new ArrayList<>();
+        for (Element flow : flows) {
+            Element edge = findDiagramEdge(document, flow.getAttribute("id"));
+            if (edge != null && waypointCount(edge) >= 2) result.add(edge);
+        }
+        return result;
+    }
+
+    private static Element findDiagramEdge(Document document, String flowId) {
+        NodeList edges = document.getElementsByTagNameNS(BPMNDI_NS, "BPMNEdge");
+        for (int i = 0; i < edges.getLength(); i++) {
+            Element edge = (Element) edges.item(i);
+            if (flowId.equals(edge.getAttribute("bpmnElement"))) return edge;
+        }
+        return null;
+    }
+
+    private static int waypointCount(Element edge) {
+        return edge.getElementsByTagNameNS(DI_NS, "waypoint").getLength();
+    }
+
+    private static Point average(List<Element> edges, boolean first) {
+        double x = 0d;
+        double y = 0d;
+        for (Element edge : edges) {
+            Point point = edgePoint(edge, first);
+            x += point.x;
+            y += point.y;
+        }
+        return new Point(x / edges.size(), y / edges.size());
+    }
+
+    private static Point edgePoint(Element edge, boolean first) {
+        NodeList waypoints = edge.getElementsByTagNameNS(DI_NS, "waypoint");
+        Element waypoint = (Element) waypoints.item(first ? 0 : waypoints.getLength() - 1);
+        return new Point(Double.parseDouble(waypoint.getAttribute("x")),
+                Double.parseDouble(waypoint.getAttribute("y")));
+    }
+
+    private static void setEdgePoint(Element edge, boolean first, Point point) {
+        NodeList waypoints = edge.getElementsByTagNameNS(DI_NS, "waypoint");
+        Element waypoint = (Element) waypoints.item(first ? 0 : waypoints.getLength() - 1);
+        waypoint.setAttribute("x", coordinate(point.x));
+        waypoint.setAttribute("y", coordinate(point.y));
+    }
+
+    private static Point direction(Point from, Point to) {
+        double dx = to.x - from.x;
+        double dy = to.y - from.y;
+        double length = Math.hypot(dx, dy);
+        return length == 0d ? new Point(1d, 0d) : new Point(dx / length, dy / length);
+    }
+
+    private static Point move(Point start, Point direction, double distance) {
+        return new Point(start.x + direction.x * distance, start.y + direction.y * distance);
+    }
+
+    private static Point boundary(Point center, Point direction, boolean outbound) {
+        double distance = outbound ? SYNC_EVENT_SIZE / 2d : -SYNC_EVENT_SIZE / 2d;
+        return move(center, direction, distance);
+    }
+
+    private static void appendSyncEventShape(Document document, Element plane, String catchEventId,
+            Point center) {
+        String diPrefix = plane.getPrefix() == null ? "bpmndi" : plane.getPrefix();
+        Element shape = document.createElementNS(BPMNDI_NS, qname(diPrefix, "BPMNShape"));
+        shape.setAttribute("id", uniqueId(document, "BPMNShape_" + catchEventId));
+        shape.setAttribute("bpmnElement", catchEventId);
+        Element bounds = document.createElementNS(DC_NS, "dc:Bounds");
+        bounds.setAttribute("x", coordinate(center.x - SYNC_EVENT_SIZE / 2d));
+        bounds.setAttribute("y", coordinate(center.y - SYNC_EVENT_SIZE / 2d));
+        bounds.setAttribute("width", coordinate(SYNC_EVENT_SIZE));
+        bounds.setAttribute("height", coordinate(SYNC_EVENT_SIZE));
+        shape.appendChild(bounds);
+        plane.appendChild(shape);
+    }
+
+    private static void appendEdge(Document document, Element plane, String flowId, Point start, Point end) {
+        String diPrefix = plane.getPrefix() == null ? "bpmndi" : plane.getPrefix();
+        Element edge = document.createElementNS(BPMNDI_NS, qname(diPrefix, "BPMNEdge"));
+        edge.setAttribute("id", uniqueId(document, "BPMNEdge_" + flowId));
+        edge.setAttribute("bpmnElement", flowId);
+        edge.appendChild(waypoint(document, start));
+        edge.appendChild(waypoint(document, end));
+        plane.appendChild(edge);
+    }
+
+    private static Element waypoint(Document document, Point point) {
+        Element waypoint = document.createElementNS(DI_NS, "di:waypoint");
+        waypoint.setAttribute("x", coordinate(point.x));
+        waypoint.setAttribute("y", coordinate(point.y));
+        return waypoint;
+    }
+
+    private static String coordinate(double value) {
+        return value == Math.rint(value) ? Long.toString(Math.round(value)) : Double.toString(value);
+    }
+
+    private record Point(double x, double y) { }
+
     // Inserts a child element into definitions BEFORE the first BPMNDiagram element (or any DI namespace element). BPMN 2.0 XSD requires rootElements (signal, message, process, etc.) before BPMNDiagram elements. Falls back to appendChild if no diagram is found.
     private static void insertBeforeDiagram(Element definitions, Element child) {
         NodeList children = definitions.getChildNodes();
@@ -300,11 +570,7 @@ public class TargetPlatformSourceGenerator {
         return prefix != null ? prefix + ":" + localName : localName;
     }
 
-    // Returns candidate unchanged when no element already uses it as an id, otherwise probes candidate_2,
-    // candidate_3, ... deterministically - never random, since the same source BPMN must always generate
-    // the same output.
-    // Covers an activity id that already ends in something like "_evt", and re-running generation on a
-    // BPMN that has already been through this transformation once.
+    // Generates unique element IDs by deterministically incrementing numeric suffixes.
     private static String uniqueId(Document document, String candidate) {
         if (findElementById(document, candidate) == null) {
             return candidate;
@@ -317,9 +583,7 @@ public class TargetPlatformSourceGenerator {
         }
     }
 
-    // Unlike element ids, a signal NAME cannot be renamed on collision: SignalBroadcaster pairs proxy and
-    // twin purely by matching name, and the twin is handed this exact name with no channel back to
-    // renegotiate. Failing loudly and telling the caller to rename beats guessing.
+    // Fails if a sync signal name collides with a pre-existing signal in the BPMN.
     private static void ensureSignalNameAvailable(Document document, String bpmnNs, String signalName,
             String activityId) {
         NodeList signals = document.getElementsByTagNameNS(bpmnNs, "signal");
@@ -370,13 +634,7 @@ public class TargetPlatformSourceGenerator {
         }
     }
 
-    // ── Existing helpers (unchanged) ───────────────────────────────────────────
-
-    // camunda:executionListener is a child of extensionElements rather than an attribute, so the activity
-    // loop above never sees it - but it names a delegateExpression bean the same way, and the engine
-    // throws PropertyNotFoundException the moment the listener's own event fires if that bean is missing.
-    // Deduplicated by bean name rather than element id: one listener is typically wired onto many
-    // activities, and it has no element of its own to derive an id from.
+    // Scans execution listeners and registers generated delegate beans.
     private List<GeneratedSource> scanExecutionListeners(Document document, boolean twin) {
         List<GeneratedSource> sources = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
@@ -385,9 +643,7 @@ public class TargetPlatformSourceGenerator {
             Element listener = (Element) listeners.item(i);
             String originalBeanName = stripExpression(listener.getAttribute("delegateExpression"));
             if (originalBeanName.isBlank()) continue;
-            // The twin side always gets its own bean name: proxy and twin can genuinely name the same listener - a
-            // structural mirror always does - and Spring refuses to start with two classes under one bean name.
-            // The BPMN is rewritten to match, as with the delegateExpressions above.
+            // Suffix twin listener beans to avoid bean definition collisions.
             String beanName = twin ? originalBeanName + "Twin" : originalBeanName;
             listener.setAttribute("delegateExpression", "${" + beanName + "}");
             if (!seen.add(beanName)) continue;
@@ -400,15 +656,7 @@ public class TargetPlatformSourceGenerator {
         return sources;
     }
 
-    // camunda:taskListener has the same shape as executionListener but is a different Camunda API: it
-    // fires on the user task's own lifecycle events and is invoked through TaskListener.notify(DelegateTask),
-    // not ExecutionListener.notify(DelegateExecution). A stub implementing the wrong interface throws
-    // ClassCastException the first time the listener event fires.
-    // Mirrors scanExecutionListeners otherwise - same twin bean suffixing, same dedup by bean name, same
-    // listeners/ output location.
-    // Only the delegateExpression form is generated: camunda:class would have to land at the exact package
-    // the BPMN names, and a raw UEL expression names something this cannot safely turn into a class.
-    // Both are left unrewritten rather than mis-generated.
+    // Scans user-task task listeners and generates TaskListener delegate beans.
     private List<GeneratedSource> scanTaskListeners(Document document, boolean twin) {
         List<GeneratedSource> sources = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
@@ -436,16 +684,27 @@ public class TargetPlatformSourceGenerator {
 
                 import org.camunda.bpm.engine.delegate.DelegateTask;
                 import org.camunda.bpm.engine.delegate.TaskListener;
+                import org.slf4j.Logger;
+                import org.slf4j.LoggerFactory;
                 import org.springframework.stereotype.Component;
 
                 @Component("%s")
                 public class %s implements TaskListener {
+
+                    private static final Logger logger = LoggerFactory.getLogger(%s.class);
+
                     @Override
                     public void notify(DelegateTask delegateTask) {
-                        System.out.println("******************** %s - %s ---- Spring Bean invoked");
+                        logger.info("%s INVOKED: listener={} bean={} event={} processDefinitionId={} "
+                                + "processInstanceId={} activityId={} activityName={} taskId={} "
+                                + "businessKey={}",
+                                "%s", "%s", delegateTask.getEventName(),
+                                delegateTask.getProcessDefinitionId(), delegateTask.getProcessInstanceId(),
+                                delegateTask.getTaskDefinitionKey(), delegateTask.getName(),
+                                delegateTask.getId(), delegateTask.getExecution().getProcessBusinessKey());
                     }
                 }
-                """.formatted(pkg, beanName, className, label, beanName);
+                """.formatted(pkg, beanName, className, className, label, className, beanName);
     }
 
     private static String stripExpression(String expression) {
@@ -463,37 +722,83 @@ public class TargetPlatformSourceGenerator {
 
                 import org.camunda.bpm.engine.delegate.DelegateExecution;
                 import org.camunda.bpm.engine.delegate.ExecutionListener;
+                import org.slf4j.Logger;
+                import org.slf4j.LoggerFactory;
                 import org.springframework.stereotype.Component;
 
                 @Component("%s")
                 public class %s implements ExecutionListener {
+
+                    private static final Logger logger = LoggerFactory.getLogger(%s.class);
+
                     @Override
                     public void notify(DelegateExecution execution) throws Exception {
-                        System.out.println("******************** %s - %s ---- Spring Bean invoked");
+                        logger.info("%s INVOKED: listener={} bean={} event={} processDefinitionId={} "
+                                + "processInstanceId={} activityId={} activityName={} activityInstanceId={} "
+                                + "businessKey={}",
+                                "%s", "%s", execution.getEventName(),
+                                execution.getProcessDefinitionId(), execution.getProcessInstanceId(),
+                                execution.getCurrentActivityId(), execution.getCurrentActivityName(),
+                                execution.getActivityInstanceId(), execution.getProcessBusinessKey());
                     }
                 }
-                """.formatted(pkg, beanName, className, label, beanName);
+                """.formatted(pkg, beanName, className, className, label, className, beanName);
     }
 
+    // The generated delegate is what proves an activity actually executed inside the Target Platform,
+    // so it logs through SLF4J rather than System.out: an unqualified println carries no timestamp, no
+    // level and no process context, which makes it useless as the runtime evidence the Target
+    // Platform's own log is supposed to provide. Every field here is generic BPMN/engine state - no
+    // process, activity or variable name is baked in.
     private static String render(String pkg, String className, String beanName, String label) {
         return """
                 package %s;
 
                 import org.camunda.bpm.engine.delegate.DelegateExecution;
                 import org.camunda.bpm.engine.delegate.JavaDelegate;
+                import org.slf4j.Logger;
+                import org.slf4j.LoggerFactory;
                 import org.springframework.stereotype.Component;
 
                 @Component("%s")
                 public class %s implements JavaDelegate {
+
+                    private static final Logger logger = LoggerFactory.getLogger(%s.class);
+
                     @Override
-                    public void execute(DelegateExecution arg0) throws Exception {
-                        System.out.println("******************** %s - %s ---- Spring Bean invoked");
+                    public void execute(DelegateExecution execution) throws Exception {
+                        logger.info("%s DELEGATE INVOKED: delegate={} bean={} processDefinitionId={} "
+                                + "processInstanceId={} activityId={} activityName={} activityInstanceId={} "
+                                + "businessKey={}",
+                                "%s", "%s", execution.getProcessDefinitionId(),
+                                execution.getProcessInstanceId(), execution.getCurrentActivityId(),
+                                execution.getCurrentActivityName(), execution.getActivityInstanceId(),
+                                execution.getProcessBusinessKey());
+                        try {
+                            // Generated stub: this activity's behaviour is supplied by binding a real
+                            // component to it, not by anything invented here.
+                            logger.info("%s DELEGATE COMPLETED: delegate={} activityId={} "
+                                    + "processInstanceId={} result=OK",
+                                    "%s", execution.getCurrentActivityId(),
+                                    execution.getProcessInstanceId());
+                        } catch (RuntimeException e) {
+                            logger.error("%s DELEGATE FAILED: delegate={} activityId={} "
+                                    + "processInstanceId={} result=ERROR reason={}",
+                                    "%s", execution.getCurrentActivityId(),
+                                    execution.getProcessInstanceId(), e.toString(), e);
+                            throw e;
+                        }
                     }
                 }
-                """.formatted(pkg, beanName, className, label, beanName);
+                """.formatted(pkg, beanName, className, className,
+                        label, className, beanName,
+                        label, className,
+                        label, className);
     }
 
-    private static String pascal(String id) {
+    // package-private: TargetPlatformTwinMirrorGenerator derives the same bean names when it
+    // automates a Twin human task, and the two must not drift.
+    static String pascal(String id) {
         StringBuilder out = new StringBuilder();
         boolean uppercase = true;
         for (char c : id.toCharArray()) {
@@ -505,7 +810,7 @@ public class TargetPlatformSourceGenerator {
         return out.toString();
     }
 
-    private static String camel(String id) {
+    static String camel(String id) {
         String value = pascal(id);
         return Character.toLowerCase(value.charAt(0)) + value.substring(1);
     }

@@ -102,13 +102,13 @@ public class WorkflowStateTracker {
         eventStore.save(eventsByModelId);
     }
 
-    // true only for a model with zero persisted events of ANY kind - the signal WorkbenchServiceImpl.restoreState() uses to decide whether a model predates real persistence (needs the MODEL backfill) or already has its own genuine history restored from WorkflowEventStore (backfilling on top of that would just be a redundant, slightly-wrong- timestamped duplicate of an event that's already there)
+    /** Returns true if no events have been recorded for the given model ID. */
     public boolean hasNoHistory(String modelId) {
         List<StageEvent> history = eventsByModelId.get(modelId);
         return history == null || history.isEmpty();
     }
 
-    // never throws for an unknown modelId - a model with no recorded events yet (nothing has ever called saveProcessModel for it) just reads as "everything pending", which is the honest answer, not a 404
+    /** Computes current workflow state for a model, defaulting to all stages pending. */
     public WorkflowState stateFor(String modelId) {
         List<StageEvent> history = eventsByModelId.getOrDefault(modelId, List.of());
 

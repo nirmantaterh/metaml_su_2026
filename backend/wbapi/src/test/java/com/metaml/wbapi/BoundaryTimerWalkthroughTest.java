@@ -37,16 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 
-// The twin used to need camunda.bpm.job-execution.enabled=false to stay in step with the original,
-// and that took both example models' boundary timers with it - a timer is a job like any other, so
-// with the executor switched off nothing ever came round to fire it. This is the test that says
-// that trade is gone: the twin's activities are receive tasks with no job behind them, the
-// executor is left at Camunda's default, and both timers still go off on their own.
-//
-// ClockUtil rather than eight real hours. Deliberately no camunda.bpm.job-execution.enabled here
-// either, so this runs against whatever the app is actually configured to do; the two wait-time
-// properties only change how often the acquisition thread looks, not whether it runs, and without
-// them each timer would sit out the default 60s backoff.
+// Verifies that Camunda boundary timer events fire and advance the process when job execution is active.
 @IsolatedWorkbenchTest
 @TestPropertySource(properties = {
         "spring.datasource.url=jdbc:h2:mem:metaml-timer-test;DB_CLOSE_DELAY=-1",
@@ -101,7 +92,6 @@ class BoundaryTimerWalkthroughTest {
     @Test
     void theWireTransferApprovalTimeoutStillFiresAfterEightHours() throws Exception {
         TwinProcess twin = launch("citi wire transfer boundary timer", "citibank-wire-transfer.bpmn");
-        // KYC, then the three compliance checks, leaves the original on Task_Approve
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(3);
         assertThat(openTasks(twin)).containsExactly("Task_Approve");
@@ -116,7 +106,6 @@ class BoundaryTimerWalkthroughTest {
     @Test
     void theCommitteeReviewTimeoutStillFiresAfterFourHours() throws Exception {
         TwinProcess twin = launch("grad admission boundary timer", "grad-admission-review.bpmn");
-        // transcript, then recommendations and test scores, leaves the original on the committee
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(1);
         assertThat(workbenchService.completeCurrentTasks(twin.getId())).hasSize(2);
         assertThat(openTasks(twin)).containsExactly("Task_CommitteeReview");
@@ -128,8 +117,6 @@ class BoundaryTimerWalkthroughTest {
         assertThat(openTasks(twin)).containsExactly(ESCALATE_TIMEOUT);
     }
 
-    // the other half of the old trade: the twin is why the executor was switched off, so it is
-    // worth pinning down that it puts nothing in the job table for the executor to run
     @Test
     void aLiveTwinOwnsNoJobsAtAll() throws IOException {
         TwinProcess twin = launch("citi wire transfer twin has no jobs", "citibank-wire-transfer.bpmn");
@@ -145,8 +132,7 @@ class BoundaryTimerWalkthroughTest {
         return workbenchService.launchProcess(model.getId());
     }
 
-    // jobWasAdded() only nudges the acquisition thread awake; the clock is what makes the timer
-    // due, and the engine reads it through ClockUtil rather than System.currentTimeMillis
+    // Advances ClockUtil and notifies JobExecutor acquisition.
     private boolean fastForwardUntil(TwinProcess twin, String activityId, Duration ahead)
             throws InterruptedException {
         ClockUtil.setCurrentTime(new Date(System.currentTimeMillis() + ahead.toMillis()));
@@ -180,7 +166,6 @@ class BoundaryTimerWalkthroughTest {
                 .toList();
     }
 
-    // same walk up to examples/ the other walkthroughs do
     private static String example(String fileName) throws IOException {
         Path dir = Path.of("").toAbsolutePath();
         while (dir != null) {

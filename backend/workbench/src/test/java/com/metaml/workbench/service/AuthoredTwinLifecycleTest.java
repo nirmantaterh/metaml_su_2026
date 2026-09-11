@@ -42,14 +42,8 @@ import com.metaml.workbench.workflow.WorkflowStateTracker;
 import com.metaml.workbench.workflow.WorkflowState;
 import com.metaml.workbench.workflow.StageStatus;
 
-// Proves the authored-two-BPMN path is a first-class generation mode flowing through the SAME
-// Workbench lifecycle as the single-BPMN path - not a side door only a test can reach by calling
-// SpringBootProjectGenerator directly. Fixture BPMNs are deliberately named nothing like RedCollar,
-// so a pass here cannot be explained by anything specific to that BPMN pair.
-//
-// Same harness shape as ModelDeletionTest/GeneratedProjectRetentionTest: real generator, launcher,
-// tracker, and model file store, with only the Camunda engine services and the H2 archive store
-// mocked - the parts that actually decide lifecycle/discovery/deletion behavior are the real ones.
+// Verifies standard Workbench lifecycle execution for authored dual-BPMN models,
+// integrating generator, launcher, tracker, and model file storage.
 class AuthoredTwinLifecycleTest {
 
     @TempDir
@@ -125,10 +119,7 @@ class AuthoredTwinLifecycleTest {
         assertThat(modelsDir.resolve("acme-1.twin.bpmn")).exists();
     }
 
-    // The twin XML is validated structurally (requireExactlyOneExecutableProcess) but never
-    // deployed to the Workbench's own engine - proven here by a twin XML that would fail real
-    // deployment (two executable processes) still saving successfully, since only bpmnXml goes
-    // through repositoryService.createDeployment().
+    // Twin XML is validated structurally without direct engine deployment.
     @Test
     void authoredTwinXmlNeverReachesTheWorkbenchsOwnEngineDeployment() {
         String twinWithTwoExecutableProcesses = """
@@ -218,8 +209,6 @@ class AuthoredTwinLifecycleTest {
         assertThat(modelsDir.resolve("acme-4.twin.bpmn")).doesNotExist();
         assertThat(projectDir).doesNotExist();
     }
-
-    // --- helpers ---
 
     private static void invokeDeclared(Object target, Class<?> type, String methodName) {
         try {

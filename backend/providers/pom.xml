@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>3.5.16</version>
+		<relativePath/>
+	</parent>
+	<groupId>com.metaml</groupId>
+	<artifactId>reference-providers</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>reference-providers</name>
+	<description>
+		Reference ComponentExecutor implementations - the legitimate, executable half of a capability.
+
+		These are deliberately NOT part of the workbench: core carries the capability model, this
+		module carries provider implementations, and a generated Target Platform puts this jar on its
+		classpath to execute a bound provider in-process without the workbench runtime.
+
+		Adding a provider means adding a class here (or in any other jar on the classpath) plus its
+		operator-authored entry in the node manager catalog, which remains the single source of truth
+		for that provider's declared contract. It never means changing a generator.
+
+		Nothing here may be referenced by name from generated code or from any generator.
+	</description>
+
+	<properties>
+		<!-- 17, matching capability-core: a generated Target Platform compiles at 17. -->
+		<java.version>17</java.version>
+		<camunda.version>7.20.0</camunda.version>
+	</properties>
+
+	<dependencies>
+		<dependency>
+			<groupId>com.metaml</groupId>
+			<artifactId>capability-core</artifactId>
+			<version>0.0.1-SNAPSHOT</version>
+		</dependency>
+		<!-- provided, for the same reason capability-core does it: the consumer owns its engine
+		     version and its logging binding. -->
+		<dependency>
+			<groupId>org.camunda.bpm</groupId>
+			<artifactId>camunda-engine</artifactId>
+			<version>${camunda.version}</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<!-- Only for @Component, so a consumer that component-scans com.metaml picks these up with no
+		     registration code. No Spring Boot, no starter, no auto-configuration. -->
+		<dependency>
+			<groupId>org.springframework</groupId>
+			<artifactId>spring-context</artifactId>
+			<scope>provided</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+</project>

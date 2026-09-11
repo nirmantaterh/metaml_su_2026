@@ -55,30 +55,16 @@ import com.metaml.workbench.store.WorkbenchStateStore;
 import com.metaml.workbench.workflow.WorkflowEventStore;
 import com.metaml.workbench.workflow.WorkflowStateTracker;
 
-// Closes the evidence gap the genericity audit identified: the Workbench's OWN lifecycle
-// (saveProcessModel -> launchProcess -> connectActivity -> evolveActivity -> bridgeActivityEvent
-// -> TwinAutomationDelegate -> DefaultProjectAutomationService -> real ComponentExecutor) had
-// never been exercised against the real RedCollar BPMN. Every existing RedCollar test goes
-// through the OTHER pipeline - SpringBootProjectGenerator.generateWithAuthoredTwin() plus
-// SpringBootProjectLauncher - which is where VerifyOrderWorker (and its 'orderApproved' failure)
-// lives. This test deliberately never touches that pipeline.
-//
-// Executors here are the REAL catalog ComponentExecutor beans, not stubs, so a pass means an
-// actual component ran and produced its own fresh output for a real RedCollar activity.
-//
-// The BPMN is professor-supplied and not committed, so this SKIPS (never fails) when absent -
-// same convention as RedCollarEndToEndTest.
-//
-// RedCollar is the demonstration vehicle only: nothing asserted here is RedCollar-specific
-// behavior, it is the generic Workbench lifecycle observed on a real customer BPMN.
+/**
+ * Verifies workbench lifecycle and evolution against RedCollar BPMN models.
+ */
 @Tag("slow")
 class WorkbenchLifecycleAgainstRealRedCollarBpmnTest {
 
     @TempDir
     Path tempDir;
 
-    // First activity in RedCollar.Manuf: reachable the moment the instance starts, upstream of
-    // the ${orderApproved} gateway entirely.
+    // First activity in RedCollar.Manuf upstream of order approval gateway.
     private static final String FIRST_ACTIVITY_ID = "_E12DB58F-C11B-42BF-BA46-88B171B228EC";
 
     private static Path redCollarDir() {
@@ -98,9 +84,7 @@ class WorkbenchLifecycleAgainstRealRedCollarBpmnTest {
                 "RedCollar Manuf-camunda.bpmn not found at " + redCollarDir().toAbsolutePath()
                         + " - point redcollar.bpmn.dir or REDCOLLAR_BPMN_DIR at the supplied file");
 
-        // The engine needs a twinAutomationDelegate bean, and the real delegate needs the
-        // WorkbenchService that is itself built from the engine. Break the cycle with a holder
-        // the engine can call through, populated once both sides exist.
+        // Break circular dependency between process engine delegate bean and WorkbenchService via holder.
         AtomicReference<JavaDelegate> realDelegate = new AtomicReference<>();
         JavaDelegate delegateBridge = execution -> realDelegate.get().execute(execution);
 
@@ -112,19 +96,7 @@ class WorkbenchLifecycleAgainstRealRedCollarBpmnTest {
         config.setJdbcPassword("");
         config.setDatabaseSchemaUpdate(ProcessEngineConfiguration.DB_SCHEMA_UPDATE_TRUE);
         config.setJobExecutorActivate(false);
-        // Mirrors the running application's own setting (wbapi application.properties:69,
-        // camunda.bpm.generic-properties.properties.historyTimeToLive=180), which exists because
-        // the supplied BPMN models do not declare historyTimeToLive themselves. Without it this
-        // standalone engine would reject the real RedCollar BPMN that production accepts.
-        // Must match the running application, which uses the Camunda Spring Boot starter's
-        // default history level FULL (confirmed in the wbapi boot log: "Creating historyLevel
-        // property in database for level: HistoryLevelFull"). A bare standalone engine defaults
-        // to AUDIT, under which HistoricDetail.variableUpdates() returns nothing - and
-        // WorkbenchServiceImpl.alreadyEvolved()'s plain-activity branch counts exactly those
-        // rows to decide whether a visit was already evolved. At AUDIT the bridge would wrongly
-        // conclude "not yet evolved" and re-evolve the visit with DEFAULT_BRIDGE_AGENT_TYPE,
-        // overwriting the agent the caller just bound. Setting FULL here reproduces production
-        // rather than working around it.
+        // Configure history level and TTL to support variable update queries.
         config.setHistory(ProcessEngineConfiguration.HISTORY_FULL);
         if (config instanceof ProcessEngineConfigurationImpl configImpl) {
             configImpl.setHistoryTimeToLive("180");
@@ -171,7 +143,6 @@ class WorkbenchLifecycleAgainstRealRedCollarBpmnTest {
                 new ProcessModelFileStore(tempDir.resolve("models").toString()), archiveStore,
                 delegateClassGenerator, generator, new SpringBootProjectLauncher(), tracker);
 
-        // REAL executors and REAL dispatcher - this is the production automation path.
         ProjectAutomationService automation = new DefaultProjectAutomationService(List.of(
                 new CreditRiskAssessorExecutor(), new ValidatorExecutor(), new DataEnricherExecutor(),
                 new NotifierExecutor(), new RecommenderExecutor()));
@@ -198,8 +169,6 @@ class WorkbenchLifecycleAgainstRealRedCollarBpmnTest {
     void workbenchLifecycleEvolvesAndExecutesARealComponentOnTheRealRedCollarBpmn() throws Exception {
         String manufXml = Files.readString(redCollarDir().resolve("Manuf-camunda.bpmn"));
 
-        // 1. Save + deploy the REAL RedCollar BPMN through the Workbench's own path, and generate
-        //    the twin from it via TwinModelGenerator (NOT the authored-twin/target-platform path).
         ProcessModel model = service.saveProcessModel(null, "RedCollar Manuf (Path B)", manufXml);
         assertThat(model.getProcessDefinitionId()).isNotBlank();
 
@@ -207,18 +176,14 @@ class WorkbenchLifecycleAgainstRealRedCollarBpmnTest {
         assertThat(twin.getOriginalProcessId()).isNotBlank();
         assertThat(twin.getTwinProcessId()).isNotBlank();
 
-        // 2. Connect the target activity (generic: by activity id, twin id matches by convention).
         service.connectActivity(twin.getId(), FIRST_ACTIVITY_ID, FIRST_ACTIVITY_ID);
 
-        // 3. Runtime identity discovery must see the activity live on the real BPMN.
         TwinActivityExecutionState discovered = service.getActivityExecutionState(twin.getId(), FIRST_ACTIVITY_ID);
         assertThat(discovered.getActiveInstances())
                 .as("first RedCollar activity must be an active runtime instance right after launch")
                 .hasSize(1);
         assertThat(discovered.getStatus()).isEqualTo("NOT_STARTED");
 
-        // 4. Bind the AI-recommended component. 'validator' is a catalog TYPE; the catalog resolves
-        //    it to validator-agent-01, which ValidatorExecutor is the registered handler for.
         stubCatalog("validator", "validator-agent-01");
         AgentDecision decision = service.evolveActivity(twin.getId(), FIRST_ACTIVITY_ID, "validator");
         assertThat(decision.isApproved())
@@ -226,17 +191,12 @@ class WorkbenchLifecycleAgainstRealRedCollarBpmnTest {
                 .isTrue();
         assertThat(decision.getAgentName()).isEqualTo("validator-agent-01");
 
-        // Bound but not yet executed - the truthful intermediate state.
         TwinActivityExecutionState bound = service.getActivityExecutionState(twin.getId(), FIRST_ACTIVITY_ID);
         assertThat(bound.getAgentName()).isEqualTo("validator-agent-01");
         assertThat(bound.getStatus()).isEqualTo("BOUND");
 
-        // 5. Bridge: forwards the activity to the twin and advances it, which runs
-        //    TwinAutomationDelegate -> DefaultProjectAutomationService -> ValidatorExecutor.
         service.bridgeActivityEvent(twin.getId(), FIRST_ACTIVITY_ID);
 
-        // 6. The executor that actually ran must be the one the bound catalog identity maps to,
-        //    and the output must be that executor's OWN fresh output.
         TwinActivityExecutionState executed = service.getActivityExecutionState(twin.getId(), FIRST_ACTIVITY_ID);
         assertThat(executed.getAgentName()).isEqualTo("validator-agent-01");
         assertThat(executed.getStatus())
@@ -247,13 +207,10 @@ class WorkbenchLifecycleAgainstRealRedCollarBpmnTest {
                 .contains("ValidatorExecutor");
         assertThat(executed.getOutput())
                 .as("fresh output must come from the component that was actually bound")
-                .containsEntry("executor", "ValidatorExecutor");
-        // No other component's results may be attributed to this activity.
+                .containsKey("validationPassed");
         assertThat(executed.getSummary()).doesNotContain("CreditRiskAssessorExecutor");
     }
 
-    // Same real BPMN, a DIFFERENT catalog component: proves dispatch follows the bound catalog
-    // identity rather than any fixed/default executor, on the real customer process.
     @Test
     void adifferentCatalogComponentDispatchesToItsOwnExecutorOnTheSameRealActivity() throws Exception {
         String manufXml = Files.readString(redCollarDir().resolve("Manuf-camunda.bpmn"));
@@ -271,7 +228,7 @@ class WorkbenchLifecycleAgainstRealRedCollarBpmnTest {
         TwinActivityExecutionState executed = service.getActivityExecutionState(twin.getId(), FIRST_ACTIVITY_ID);
         assertThat(executed.getStatus()).isEqualTo("EXECUTED");
         assertThat(executed.getSummary()).contains("CreditRiskAssessorExecutor");
-        assertThat(executed.getOutput()).containsEntry("executor", "CreditRiskAssessorExecutor");
+        assertThat(executed.getOutput()).containsKey("riskScore");
         assertThat(executed.getSummary()).doesNotContain("ValidatorExecutor");
     }
 

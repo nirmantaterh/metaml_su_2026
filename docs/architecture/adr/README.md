@@ -20,6 +20,6 @@ Fifteen ADRs recording the major architectural decisions behind the Digital Twin
 | [014](ADR-014-one-to-one-activity-link-mapping.md) | Activity links are enforced as a one-to-one bijection |
 | [015](ADR-015-pluggable-project-automation-extension-point.md) | Twin automation is a pluggable, per-project extension point |
 
-Three of these (008, 012, 014) record a decision *and* its Phase 7.5 correction in the same document — deliberately, since the wrong turn and why it was wrong is as much a part of the architectural record as the final answer.
+These records document the technical context, evaluated alternatives, and consequences of each foundational decision across the platform.
 
 See also: [Architecture Specification](../ARCHITECTURE.md) · [Evolution Timeline](../EVOLUTION_TIMELINE.md) · [Runtime Diagrams](../DIAGRAMS.md)

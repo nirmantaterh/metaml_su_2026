@@ -11,23 +11,22 @@ export const WorkbenchRoutes = {
     DeleteProject: { path: `/projects/delete` },
     ProjectProcesses: { path: `/projects/:projectId/processes` },
     SamplePage: { path: `/wb/sample` },
-    // legacy path, kept working for anyone with it bookmarked/loaded - CreateModel below is the one the Transmute menu actually links to now
+    // Legacy path retained for backward compatibility.
     ModelPage: { path: `/wb/model` },
     CreateModel: { path: `/wb/model/new` },
-    // Kept working for anyone with it bookmarked - EditProjectListPage still opens a saved model straight into the editor - but Transmute > Generate no longer links here; see GenerateModelList below for what it links to now.
+    // Legacy route for direct model editing.
     EditModel: { path: `/wb/model/edit` },
     ModelEditor: { path: `/wb/model/:id` },
-    // Transmute > Generate: every saved process across every project, one row each, with its own Generate button - not an editor. See GenerateProjectListPage.
+    // Process generation listing.
     GenerateModelList: { path: `/wb/model/generate` },
-    // Transmute > Launch: every process that has already been generated, one row each, with its own Launch button. See LaunchProjectListPage.
+    // Generated process launch listing.
     LaunchModelList: { path: `/wb/model/launch` },
-    // Separate top-level menu per scope item 1 - Connect/Evolve/Bridge move here, out of the model editor's own toolbar
+    // Dedicated evolution dashboard for managing twin process connections, evolution, and event bridging.
     EvolvePage: { path: `/wb/evolve` },
-    // New scope item 5 (Evolve Workflow) - a distinct thing from EvolvePage above, which is the pre-existing twin workflow. This one is "connect to an existing deployed application".
+    // Deployed workflow application monitoring and live integration dashboard.
     DeployedAppsPage: { path: `/wb/deployed` },
-    // Tenant policy lifecycle UI (Policy -> PolicyVersion -> PolicyRule). Unrelated to the Evolve entries
-// above: this manages what a tenant's policy says, not any single twin's execution.
+    // Tenant policy lifecycle management (Policy -> PolicyVersion -> PolicyRule).
     GovernancePolicies: { path: `/wb/governance/policies` },
-    // This phase: the other half of governance - resolving the REQUIRE_APPROVAL decisions that policy above produces, not editing the policy itself.
+    // Governance decision review - approval queue for policy-gated workflow actions.
     GovernanceApprovals: { path: `/wb/governance/approvals` },
 };

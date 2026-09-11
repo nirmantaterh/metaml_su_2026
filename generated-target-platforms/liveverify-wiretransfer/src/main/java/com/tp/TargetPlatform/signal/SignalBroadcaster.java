@@ -18,7 +18,7 @@ import com.tp.TargetPlatform.messaging.RabbitMqConfig;
 import com.tp.TargetPlatform.messaging.TaskQueuePublisher;
 import com.tp.TargetPlatform.messaging.ResponseQueuePublisher;
 
-// Delivers BPMN-defined signals to the specific executions currently waiting on each one, so proxy's and twin's signal catch events can both advance. Neither throws its own signals, so delivery has to happen externally - this is that external driver. Ported from the equivalent mechanism in the older camundademo-based Target Harness Platform (see SpringBootProjectGenerator.writeSignalBroadcaster's own, more detailed comment) with one simplification: RedCollarTP has no external-task topic to route through, so a shared signal's own name is directly what RabbitMqConfig's queues are keyed by. For a paired proxy+twin (same business key - see PairRegistry and the generated /start endpoints), each shared signal becomes a genuine two-step, targeted handoff instead of an undifferentiated broadcast: 1. REQUEST (proxy -> twin): once both sides of a pair are simultaneously waiting on the same signal, only twin's execution is released. 2. RESPONSE (twin -> proxy): proxy's execution is deliberately left waiting until twin is observed to have moved on - subscribed to a different signal, or completed entirely - proving its gated activity actually ran, not merely that the signal arrived. Only then is proxy's execution released. A signal declared on only one side, or whose partner is not currently waiting on it (unpaired, or a rework-loop revisit), is delivered to immediately instead - this is what lets a lone proxy instance (no twin started) still run to completion.
+// Coordinates delivery of BPMN signal events between paired Proxy and Twin process executions.
 @Component
 public class SignalBroadcaster {
 
@@ -33,7 +33,7 @@ public class SignalBroadcaster {
     private final Set<String> everDelivered = ConcurrentHashMap.newKeySet();
     private final Map<String, Integer> partnerArrivalTicks = new ConcurrentHashMap<>();
     private static final int MAX_PARTNER_ARRIVAL_TICKS = 5;
-    // Reliability hardening (Pass 2): handoffKeys already logged as stuck-on-a-failed- partner, so the ERROR log below fires once per stuck period rather than once per second for as long as the incident is open. Cleared alongside awaitingResponse's own removal (whether the eventual outcome is a genuine advance or the handoff simply ending some other way) so a LATER stall on the same handoffKey logs again.
+    // Tracks handoffKeys logged as stalled on an incident so error logging occurs once per stall period rather than repeatedly on every tick.
     private final Set<String> stuckOnIncidentLogged = ConcurrentHashMap.newKeySet();
 
     public SignalBroadcaster(RuntimeService runtimeService, PairRegistry pairRegistry,
@@ -90,7 +90,8 @@ public class SignalBroadcaster {
                 stuckOnIncidentLogged.remove(handoffKey);
                 deliverTo(signalName, subscription, businessKey, "RESPONSE");
             } else {
-                // Reliability hardening (Pass 2): unlike partnerNotComing (bounded, self-releasing - the responder legitimately may not have arrived yet), this wait has no such bound, because there is no safe fallback here - the Twin's gated activity may genuinely still be running, and releasing the Proxy without proof it finished is exactly the "pretend completion" this broadcaster must never do. What CAN be told apart, using real Camunda state rather than an invented timeout, is "still legitimately in progress" from "provably stuck" - a Camunda incident (job retries exhausted, or a failed external task) on the responder's own process instance means it will NOT resolve on its own. Logging that once makes an otherwise silent, indefinite wait observable instead of indistinguishable from a merely slow partner; the proxy still does not advance - only a genuine, later responderHasAdvancedPast()==true (the incident gets resolved and the responder's execution actually moves on) does that.
+                // Distinguishes an in-progress partner from an unresolvable incident: checks for open Camunda incidents on the partner instance.
+                // If an incident exists, logs an observable error rather than silently waiting, while preventing premature proxy progression until the partner legitimately advances.
                 boolean partnerHasOpenIncident = runtimeService.createIncidentQuery()
                         .processInstanceId(partnerInstanceId).count() > 0;
                 if (partnerHasOpenIncident) {
@@ -143,7 +144,7 @@ public class SignalBroadcaster {
         return false;
     }
 
-    // True once the responder has provably moved past the gated task behind signalName - subscribed to a different signal, or completed entirely - rather than merely having received the signal itself, which happens before its gated task ever runs. Relies on the responder's own JavaDelegate.execute() running synchronously, inside the same Camunda command/transaction as the signal delivery that triggers it - only that makes "no longer subscribed to signalName" (checked here via a separate query, on a later broadcaster tick) proof that the gated task actually finished, rather than merely that it started. A delegate that hands work to another thread and returns early would make this method return true before the real work is done.
+    // Checks whether the responder has completed or transitioned past the task gated by signalName.
     private boolean responderHasAdvancedPast(String signalName, String responderInstanceId) {
         ProcessInstance stillActive = runtimeService.createProcessInstanceQuery()
                 .processInstanceId(responderInstanceId)

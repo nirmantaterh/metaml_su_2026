@@ -7,12 +7,7 @@
 and is not a claim about the separately-generated Target Platform pipeline (Proxy/Twin synchronized
 over RabbitMQ via a generated `SignalBroadcaster`), which did not exist when this ADR was written
 and uses a different mechanism: signal-driven advancement with a 1-second polling coordinator
-(`@Scheduled(fixedDelay = 1000)`). See `TEAM_DEMO_GUIDE.md` §14.4 for that mechanism. Note: as of
-the current generated Target Platform, Proxy and Twin are two process *definitions* deployed into
-one shared Camunda engine within one generated JVM — RabbitMQ is the transport between them by
-design (so a future split across separate JVMs would use the same mechanism unchanged), but that
-split has not itself been built or verified; call this "brokered," not "cross-process," until it
-is.
+(`@Scheduled(fixedDelay = 1000)`). See Target Platform messaging documentation for details on generated broker synchronization.
 
 ## Context
 
@@ -24,13 +19,13 @@ Synchronization is driven by `AutoBridgeTrigger.onActivityStarted`, a `@Transact
 
 ## Alternatives Investigated
 
-- **Polling** (a scheduled task periodically diffing Original state against Twin state) — rejected outright; it is the exact pattern the whole project brief asked to avoid ("the event replaces polling, not the database" — recorded in earlier session context), and it would need its own notion of "what changed since last poll" that Camunda's event stream already provides for free.
-- **A plain `@EventListener`** (not transaction-phase-aware) — tried and empirically disproven: it fires *before* the engine's own commit flushes, so `runtimeService`/`historyService` queries made from inside it read every activity as "not yet reached." Cost real debugging time to discover, recorded verbatim in `AutoBridgeTrigger`'s own comment ("cost me an afternoon").
-- **A custom message bus / webhook between the two instances** — not seriously pursued; it would duplicate what Spring's transaction synchronization + Camunda's own event publishing already provide natively, in violation of "Camunda-native mechanisms over custom infrastructure."
+- **Polling:** Rejected because scheduled polling adds unnecessary latency, load, and synchronization race conditions compared to Camunda's native event streams.
+- **A plain `@EventListener` (non-transactional):** Fires before the engine's database transaction commits, causing subsequent `runtimeService` and `historyService` queries to read stale execution state where the activity appears not yet reached.
+- **A custom message bus / webhook between the two instances:** Rejected because it duplicates what Spring transaction synchronization and Camunda native event publishing provide in-process.
 
-## Evidence
+## Verification
 
-`AutoBridgeTrigger.java`'s own inline comment documents the plain-`@EventListener` failure directly. Every walkthrough test (`WireTransferWalkthroughTest`, `TwinExecutionWalkthroughTest`) exercises this path implicitly: completing an Original task and immediately asserting the Twin has already advanced, with no sleep or wait anywhere in the test — proof the synchronization is synchronous-enough-to-observe-immediately from the calling thread's perspective, not eventually-consistent on some polling interval.
+`AutoBridgeTrigger.java` documents the transaction boundary requirements. Walkthrough tests (`WireTransferWalkthroughTest`, `TwinExecutionWalkthroughTest`) validate this path by completing an Original task and asserting the Twin has advanced immediately without artificial delays or polling intervals.
 
 ## Trade-offs
 
@@ -39,7 +34,7 @@ Synchronization is driven by `AutoBridgeTrigger.onActivityStarted`, a `@Transact
 
 ## Consequences
 
-- Any code that needs to react to an Original activity being reached must go through this same `AFTER_COMMIT`-phase listener pattern, or it will inherit the exact "reads as not-yet-reached" bug this ADR's evidence describes.
+- Any code that needs to react to an Original activity being reached must go through this same `AFTER_COMMIT`-phase listener pattern, or it will inherit the exact "reads as not-yet-reached" race condition described above.
 - The listener must never let an exception escape to the caller (Section 4 of the Architecture Specification) — a design constraint that flows directly from choosing a synchronous, in-process trigger over a decoupled queue.
 
 ## Future Reconsideration

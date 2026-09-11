@@ -31,9 +31,7 @@ class WorkflowEventStoreTest {
         assertThat(loaded).containsKey("model-1");
         assertThat(loaded.get("model-1")).hasSize(2);
         assertThat(loaded.get("model-1").get(1).status()).isEqualTo(StageStatus.COMPLETED);
-        // millisecond precision, not the original's nanosecond one - JSON round-trips through an
-        // epoch-millis DTO on purpose (see WorkflowEventStore's own header comment), so this
-        // compares against a truncated reference instead of the original Instant directly
+        // Compare against epoch-millis precision matching JSON DTO serialization.
         assertThat(loaded.get("model-1").get(1).timestamp())
                 .isEqualTo(Instant.ofEpochMilli(timestamp.toEpochMilli()));
     }

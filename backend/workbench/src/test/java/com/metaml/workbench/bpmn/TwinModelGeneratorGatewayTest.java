@@ -21,15 +21,14 @@ import org.camunda.bpm.model.bpmn.instance.SequenceFlow;
 import org.camunda.bpm.model.bpmn.instance.TimerEventDefinition;
 import org.junit.jupiter.api.Test;
 
-// Verifies that TwinModelGenerator correctly handles each gateway type that Camunda 7.22.0
-// can actually deploy and execute, and rejects the ones it cannot.
+/**
+ * Tests gateway handling and validation in TwinModelGenerator.
+ */
 class TwinModelGeneratorGatewayTest {
 
     private final TwinModelGenerator generator = new TwinModelGenerator();
 
-    // ------- Inclusive Gateway -------
-
-    // Split+join with conditions and a default flow - the full structure Camunda evaluates.
+    // Split+join with conditions and a default flow.
     private static BpmnModelInstance inclusiveGatewayProcess() {
         return readModel("""
                 <?xml version="1.0" encoding="UTF-8"?>
@@ -126,9 +125,7 @@ class TwinModelGeneratorGatewayTest {
         Bpmn.validateModel(twin);
     }
 
-    // ------- Event-Based Gateway -------
-
-    // An event-based gateway followed by two intermediate catch events (message + timer).
+    // Event-based gateway followed by message and timer catch events.
     private static BpmnModelInstance eventBasedGatewayProcess() {
         return readModel("""
                 <?xml version="1.0" encoding="UTF-8"?>
@@ -223,11 +220,7 @@ class TwinModelGeneratorGatewayTest {
         Bpmn.validateModel(twin);
     }
 
-    // ------- Complex Gateway (remains unsupported) -------
-
-    // Complex gateways cannot be executed by Camunda 7.22.0 (no engine class exists in
-    // camunda-engine-7.22.0.jar, no builder method on AbstractFlowNodeBuilder). The generator
-    // must reject them with a clear error rather than producing a twin that fails at deploy time.
+    // Complex gateways are unsupported in Camunda execution and must be rejected.
     private static BpmnModelInstance complexGatewayProcess() {
         return readModel("""
                 <?xml version="1.0" encoding="UTF-8"?>
@@ -258,8 +251,6 @@ class TwinModelGeneratorGatewayTest {
                 .hasMessageContaining("Gateway_Complex")
                 .hasMessageContaining("does not support");
     }
-
-    // ------- Existing gateway types remain working (regression) -------
 
     @Test
     void exclusiveGatewayStillWorksAfterGatewayExpansion() {
@@ -293,7 +284,80 @@ class TwinModelGeneratorGatewayTest {
         Bpmn.validateModel(twin);
     }
 
-    // ------- Helpers -------
+    // ---- Gateway/automation-output race (TwinModelGenerator investigation) ----
+    //
+    // A gateway immediately following a synchronized activity (UserTask/ReceiveTask/ServiceTask/bare
+    // BusinessRuleTask) must be wired to leave from that activity's automation task, not its receive
+    // task - otherwise the gateway becomes reachable concurrently with, rather than after, the
+    // automation task that actually produces the activity's declared output.
+
+    @Test
+    void gatewayImmediatelyAfterAUserTaskExitsFromTheAutomationTaskNotTheReceiveTask() {
+        BpmnModelInstance original = Bpmn.createExecutableProcess("P")
+                .startEvent("S")
+                .userTask("Task_A")
+                .exclusiveGateway("GW")
+                .condition("toEnd1", "${flagged}")
+                .endEvent("E1")
+                .moveToLastGateway()
+                .condition("toEnd2", "${!flagged}")
+                .endEvent("E2")
+                .done();
+
+        BpmnModelInstance twin = generator.generate(original);
+
+        ExclusiveGateway gateway = twin.getModelElementById("GW");
+        assertThat(gateway.getIncoming()).hasSize(1);
+        SequenceFlow toGateway = gateway.getIncoming().iterator().next();
+        assertThat(toGateway.getSource().getId())
+                .as("the gateway must be reachable only once the automation task has actually run, "
+                        + "not as soon as the receive task completes")
+                .isEqualTo("Task_A_automate");
+        Bpmn.validateModel(twin);
+    }
+
+    @Test
+    void gatewayImmediatelyAfterAServiceTaskExitsFromTheAutomationTaskNotTheReceiveTask() {
+        BpmnModelInstance original = Bpmn.createExecutableProcess("P")
+                .startEvent("S")
+                .serviceTask("Task_A")
+                .exclusiveGateway("GW")
+                .condition("toEnd1", "${flagged}")
+                .endEvent("E1")
+                .moveToLastGateway()
+                .condition("toEnd2", "${!flagged}")
+                .endEvent("E2")
+                .done();
+
+        BpmnModelInstance twin = generator.generate(original);
+
+        ExclusiveGateway gateway = twin.getModelElementById("GW");
+        SequenceFlow toGateway = gateway.getIncoming().iterator().next();
+        assertThat(toGateway.getSource().getId()).isEqualTo("Task_A_automate");
+        Bpmn.validateModel(twin);
+    }
+
+    // A gateway following an activity that is NOT converted into a receive/automation pair (here, a
+    // plain exclusive gateway split with no intervening task at all) is unaffected by this fix - the
+    // exit id is still the node's own id.
+    @Test
+    void gatewayNotFollowingASynchronizedActivityIsUnaffected() {
+        BpmnModelInstance original = Bpmn.createExecutableProcess("P")
+                .startEvent("S")
+                .exclusiveGateway("GW")
+                .condition("toEnd1", "${flagged}")
+                .endEvent("E1")
+                .moveToLastGateway()
+                .condition("toEnd2", "${!flagged}")
+                .endEvent("E2")
+                .done();
+
+        BpmnModelInstance twin = generator.generate(original);
+
+        ExclusiveGateway gateway = twin.getModelElementById("GW");
+        SequenceFlow toGateway = gateway.getIncoming().iterator().next();
+        assertThat(toGateway.getSource().getId()).isEqualTo("S");
+    }
 
     private static BpmnModelInstance readModel(String xml) {
         return Bpmn.readModelFromStream(

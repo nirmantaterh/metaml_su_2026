@@ -54,11 +54,9 @@ import com.metaml.workbench.store.WorkbenchStateStore;
 import com.metaml.workbench.workflow.WorkflowEventStore;
 import com.metaml.workbench.workflow.WorkflowStateTracker;
 
-// Scope 6 P1 fix: proves evolveActivity(twinId, activityId, activityInstanceId, agentType) binds
-// exactly the caller-specified runtime sibling of a parallel (non-sequential) multi-instance
-// activity, never the sibling currentVisitId()'s most-recently-started heuristic would have
-// picked. Uses a real standalone Camunda engine (same bootstrap as BpmnRuntimeExecutionTest)
-// so the two siblings are genuinely concurrent runtime ActivityInstances, not mocked state.
+// Verifies that evolveActivity(twinId, activityId, activityInstanceId, agentType) binds
+// the explicitly specified runtime sibling of a parallel multi-instance activity.
+// Uses a real standalone Camunda engine with concurrent runtime ActivityInstances.
 class ParallelMultiInstanceEvolutionIdentityTest {
 
     @TempDir
@@ -67,8 +65,8 @@ class ParallelMultiInstanceEvolutionIdentityTest {
     private static final String ACTIVITY_ID = "Task_MI";
     private static final String TWIN_ACTIVITY_ID = "Task_MI_twin";
     // Ordinary (non-multi-instance) sibling branch, deployed alongside Task_MI in the same
-    // original process instance - proves runtime discovery/evolve behavior is unchanged for the
-    // common single-instance case (TEST A: single-instance compatibility).
+    // original process instance - verifies runtime discovery/evolve behavior is unchanged for the
+    // common single-instance case.
     private static final String SINGLE_ACTIVITY_ID = "Task_Single";
     private static final String SINGLE_TWIN_ACTIVITY_ID = "Task_Single_twin";
     private static final String TWIN_ID = "twin-mi-identity-01";
@@ -104,12 +102,7 @@ class ParallelMultiInstanceEvolutionIdentityTest {
         historyService = engine.getHistoryService();
         repositoryService = engine.getRepositoryService();
 
-        // --- Deploy and start the ORIGINAL process: a parallel gateway splits into (a) a plain
-        // parallel (non-sequential) multi-instance user task with 2 concurrent siblings that
-        // never auto-complete, so both stay simultaneously active as real, distinct
-        // ActivityInstances, and (b) an ordinary single-instance user task on the other branch,
-        // for the single-instance compatibility fixture. Both stay open (no completion), so a
-        // single running original process instance exercises both fixtures at once. ---
+        // Deploy and start the original process containing both multi-instance and single-instance tasks.
         String originalBpmn = """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -147,10 +140,7 @@ class ParallelMultiInstanceEvolutionIdentityTest {
         ProcessInstance originalPi = runtimeService.startProcessInstanceByKey("process_mi_original");
         originalProcessInstanceId = originalPi.getId();
 
-        // --- Deploy and start a trivial TWIN process that just parks on a user task, so its
-        // process instance stays alive (running) for runtime variable writes to land on. Its
-        // own activity structure is irrelevant here: evolveOnce() only needs the twin process
-        // instance to exist and be running; it does not need to mirror Task_MI's shape. ---
+        // Deploy and start twin sink process to hold runtime variable state.
         String twinBpmn = """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -171,8 +161,7 @@ class ParallelMultiInstanceEvolutionIdentityTest {
         ProcessInstance twinPi = runtimeService.startProcessInstanceByKey("process_mi_twin_sink");
         twinProcessInstanceId = twinPi.getId();
 
-        // --- Wire a WorkbenchServiceImpl against the REAL engine's Camunda services, mocking
-        // only the non-Camunda collaborators this identity fix does not exercise. ---
+        // Configure WorkbenchServiceImpl against real Camunda engine services.
         governanceService = mock(GovernanceService.class);
         nodeManagerClient = mock(NodeManagerClient.class);
 
@@ -206,9 +195,7 @@ class ParallelMultiInstanceEvolutionIdentityTest {
                 new ProcessModelFileStore(tempDir.resolve("models").toString()), archiveStore,
                 delegateClassGenerator, generator, new SpringBootProjectLauncher(), tracker);
 
-        // --- Register the TwinProcess directly (bypassing connectActivity's BPMN-element
-        // validation, which is irrelevant to this identity fix) so evolveOnce() has a real
-        // originalProcessId/twinProcessId pair backed by the two live instances above. ---
+        // Register TwinProcess backed by the active process instances.
         twin = new TwinProcess();
         twin.setId(TWIN_ID);
         twin.setOriginalProcessId(originalProcessInstanceId);
@@ -236,7 +223,7 @@ class ParallelMultiInstanceEvolutionIdentityTest {
 
     @Test
     void explicitActivityInstanceIdBindsOnlyTheRequestedSiblingRegardlessOfHeuristic() throws Exception {
-        // Two genuinely concurrent runtime siblings of the same activityId.
+        // Concurrent runtime siblings of the same activityId.
         ActivityInstance tree = runtimeService.getActivityInstance(originalProcessInstanceId);
         ActivityInstance[] visits = tree.getActivityInstances(ACTIVITY_ID);
         assertThat(visits).hasSize(2);
@@ -315,17 +302,16 @@ class ParallelMultiInstanceEvolutionIdentityTest {
         assertThat(state.getActiveInstances()).hasSize(2);
         assertThat(state.getActiveInstances().stream().map(ActiveRuntimeInstance::activityInstanceId).toList())
                 .containsExactlyInAnyOrderElementsOf(expectedIds);
-        // Both distinct loopCounters are represented - proves the discovery reads each sibling's
-        // OWN live execution-local variable, not a single shared/aggregated value.
+        // Both distinct loopCounters are represented - confirms discovery reads each sibling's
+        // own live execution-local variable, not a single shared/aggregated value.
         assertThat(state.getActiveInstances().stream().map(ActiveRuntimeInstance::loopCounter).toList())
                 .containsExactlyInAnyOrder(0, 1);
     }
 
     @Test
     void singleInstanceActivityExposesExactlyOneActiveInstanceAndEvolvesNormally() {
-        // TEST A: single-instance compatibility. A plain (non-multi-instance) sibling branch of
-        // the same running original process instance must report exactly one active instance,
-        // and legacy 3-arg evolution must work exactly as it did before this identity fix.
+        // Single-instance compatibility: a non-multi-instance sibling branch of the running
+        // process instance reports exactly one active instance, and 3-argument evolution functions normally.
         TwinActivityExecutionState state = service.getActivityExecutionState(TWIN_ID, SINGLE_ACTIVITY_ID);
         assertThat(state.getActiveInstances()).hasSize(1);
         assertThat(state.getActiveInstances().get(0).loopCounter()).isNull();
@@ -345,10 +331,9 @@ class ParallelMultiInstanceEvolutionIdentityTest {
                 .isEqualTo("validator-agent-01");
     }
 
-    // CASE D for the integration-hold mechanism: a claim staked on ONE runtime sibling must hold
-    // only that sibling. The other concurrent sibling of the same activity definition must remain
-    // eligible for the ordinary autonomous bridge. Exercised through bridgeActivityEvent's own
-    // instance-qualified entry point, which is the same path AutoBridgeTrigger drives.
+    // Integration hold scoping: a claim staked on one runtime sibling holds only that sibling.
+    // The other concurrent sibling of the same activity definition remains eligible for autonomous bridging.
+    // Exercised through bridgeActivityEvent's instance-qualified entry point.
     @Test
     void anIntegrationClaimOnOneSiblingDoesNotHoldItsConcurrentSibling() {
         ActivityInstance tree = runtimeService.getActivityInstance(originalProcessInstanceId);
@@ -375,8 +360,6 @@ class ParallelMultiInstanceEvolutionIdentityTest {
                 .as("the unrelated concurrent sibling must not be held by the other's claim")
                 .isNotEqualTo("Activity is awaiting a component integration decision");
     }
-
-    // ---- helpers ----
 
     private String invokeCurrentVisitId(TwinProcess twin, String activityId) throws Exception {
         Method method = WorkbenchServiceImpl.class.getDeclaredMethod("currentVisitId", TwinProcess.class,

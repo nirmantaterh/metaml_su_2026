@@ -10,18 +10,18 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-// Declares the three direct exchanges, six queues, and their bindings. <p>Enabled only with {@code metaml.messaging.enabled=true}; disabled by default so generated platforms can run without RabbitMQ. Camunda remains the process engine.
+// RabbitMQ messaging infrastructure configuration, active when metaml.messaging.enabled=true.
 @Configuration
 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
 public class MessagingConfig {
 
-    // Uses JSON on the wire for readability and non-Java consumers.
+    // Uses Jackson JSON converter for AMQP message payloads.
     @Bean
     public MessageConverter harnessMessageConverter() {
         return new Jackson2JsonMessageConverter();
     }
 
-    // --- Flow A: Manufacturing <-> Machines ---
+    // Flow A: Manufacturing and machines messaging definitions.
 
     @Bean
     public DirectExchange machinesExchange() {
@@ -50,7 +50,7 @@ public class MessagingConfig {
                 .with(MessagingTopology.MACHINES_COMPLETION_KEY);
     }
 
-    // --- Flow B: Manufacturing <-> Twin ---
+    // Flow B: Manufacturing and twin messaging definitions.
 
     @Bean
     public DirectExchange twinExchange() {
@@ -79,7 +79,7 @@ public class MessagingConfig {
                 .with(MessagingTopology.TWIN_STAGE_RESPONSE_KEY);
     }
 
-    // --- Flow C: Twin <-> Gateway ---
+    // Flow C: Twin and gateway messaging definitions.
 
     @Bean
     public DirectExchange gatewayExchange() {

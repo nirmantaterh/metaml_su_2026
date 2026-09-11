@@ -9,10 +9,15 @@ server:
   address: 127.0.0.1
   port: 8083
 
-# The agent catalog. Yaml rather than the .properties file this module used to have, because
-# outputs is a nested map and, more to the point, .properties has no types: every value in it
-# arrives as a String, and a gateway condition asking whether riskFlagged == true would then
-# always be comparing against "true" and always be false.
+# Agent catalog with typed schema preserving boolean types for gateway evaluation.
+#
+# required-inputs / produced-outputs (MetaML Scope 6, Provider Contract Authorship phase) are the
+# truthful process-variable I/O contract each provider operator publishes alongside the rest of
+# this catalog entry. Flat sibling fields, never a nested "contract:" object. Each declaration
+# carries name / type / required; type is one of BOOLEAN, NUMBER, STRING, STRUCT, UNKNOWN (omitted
+# means UNKNOWN). These mirror the actual process variables each reference executor reads
+# (ComponentExecutor implementations under backend/workbench/.../automation) and unconditionally
+# produces - see each executor for the source of truth.
 nodemanager:
   agents:
     validator:
@@ -24,6 +29,29 @@ nodemanager:
         - schema checking
         - integrity
         - format compliance
+      required-inputs:
+        - name: customerId
+          type: STRING
+          required: false
+        - name: payload
+          type: STRING
+          required: false
+        - name: forceValidationFailure
+          type: BOOLEAN
+          required: false
+      produced-outputs:
+        - name: validationPassed
+          type: BOOLEAN
+          required: true
+        - name: schemaVersion
+          type: STRING
+          required: true
+        - name: validationStatus
+          type: STRING
+          required: true
+        - name: validationMessage
+          type: STRING
+          required: true
     credit-risk-assessor:
       agent-name: credit-risk-agent-01
       description: Financial credit risk, compliance flagging, and transactional risk assessment agent.
@@ -36,6 +64,32 @@ nodemanager:
         - risk flagging
       outputs:
         riskFlagged: true
+      required-inputs:
+        - name: transferAmount
+          type: NUMBER
+          required: false
+        - name: amount
+          type: NUMBER
+          required: false
+        - name: creditScore
+          type: NUMBER
+          required: false
+        - name: riskThreshold
+          type: NUMBER
+          required: false
+      produced-outputs:
+        - name: riskScore
+          type: NUMBER
+          required: true
+        - name: riskFlagged
+          type: BOOLEAN
+          required: true
+        - name: riskThreshold
+          type: NUMBER
+          required: true
+        - name: assessmentReason
+          type: STRING
+          required: true
     data-enricher:
       agent-name: data-enricher-agent-01
       description: Contextual data augmentation, profile enrichment, and metadata lookup agent.
@@ -45,6 +99,16 @@ nodemanager:
         - profile augmentation
         - attribute population
         - enrichment
+      produced-outputs:
+        - name: enrichedTier
+          type: STRING
+          required: true
+        - name: geoRegion
+          type: STRING
+          required: true
+        - name: enrichmentVerified
+          type: BOOLEAN
+          required: true
     recommender:
       agent-name: recommender-agent-01
       description: Decision support, workflow recommendation, and next-best-action recommendation agent.
@@ -54,6 +118,59 @@ nodemanager:
         - next-best-action
         - optimization
         - action suggestion
+      produced-outputs:
+        - name: recommendedAction
+          type: STRING
+          required: true
+        - name: confidenceScore
+          type: NUMBER
+          required: true
+    order-approval:
+      agent-name: order-approval-agent-01
+      description: Generic order/request approval gate agent - approves or rejects from real order data.
+      capabilities:
+        - order approval
+        - approval gate
+        - eligibility check
+        - request authorization
+      required-inputs:
+        - name: quantity
+          type: NUMBER
+          required: false
+        - name: orderStatus
+          type: STRING
+          required: false
+        - name: forceOrderRejection
+          type: BOOLEAN
+          required: false
+      produced-outputs:
+        - name: orderApproved
+          type: BOOLEAN
+          required: true
+        - name: approvalReason
+          type: STRING
+          required: true
+    quality-check:
+      agent-name: quality-check-agent-01
+      description: Generic quality gate agent - passes or fails from real order/request state.
+      capabilities:
+        - quality check
+        - quality gate
+        - defect detection
+      required-inputs:
+        - name: orderStatus
+          type: STRING
+          required: false
+        - name: forceQualityFailure
+          type: BOOLEAN
+          required: false
+      produced-outputs:
+        - name: qualityPassed
+          type: BOOLEAN
+          required: true
+        - name: qualityMessage
+          type: STRING
+          required: true
     notifier:
       agent-name: notifier-agent-01
       description: External alert dispatch, stakeholder messaging, and event notification agent.
@@ -63,3 +180,10 @@ nodemanager:
         - messaging
         - email dispatch
         - event broadcast
+      produced-outputs:
+        - name: notificationDispatched
+          type: BOOLEAN
+          required: true
+        - name: dispatchChannel
+          type: STRING
+          required: true

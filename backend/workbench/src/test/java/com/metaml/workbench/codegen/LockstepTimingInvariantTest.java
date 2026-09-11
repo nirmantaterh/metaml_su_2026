@@ -31,23 +31,9 @@ import org.junit.jupiter.api.Test;
 
 import com.metaml.workbench.bpmn.TwinModelGenerator;
 
-// Automated version of the manual delayed-Twin race test performed during the lockstep sync
-// implementation/review: proves the generated BPMN's signal gates - combined with Camunda's
-// synchronous, transactional delegate execution - genuinely block Proxy from entering Task N+1
-// until Twin's Task N has COMPLETED, not merely started or been signaled. LockstepSyncIntegrationTest
-// (in this same package) only asserts on the SHAPE of the generated BPMN; this test deploys that
-// real output to a real engine and asserts the actual runtime ordering.
-//
-// Deliberately does not involve SignalBroadcaster, RabbitMQ, or a generated Spring Boot project:
-// SignalBroadcaster only exists as a string template inside SpringBootProjectGenerator (see
-// writeSignalBroadcaster), not as a class this module can import, so it cannot be unit-tested
-// directly. What CAN be tested directly - and what actually establishes the invariant - is the
-// primitive SignalBroadcaster is built on: runtimeService.signalEventReceived() is synchronous and
-// transactional, and a later EventSubscription query only ever sees state from AFTER that
-// transaction (delegate execution included) commits. This test drives that same primitive by hand,
-// in the same two-phase REQUEST-then-RESPONSE-after-confirming-advancement shape SignalBroadcaster
-// uses (see its own responderHasAdvancedPast comment), deterministically via a CountDownLatch
-// instead of the broadcaster's 1-second poll cadence.
+/**
+ * Verifies the lockstep synchronization timing invariant using an embedded engine.
+ */
 class LockstepTimingInvariantTest {
 
     private static final String PROXY_BPMN = """
@@ -87,10 +73,6 @@ class LockstepTimingInvariantTest {
         }
     }
 
-    // Stands in for the real generated "taskA_automate" delegate (which the running generator
-    // would render as an instant System.out.println stub - see TargetPlatformSourceGenerator's own
-    // render()). Blocks on a caller-supplied latch instead, so "twin's Task A is still running" is
-    // a controllable state, not something only Thread.sleep can approximate.
     private static final class LatchedDelegate implements JavaDelegate {
         private final CountDownLatch releaseLatch;
         private final CountDownLatch startedSignal = new CountDownLatch(1);
@@ -119,8 +101,7 @@ class LockstepTimingInvariantTest {
 
     @Test
     void proxyCannotEnterTaskBWhileTwinsTaskAIsStillBlocked() throws Exception {
-        // 1. Real generator output for both sides - the exact same production code path
-        // LockstepSyncIntegrationTest exercises, unmodified.
+        // 1. Real generator output for both sides
         TargetPlatformSourceGenerator.Result proxyResult = generator.generate(PROXY_BPMN, false);
         BpmnModelInstance proxyModel = Bpmn.readModelFromStream(
                 new ByteArrayInputStream(PROXY_BPMN.getBytes(StandardCharsets.UTF_8)));
@@ -128,14 +109,7 @@ class LockstepTimingInvariantTest {
         TargetPlatformSourceGenerator.Result twinResult = generator.generate(twinBpmn, true,
                 proxyResult.syncActivityIds());
 
-        // 2. Test-only delegate substitutes, registered directly under the bean names
-        // TargetPlatformSourceGenerator normalized the transformed BPMNs' delegateExpressions to:
-        // camel(activityId) for proxy tasks, camel(activityId + "_automate") + "Twin" for twin
-        // tasks - the "Twin" suffix keeps a twin bean name distinct from a proxy bean name even
-        // when both sides reference the same underlying activity id (see generate()'s own
-        // normalisation and its ConflictingBeanDefinitionException-avoidance comment). No Spring
-        // context, no component scanning: a standalone engine resolves "${beanName}" against this
-        // map directly.
+        // Register mock delegate beans for proxy and twin execution.
         CountDownLatch releaseLatch = new CountDownLatch(1);
         LatchedDelegate twinTaskADelegate = new LatchedDelegate(releaseLatch);
         Map<Object, Object> beans = Map.of(
@@ -167,16 +141,11 @@ class LockstepTimingInvariantTest {
         ProcessInstance proxy = runtimeService.startProcessInstanceByKey("LockstepTiming");
         ProcessInstance twin = runtimeService.startProcessInstanceByKey("LockstepTiming_twin");
 
-        // 4. Bounded wait (not a fixed sleep) until both sides are genuinely parked on sync_taskA -
-        // otherwise "deliver the signal" below would have nothing to deliver to.
+        // 4. Wait until both proxy and twin subscribe to sync_taskA.
         awaitEventSubscription(runtimeService, proxy.getId(), "sync_taskA", Duration.ofSeconds(10));
         awaitEventSubscription(runtimeService, twin.getId(), "sync_taskA", Duration.ofSeconds(10));
 
-        // 5. REQUEST: deliver sync_taskA to twin, exactly as SignalBroadcaster's REQUEST phase
-        // would. This call is synchronous and will not return until twin's whole flow through
-        // taskA_automate.execute() completes - right now, that means it blocks on releaseLatch.
-        // Run it on its own thread so this test thread can keep asserting proxy's state while
-        // twin is provably still inside that blocked call.
+        // 5. Deliver sync_taskA signal to twin asynchronously.
         AtomicReference<Throwable> deliveryFailure = new AtomicReference<>();
         Thread requestDelivery = new Thread(() -> {
             try {
@@ -191,9 +160,7 @@ class LockstepTimingInvariantTest {
         boolean delegateStarted = twinTaskADelegate.startedSignal.await(10, TimeUnit.SECONDS);
         assertThat(delegateStarted).as("twin's taskA_automate delegate should have started").isTrue();
 
-        // 6. THE INVARIANT UNDER TEST, asserted while twin is provably still blocked inside
-        // taskA_automate (releaseLatch has not been counted down yet): proxy must still be exactly
-        // where it was before the REQUEST was sent - never having entered taskB.
+        // 6. Verify proxy remains blocked while twin task A is executing.
         assertThat(runtimeService.getActiveActivityIds(proxy.getId()))
                 .as("proxy must remain blocked at its own sync_taskA gate while twin's Task A is still running")
                 .containsExactly("sync_evt_taskA");
@@ -202,18 +169,15 @@ class LockstepTimingInvariantTest {
                 .as("proxy must not have entered taskB while twin's Task A is still blocked")
                 .isZero();
 
-        // 7. Release twin's Task A, then wait for the REQUEST delivery call to actually return -
-        // i.e. for twin's transaction, delegate execution included, to commit.
+        // 7. Release twin task A and wait for completion.
         releaseLatch.countDown();
         requestDelivery.join(Duration.ofSeconds(10).toMillis());
         assertThat(requestDelivery.isAlive()).as("REQUEST delivery thread should have returned by now").isFalse();
         assertThat(deliveryFailure.get()).as("REQUEST delivery must not have thrown").isNull();
         assertThat(twinTaskADelegate.completedAt).as("twin's taskA_automate must have completed").isNotNull();
 
-        // 8. RESPONSE, gated on the same rule SignalBroadcaster's responderHasAdvancedPast uses: a
-        // FRESH query (not reused state from before the release) must show twin is no longer
-        // subscribed to sync_taskA before RESPONSE is sent - proof twin's transaction, delegate
-        // included, has actually committed, not just that the earlier call returned in-process.
+        // 8. RESPONSE: verify twin is no longer subscribed to sync_taskA, confirming twin's transaction
+        // has committed before sending response.
         boolean twinAdvancedPastTaskA = runtimeService.createEventSubscriptionQuery()
                 .processInstanceId(twin.getId()).eventType("signal").list().stream()
                 .noneMatch(subscription -> "sync_taskA".equals(subscription.getEventName()));
@@ -225,9 +189,8 @@ class LockstepTimingInvariantTest {
         // 9. Proxy Task N+1 (taskB) must now execute.
         awaitHistoricActivity(historyService, proxy.getId(), "taskB", Duration.ofSeconds(10));
 
-        // 10. Direct ordering proof, from the engine's own recorded history timestamps - not test-
-        // thread clocks, not log lines: twin's taskA_automate must have committed its end time
-        // before proxy's taskB started.
+        // 10. Direct ordering verification from engine history timestamps: twin's taskA_automate end time
+        // must precede proxy's taskB start time.
         HistoricActivityInstance twinAutomate = historyService.createHistoricActivityInstanceQuery()
                 .processInstanceId(twin.getId()).activityId("taskA_automate").singleResult();
         HistoricActivityInstance proxyTaskB = historyService.createHistoricActivityInstanceQuery()

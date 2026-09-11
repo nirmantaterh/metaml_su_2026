@@ -56,17 +56,9 @@ import com.metaml.workbench.workflow.WorkflowEventStore;
 import com.metaml.workbench.workflow.WorkflowStage;
 import com.metaml.workbench.workflow.WorkflowStateTracker;
 
-// Model deletion as an AUTHORING/CATALOG operation: it removes what the model owns (itself, its
-// .bpmn artifact, its generated projects) and provably touches nothing else. The "touches nothing
-// else" half is most of this file, because that is the part that would be dangerous if it were
-// wrong - a twin whose model is deleted must keep working, and a Camunda deployment must never be
-// removed, since deployments are shared between a model's twins and deletion cascades to live
-// process instances.
-//
-// Same harness shape as GeneratedProjectRetentionTest, and for the same reason: real generator,
-// launcher, tracker, event store and model file store, so the parts that actually decide what gets
-// deleted are the real ones. Camunda and governance are mocks specifically so this test can prove
-// they were never called.
+/**
+ * Tests deletion lifecycle semantics and isolation for process models and generated projects.
+ */
 class ModelDeletionTest {
 
     private static final String FAKE_LISTENER_SCRIPT = """
@@ -165,8 +157,6 @@ class ModelDeletionTest {
         return service.launchGeneratedProject(project.projectId());
     }
 
-    // --- 1 & 2. what deletion actually removes ---
-
     @Test
     void deletingAModelRemovesTheModelRecordAndItsBpmnArtifact() {
         String modelId = saveModel("m1");
@@ -211,8 +201,6 @@ class ModelDeletionTest {
                 .isInstanceOf(NoSuchElementException.class)
                 .hasMessageContaining("never-existed");
     }
-
-    // --- 3 & 4. running / launching refuse deletion ---
 
     @Test
     void deletionIsRefusedWhileTheModelsGeneratedAppIsRunningAndTheAppIsLeftAlone() throws IOException {
@@ -281,8 +269,6 @@ class ModelDeletionTest {
         }
     }
 
-    // --- 5. isolation between models ---
-
     @Test
     void deletingOneModelLeavesAnotherModelAndItsProjectsCompletelyUntouched() {
         String doomed = saveModel("m1");
@@ -300,8 +286,6 @@ class ModelDeletionTest {
                 .isEqualTo(keeperProject.projectId());
     }
 
-    // --- 6. workflow history is retained ---
-
     @Test
     void workflowHistorySurvivesDeletionIntact() {
         String modelId = saveModel("m1");
@@ -316,8 +300,6 @@ class ModelDeletionTest {
         assertThat(history).anyMatch(e -> e.stage() == WorkflowStage.GENERATE
                 && e.status() == StageStatus.COMPLETED && project.projectId().equals(e.detail()));
     }
-
-    // --- 7, 8, 9. runtime descendants survive ---
 
     @Test
     void aTwinSurvivesTheDeletionOfTheModelItCameFrom() {
@@ -342,9 +324,7 @@ class ModelDeletionTest {
         assertThat(survivor.getTenantId()).as("tenant ownership is untouched").isEqualTo("acme");
     }
 
-    // Camunda deployments are shared between a model's twins and deleteDeployment cascades to live
-    // process instances, so "deletion never calls these" is the guarantee, not "deletion calls them
-    // carefully".
+    // Camunda deployments and process instances must not be deleted when a model is deleted.
     @Test
     void deletionNeverTouchesCamundaDeploymentsOrProcessInstances() {
         String modelId = saveModel("m1");
@@ -372,8 +352,6 @@ class ModelDeletionTest {
         verify(approvalService, never()).markRejected(anyString(), anyString());
         verify(approvalService, never()).markCompleted(anyString(), anyString());
     }
-
-    // --- 10 & 11. identity ---
 
     @Test
     void aDeletedModelIdCannotBeRecreated() {
@@ -422,16 +400,10 @@ class ModelDeletionTest {
         assertThat(service.listProcessModels()).extracting(ProcessModel::getId).containsExactly(fresh.getId());
     }
 
-    // The nuance that makes the retirement rule safe to ship: a save that FAILS validation records
-    // MODEL/IN_PROGRESS then MODEL/FAILED and never COMPLETED, so the id was never really used.
-    // Retrying it is ordinary behaviour (fix the BPMN, save again) and must keep working - keying
-    // retirement on "has any history" instead of "has a COMPLETED model" would burn the id forever.
+    // Model IDs whose first save failed validation can be retried.
     @Test
     void anIdWhoseFirstSaveFailedValidationCanStillBeRetried() {
-        // the real "BPMN has no executable process" rejection: doSaveProcessModel treats a null
-        // definition as a bad model, discards the deployment and throws, having already recorded
-        // MODEL/IN_PROGRESS. Driven through the query rather than through the XML because Camunda
-        // is mocked here, so invalid XML would never actually be rejected.
+        // Mocks missing process definition to assert doSaveProcessModel rejects non-executable models.
         when(repositoryService.createProcessDefinitionQuery().deploymentId(anyString()).singleResult())
                 .thenReturn(null)
                 .thenReturn(executableDefinition());
@@ -454,8 +426,6 @@ class ModelDeletionTest {
         return definition;
     }
 
-    // --- 12. retention still behaves as Session 7 established ---
-
     @Test
     void supersededGenerationsAreStillCollectedOnRegenerateAfterThisChange() {
         String modelId = saveModel("m1");
@@ -466,8 +436,6 @@ class ModelDeletionTest {
         assertThat(directoryOf(first)).doesNotExist();
         assertThat(directoryOf(second)).exists();
     }
-
-    // --- helpers ---
 
     private static void invokeDeclared(Object target, Class<?> type, String methodName) {
         try {

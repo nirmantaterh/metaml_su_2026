@@ -1,8 +1,7 @@
 # MetaML Workbench — Demo / Regression Protocol
 
-One realistic business process, used for the semester demo, manual end-to-end verification, and
-regression testing. Everything below was executed against a running backend; the observed results
-are recorded verbatim.
+This walkthrough guides manual end-to-end verification, platform demonstration, and
+regression testing against a running MetaML Workbench instance.
 
 ## Fixtures
 
@@ -200,14 +199,13 @@ backend and the real UI.
 
 Note: Save never overwrites — the successful regenerate lands on a **new model id**. That is the
 product's designed behaviour (launched twins still reference the old definition), not a fault in
-the recovery flow. Expect it during the demo.
+the recovery flow. This is expected behavior.
 
 ### Element-specific vs global
 
 | | Carries `bpmnElementId` | "Go to error" | Example |
 |---|---|---|---|
 | **Element-specific** | Yes | Shown | Delegate class-name collision (`settlement-collision.bpmn`) |
-| **Global** | No — explicitly `null`, never fabricated | Hidden | No process element, missing template directory, a failure writing the project tree; and at the MODEL stage, `isExecutable="false"` (`wire-transfer-review-BROKEN.bpmn`) |
+| **Global** | No (`null`) | Hidden | No process element, missing template directory, a failure writing the project tree; and at the MODEL stage, `isExecutable="false"` (`wire-transfer-review-BROKEN.bpmn`) |
 
-The hidden button on a global failure is itself the demonstrated behaviour: an unattributable
-failure must not point the user at a task that has nothing wrong with it.
+On global failures, the "Go to error" button remains hidden because the issue cannot be localized to a single element.

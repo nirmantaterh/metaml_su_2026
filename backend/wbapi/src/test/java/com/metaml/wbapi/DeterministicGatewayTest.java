@@ -18,13 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Gateway decisions are driven by
- * explicit process variables — not by Math.random(), Boolean.TRUE, or any other
- * fabricated state. Each test deploys a minimal BPMN fixture directly to the embedded
- * Camunda engine and verifies that the gateway evaluates correctly for explicit inputs.
- *
- * These tests operate at the Camunda engine level (not the WorkbenchService level)
- * to isolate the gateway evaluation behavior from the twin/bridge machinery.
+ * Verifies deterministic Camunda gateway evaluation for explicit process variable values.
  */
 @IsolatedWorkbenchTest
 @TestPropertySource(properties = {
@@ -42,8 +36,6 @@ class DeterministicGatewayTest {
     private RepositoryService repositoryService;
     @Autowired
     private HistoryService historyService;
-
-    // ─── Boolean gateway: ${approved} ───────────────────────────────────
 
     private static final String BOOLEAN_GATEWAY_BPMN = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -87,13 +79,11 @@ class DeterministicGatewayTest {
     @Test
     void missingBooleanVariableFailsExplicitly() {
         deploy("boolean-gateway-missing.bpmn", BOOLEAN_GATEWAY_BPMN);
-        // No 'approved' variable → PropertyNotFoundException from JUEL
+        // No 'approved' variable -> PropertyNotFoundException from JUEL
         assertThatThrownBy(() ->
                 runtimeService.startProcessInstanceByKey("BooleanGatewayProcess", Map.of()))
                 .hasMessageContaining("approved");
     }
-
-    // ─── String gateway: ${riskLevel == "HIGH"} ─────────────────────────
 
     private static final String STRING_GATEWAY_BPMN = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -134,8 +124,6 @@ class DeterministicGatewayTest {
         assertProcessEndedAt(pi, "End_Normal");
     }
 
-    // ─── Numeric gateway: ${score >= 0.8} ───────────────────────────────
-
     private static final String NUMERIC_GATEWAY_BPMN = """
             <?xml version="1.0" encoding="UTF-8"?>
             <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -174,8 +162,6 @@ class DeterministicGatewayTest {
                 "NumericGatewayProcess", Map.of("score", 0.5));
         assertProcessEndedAt(pi, "End_Below");
     }
-
-    // ─── Complex getter: ${execution.getVariable('flag') == true} ───────
 
     private static final String GETTER_GATEWAY_BPMN = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -219,18 +205,15 @@ class DeterministicGatewayTest {
     @Test
     void getterExpressionNullSafeTakesDefaultBranch() {
         deploy("getter-gateway-null.bpmn", GETTER_GATEWAY_BPMN);
-        // No agentFlaggedRisk set → execution.getVariable returns null → != true → default
+        // Unset variable evaluates to null in JUEL getter expressions
         ProcessInstance pi = runtimeService.startProcessInstanceByKey(
                 "GetterGatewayProcess", Map.of());
         assertProcessEndedAt(pi, "End_NotFlagged");
     }
 
-    // ─── Determinism proof ──────────────────────────────────────────────
-
     @Test
     void repeatedExecutionsWithSameInputProduceSameResult() {
-        deploy("determinism-proof.bpmn", BOOLEAN_GATEWAY_BPMN);
-        // Run 20 times — if Math.random() were in play, some would take different branches
+        deploy("deterministic-gateway.bpmn", BOOLEAN_GATEWAY_BPMN);
         for (int i = 0; i < 20; i++) {
             ProcessInstance pi = runtimeService.startProcessInstanceByKey(
                     "BooleanGatewayProcess", Map.of("approved", true));
@@ -242,13 +225,6 @@ class DeterministicGatewayTest {
             assertProcessEndedAt(pi, "End_Default");
         }
     }
-
-    // ─── Section 14: Executor → Gateway integration ─────────────────────
-    // Proves: service task sets process variable → gateway reads it → correct branch.
-    // This is the production path: ComponentExecutor returns output in AutomationResult →
-    // TwinAutomationDelegate calls execution.setVariable() → gateway evaluates.
-    // The BPMN uses camunda:expression to set the variable directly (same Camunda API
-    // as TwinAutomationDelegate.propagateExecutorOutputsAsGatewayVariables uses).
 
     private static final String EXECUTOR_GATEWAY_BPMN = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -282,7 +258,6 @@ class DeterministicGatewayTest {
     @Test
     void executorOutputTruePropagatesToGatewayAndTakesApprovedBranch() {
         deploy("executor-gateway-true.bpmn", EXECUTOR_GATEWAY_BPMN);
-        // executorOutput=true simulates ComponentExecutor returning approved=true in AutomationResult
         ProcessInstance pi = runtimeService.startProcessInstanceByKey(
                 "ExecutorGatewayProcess", Map.of("executorOutput", true));
         assertProcessEndedAt(pi, "End_Approved");
@@ -295,11 +270,6 @@ class DeterministicGatewayTest {
                 "ExecutorGatewayProcess", Map.of("executorOutput", false));
         assertProcessEndedAt(pi, "End_Default");
     }
-
-    // ─── Section 15: Explicit simulation boundary ───────────────────────
-    // Proves: _simulationGatewayValues map → service task reads it → sets gateway var
-    // → gateway evaluates → correct branch. The simulation source is observable and
-    // deterministic — tests supply explicit values, not randomness.
 
     private static final String SIMULATION_GATEWAY_BPMN = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -334,8 +304,6 @@ class DeterministicGatewayTest {
     @Test
     void simulationTrueValueDrivesGatewayToApprovedBranch() {
         deploy("simulation-gateway-true.bpmn", SIMULATION_GATEWAY_BPMN);
-        // _simulationGatewayValues is the explicit simulation boundary —
-        // same constant as AgentVariables.SIMULATION_GATEWAY_VALUES
         Map<String, Object> simValues = new java.util.HashMap<>();
         simValues.put("approved", true);
         ProcessInstance pi = runtimeService.startProcessInstanceByKey(
@@ -354,11 +322,6 @@ class DeterministicGatewayTest {
                 Map.of("_simulationGatewayValues", simValues));
         assertProcessEndedAt(pi, "End_Default");
     }
-
-    // Stale simulation state────
-    // Proves: on retry after failure, the gateway uses the LATEST variable value,
-    // not a stale value from a previous attempt. This is the core safety property
-    // of the simulation path's separate-transaction design.
 
     private static final String RECEIVE_GATEWAY_BPMN = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -391,17 +354,12 @@ class DeterministicGatewayTest {
 
     @Test
     void overwrittenSimulationValueIsUsedByGatewayNotStaleValue() {
-        // Simulates: simulation sets approved=true, correlation fails, retry sets approved=false
         deploy("stale-sim.bpmn", RECEIVE_GATEWAY_BPMN);
         ProcessInstance pi = runtimeService.startProcessInstanceByKey("ReceiveGatewayProcess");
 
-        // Step 1: set approved=true (simulating first attempt's simulation value)
         runtimeService.setVariable(pi.getId(), "approved", true);
-
-        // Step 2: overwrite with approved=false (simulating retry with corrected value)
         runtimeService.setVariable(pi.getId(), "approved", false);
 
-        // Step 3: correlate — gateway should see false (latest), not true (stale)
         runtimeService.createMessageCorrelation("msg_proceed")
                 .processInstanceId(pi.getId())
                 .correlate();
@@ -411,17 +369,12 @@ class DeterministicGatewayTest {
 
     @Test
     void simulationValueRemovedBeforeRetryLeavesVariableAbsent() {
-        // Simulates: simulation sets approved=true, then value is removed before retry
         deploy("stale-removed.bpmn", RECEIVE_GATEWAY_BPMN);
         ProcessInstance pi = runtimeService.startProcessInstanceByKey("ReceiveGatewayProcess");
 
-        // Step 1: set approved=true (first attempt)
         runtimeService.setVariable(pi.getId(), "approved", true);
-
-        // Step 2: remove the variable (simulating retry without simulation value)
         runtimeService.removeVariable(pi.getId(), "approved");
 
-        // Step 3: correlate — gateway must fail explicitly (no variable)
         assertThatThrownBy(() ->
                 runtimeService.createMessageCorrelation("msg_proceed")
                         .processInstanceId(pi.getId())
@@ -429,19 +382,12 @@ class DeterministicGatewayTest {
                 .hasMessageContaining("approved");
     }
 
-    // Production/simulation separation
-    // Proves: _simulationGatewayValues is NOT used as a silent fallback for
-    // missing production state. Missing production variables fail explicitly.
-
     @Test
     void simulationMapExistsButGatewayStillFailsWhenVariableNotSetDirectly() {
-        // Even though _simulationGatewayValues exists on the process, the gateway
-        // reads bare ${approved} which must be an actual process variable.
-        // The simulation map is NOT automatically read by Camunda's EL engine.
+        // Camunda EL resolves variables from execution scope, not nested map entries.
         deploy("sim-no-fallback.bpmn", BOOLEAN_GATEWAY_BPMN);
         Map<String, Object> simValues = new java.util.HashMap<>();
         simValues.put("approved", true);
-        // Pass _simulationGatewayValues but NOT approved as a process variable
         assertThatThrownBy(() ->
                 runtimeService.startProcessInstanceByKey("BooleanGatewayProcess",
                         Map.of("_simulationGatewayValues", (Object) simValues)))
@@ -450,26 +396,18 @@ class DeterministicGatewayTest {
 
     @Test
     void productionValuePreservedOverSimulationValue() {
-        // If a production executor already set approved=false, the simulation value
-        // approved=true in _simulationGatewayValues must NOT override it.
-        // This tests the advanceTwinActivity() idempotency pattern (line 1415-1419).
+        // Existing execution variables take precedence over simulation defaults.
         deploy("prod-over-sim.bpmn", RECEIVE_GATEWAY_BPMN);
         ProcessInstance pi = runtimeService.startProcessInstanceByKey("ReceiveGatewayProcess");
 
-        // Production executor set approved=false
         runtimeService.setVariable(pi.getId(), "approved", false);
 
-        // Simulation map says approved=true — but production value must win
-        // (In advanceTwinActivity, the existing != null check preserves it)
-        // At the Camunda level, we verify the gateway sees false.
         runtimeService.createMessageCorrelation("msg_proceed")
                 .processInstanceId(pi.getId())
                 .correlate();
 
         assertProcessEndedAt(pi, "End_Default");
     }
-
-    // ─── Helpers ────────────────────────────────────────────────────────
 
     private void deploy(String resourceName, String bpmn) {
         repositoryService.createDeployment()

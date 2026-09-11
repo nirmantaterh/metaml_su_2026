@@ -11,11 +11,7 @@
       <bpmn2:outgoing>Flow_1</bpmn2:outgoing>
     </bpmn2:startEvent>
 
-    <!-- Each serviceTask below carries camunda:delegateExpression directly on the element -
-         this is exactly what TargetPlatformSourceGenerator scans for when it walks the BPMN
-         (see backend/workbench/src/main/java/com/metaml/workbench/codegen/TargetPlatformSourceGenerator.java).
-         A serviceTask with no delegateExpression/class (or one using camunda:type="external")
-         is invisible to that generator and produces no delegate .java file. -->
+        <!-- Multi-instance task iterating over orderItems to reserve inventory per item. -->
     <bpmn2:serviceTask id="ValidateOrder" name="Validate Order" camunda:delegateExpression="${validateOrder}">
       <bpmn2:incoming>Flow_1</bpmn2:incoming>
       <bpmn2:outgoing>Flow_2</bpmn2:outgoing>

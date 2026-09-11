@@ -24,16 +24,7 @@ import com.metaml.workbench.bpmn.TwinModelGenerator;
 import com.metaml.workbench.codegen.DelegateClassGenerator;
 import com.metaml.workbench.codegen.ExternalTaskWorkerGenerator;
 
-// Acceptance test for camunda:taskListener support in the RedCollarTP Target Platform
-// pipeline (TargetPlatformSourceGenerator.scanTaskListeners). The professor-supplied RedCollar
-// BPMNs contain no User Task, so this deliberately builds its own minimal fixture (Start -> User
-// Task with a "create" Task Listener -> End) rather than modifying those files - the "create" event
-// fires the instant the process instance reaches the user task, with no human task-completion step
-// needed, which keeps this deterministic without a REST call into Camunda's task API.
-//
-// Generates a REAL Target Platform from the REAL RedCollarTP template (not a fake), builds and
-// launches it for real, and proves - from the generated app's own log output, not a mock - that
-// Camunda actually invoked the generated TaskListener bean, not merely that a .java file exists.
+// Verifies generated TaskListener beans are invoked when Camunda reaches the user task.
 @Tag("slow")
 class TaskListenerTargetPlatformEndToEndTest {
 
@@ -103,11 +94,26 @@ class TaskListenerTargetPlatformEndToEndTest {
         Path twinListener = tpRoot.resolve("twin/listeners/OrderApprovalListenerTwin.java");
         assertThat(proxyListener).exists();
         assertThat(twinListener).exists();
+
+        // The Original keeps its human task, so its listener is still a TaskListener.
         String proxySource = Files.readString(proxyListener);
         assertThat(proxySource).contains("implements TaskListener").contains("@Component(\"orderApprovalListener\")");
+
+        // The Twin does not: a mirrored userTask is a wait state with no engine-side actor, so the
+        // mirror automates it into a serviceTask. A camunda:taskListener cannot fire on one, so the
+        // listener the model declared is carried over as an ExecutionListener rather than dropped -
+        // same bean name, same generated file, the only interface a serviceTask can actually invoke.
         String twinSource = Files.readString(twinListener);
-        assertThat(twinSource).contains("implements TaskListener")
+        assertThat(twinSource).contains("implements ExecutionListener")
                 .contains("@Component(\"orderApprovalListenerTwin\")");
+
+        Path processes = project.directory().resolve("src/main/resources/processes");
+        String proxyBpmn = Files.readString(processes.resolve("TaskListenerDemo.bpmn"));
+        String twinBpmn = Files.readString(processes.resolve("TaskListenerDemo_twin.bpmn"));
+        assertThat(proxyBpmn).as("the Original process is never rewritten").contains("userTask");
+        assertThat(twinBpmn).as("no Twin activity may be a human task").doesNotContain("userTask");
+        // and the automated Twin activity got a delegate of its own to execute and observe
+        assertThat(tpRoot.resolve("twin/delegates/ApproveOrder.java")).exists();
 
         SpringBootProjectLauncher launcher = new SpringBootProjectLauncher();
         try {
@@ -140,16 +146,33 @@ class TaskListenerTargetPlatformEndToEndTest {
             assertThat(twinStart.statusCode()).as("twin start failed: %s", twinStart.body()).isEqualTo(200);
 
             // The "create" event fires the instant Camunda reaches the user task - no task
-            // completion call needed - so both beans' log markers are the direct, deterministic
-            // proof that Camunda invoked the generated TaskListener (not just that it compiled).
+            // completion call needed - so both beans' log markers confirm that Camunda
+            // invoked the generated TaskListener (not just that it compiled).
             String proxyLog = awaitLogContaining(project.directory(),
-                    "PROXY (TASK LISTENER) - orderApprovalListener ---- Spring Bean invoked", Duration.ofSeconds(30));
-            assertThat(proxyLog).contains("orderApprovalListener");
+                    "PROXY (TASK LISTENER) INVOKED", Duration.ofSeconds(30));
+            assertThat(proxyLog)
+                    .contains("bean=orderApprovalListener")
+                    // the generic runtime context the Target Platform's own log has to carry
+                    .contains("processInstanceId=")
+                    .contains("activityId=ApproveOrder");
 
+            // start, not create: the Twin activity is a serviceTask now, so the listener fires on the
+            // execution lifecycle rather than on a task that no longer exists.
             String twinLog = awaitLogContaining(project.directory(),
-                    "TWIN (TASK LISTENER) - orderApprovalListenerTwin ---- Spring Bean invoked",
-                    Duration.ofSeconds(30));
-            assertThat(twinLog).contains("orderApprovalListenerTwin");
+                    "TWIN (LISTENER) INVOKED", Duration.ofSeconds(30));
+            assertThat(twinLog)
+                    .contains("bean=orderApprovalListenerTwin")
+                    .contains("processInstanceId=");
+            // the automated Twin activity really executed its own generated delegate
+            assertThat(awaitLogContaining(project.directory(), "TWIN DELEGATE INVOKED", Duration.ofSeconds(30)))
+                    .contains("activityId=ApproveOrder");
+
+            // and the capability runtime came up inside the generated application itself, with the
+            // provider implementations actually discovered - not merely present on the classpath
+            assertThat(awaitLogContaining(project.directory(), "CAPABILITY RUNTIME READY",
+                    Duration.ofSeconds(30)))
+                    .contains("credit-risk-assessor")
+                    .contains("validator");
         } finally {
             launcher.stop(project.projectId());
         }

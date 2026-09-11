@@ -22,12 +22,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-// BPMN variant coverage
-// Verifies:
-// 1. Non-interrupting Event SubProcess (isInterrupting="false")
-// 2. Link Events (intermediate throw/catch link pairs)
-// 3. Multiple Catch Events (message + signal definitions)
-// 4. Non-interrupting Boundary Events (cancelActivity="false")
+// Verifies BPMN variant execution across non-interrupting event subprocesses,
+// link events, multiple catch events, and non-interrupting boundary events.
 class BpmnVariantCoverageTest {
 
     private final TwinModelGenerator generator = new TwinModelGenerator();
@@ -40,7 +36,7 @@ class BpmnVariantCoverageTest {
     void setUp() {
         ProcessEngineConfiguration config = ProcessEngineConfiguration
                 .createStandaloneInMemProcessEngineConfiguration();
-        config.setJdbcUrl("jdbc:h2:mem:phase15-" + java.util.UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+        config.setJdbcUrl("jdbc:h2:mem:bpmn-variant-" + java.util.UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
         config.setJdbcDriver("org.h2.Driver");
         config.setJdbcUsername("sa");
         config.setJdbcPassword("");

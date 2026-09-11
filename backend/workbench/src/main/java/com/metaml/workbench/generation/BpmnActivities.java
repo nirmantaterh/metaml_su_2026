@@ -9,13 +9,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-// Which activities the generated app needs a completion endpoint for.
-// Eligibility is about execution semantics, not element type: an activity qualifies when the engine
-// parks the token there and will never move it on its own. So a serviceTask with
-// camunda:type="external" is eligible while one with a delegateExpression is not - same element
-// type, opposite answers.
-// Deliberately not merged with DelegateClassGenerator's traversal: that one dedupes by
-// delegateExpression, while two activities sharing an expression still need two endpoints.
+// Identifies activities requiring completion endpoints based on wait-state execution semantics
+// (e.g. user tasks, receive tasks, and external tasks where the engine parks execution).
 public final class BpmnActivities {
 
     private static final String CAMUNDA_NS = "http://camunda.org/schema/1.0/bpmn";
@@ -32,14 +27,14 @@ public final class BpmnActivities {
         EXTERNAL_TASK
     }
 
-    // id is the BPMN element id and the only identity that actually wires anything up - it is what Camunda stores as a task's taskDefinitionKey, which is in turn what MetaML's own governance and twin bookkeeping already use as activityId (see AgentExecutionDelegate). endpointSlug is presentation only: it makes the URL readable, and it is never what the generated handler dispatches on.
+    // Activity metadata linking BPMN element id to its generated endpoint slug and trigger type.
     public record Activity(String id, String name, String endpointSlug, String methodSuffix, Trigger trigger) {
     }
 
     private BpmnActivities() {
     }
 
-    // Queried through the BPMN supertype rather than a list of concrete task types, so a model using an element nobody here thought to enumerate still gets classified by the same rule instead of silently vanishing. Document order, matching DelegateClassGenerator's own convention - the same BPMN has to produce the same endpoints in the same order every run.
+    // Queries BPMN Activity supertype to discover eligible wait-state tasks in document order.
     public static List<Activity> eligible(BpmnModelInstance model) {
         List<Activity> activities = new ArrayList<>();
         Set<String> usedSlugs = new LinkedHashSet<>();
@@ -56,11 +51,7 @@ public final class BpmnActivities {
         return activities;
     }
 
-    // Null means the engine handles this one and an endpoint would be a lie.
-    // camunda:type is read as a raw namespaced attribute rather than through getCamundaType(), because the
-    // external implementation is equally legal on a sendTask or businessRuleTask - the typed getter would
-    // mean re-listing exactly the element types this avoids depending on.
-    // Checked first because "external" overrides whatever the element would otherwise do.
+        // External task wait state; completion endpoint allows driving task without external workers.
     private static Trigger triggerFor(org.camunda.bpm.model.bpmn.instance.Activity element) {
         if (EXTERNAL_IMPLEMENTATION.equals(element.getAttributeValueNs(CAMUNDA_NS, "type"))) {
             return Trigger.EXTERNAL_TASK;
@@ -71,11 +62,11 @@ public final class BpmnActivities {
         if (element instanceof ReceiveTask) {
             return Trigger.RECEIVE_TASK;
         }
-        // Everything else runs the moment the token arrives - a serviceTask with a delegateExpression, a scriptTask, a businessRuleTask - or is a pass-through the engine walks straight through (manualTask, a bare task). A sub-process or call activity is a container: the token stops inside it, at whichever child activity is itself a wait state, and that child gets its own endpoint on its own merits.
+        // Non-waiting activities (e.g. inline scripts, delegates, gateways) do not require advance triggers.
         return null;
     }
 
-    // The display name is what a person recognises in the URL, so it wins when it survives slugification. It is free text from the modeler though - it can be blank, it can be pure punctuation, and this repo's own models already carry one with an embedded newline - so the element id (guaranteed present and unique) is the fallback, and a fixed literal backstops even that in case an id somehow slugifies to nothing.
+    // Generates URL slug preferring task display name, falling back to BPMN element ID.
     private static String preferredSlug(String name, String id) {
         String fromName = slugify(name);
         if (!fromName.isEmpty()) {
@@ -85,10 +76,7 @@ public final class BpmnActivities {
         return fromId.isEmpty() ? "activity" : fromId;
     }
 
-    // ASCII letters and digits only. Character.toLowerCase(char), not String.toLowerCase(), which is
-    // locale-sensitive and would produce a different URL under a Turkish default locale.
-    // Non-ASCII letters are dropped rather than transliterated - the id fallback above covers a name that
-    // disappears entirely.
+    // Discovers eligible wait-state activities (user, receive, external tasks) in document order.
     private static String slugify(String raw) {
         if (raw == null) {
             return "";

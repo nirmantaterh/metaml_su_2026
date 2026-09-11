@@ -21,7 +21,7 @@ public class TaskQueueListener {
         this.runtimeService = runtimeService;
     }
 
-    // Reliability hardening (Pass 1): a malformed payload used to be logged and silently dropped (acked as if processed). It now throws instead, so spring.rabbitmq.listener.simple.retry.* retries it (pointlessly, since a malformed payload never becomes valid, but consistently with every other failure path below) and then dead-letters it to RabbitMqConfig.DLQ_TASKS_QUEUE once retries are exhausted - observable there and in this log line, rather than disappearing.
+    // A malformed payload throws an exception to trigger configured listener retries and dead-letter routing to DLQ_TASKS_QUEUE.
     @RabbitListener(queues = { "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.sampling-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.laying-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.marking-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.cutting-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.stitching-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.checking-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.pressing-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.packaging-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.shipping-signal" })
     public void onTaskMessage(String payload) {
         String[] parts = payload.split("\\|", -1);
@@ -41,7 +41,7 @@ public class TaskQueueListener {
                     + "businessKey={}) via RabbitMQ", signalName, executionId,
                     processInstanceId, businessKey);
         } catch (ProcessEngineException e) {
-            // Reliability hardening (Pass 1): distinguishes the expected, harmless cases - this execution already advanced past signalName (still active, but subscribed to something else now: "has not subscribed") or has completed/gone entirely (execution id no longer exists at all: "cannot find execution") - a genuine redelivery of an already-consumed message, or a rework-loop revisit, either way - from every other Camunda failure, which must NOT be swallowed the same way. Camunda has no single dedicated exception subtype covering both; message text is the only signal for either, same as the pre-hardening code relied on implicitly via a blanket catch.
+            // Distinguishes expected advancement states (execution already advanced or already completed) from unexpected engine failures, which are rethrown for retry handling.
             if (isAlreadyAdvanced(e)) {
                 logger.info("TASK: signal '{}' delivery to execution {} skipped - "
                         + "already advanced past this signal (processInstanceId={}, "

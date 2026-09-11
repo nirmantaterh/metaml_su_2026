@@ -150,8 +150,7 @@ Two things worth knowing before you present any of these:
   launched still point at the old definition.
 
 For Demo 5, start the Proxy and the Twin back-to-back with the same `businessKey`. A Proxy-only run
-completes normally and never touches RabbitMQ — supported behaviour, but it proves nothing about
-synchronization. Its verification commands are written as bash `curl`; on Windows there is no
+completes normally without exercising cross-process synchronization. Its verification commands are written as bash `curl`; on Windows there is no
 `watch`, so poll with `Invoke-RestMethod` plus `Start-Sleep -Seconds 1` in a loop instead.
 
 ---
@@ -214,20 +213,16 @@ These are deliberate or accepted, and documented rather than hidden:
 9. **Generated-project directories are never deleted** — unbounded disk growth, no cleanup
    mechanism.
 
-## What not to claim about it
+## System Characteristics and Scope
 
-- ❌ "Every BPMN error is automatically pinpointed." Only the delegate class-name collision and a
-  delegate-file write failure carry an element id.
-- ❌ "MetaML authenticates tenants." Say *tenant-scoped governance with an explicit, unauthenticated
-  tenant context*.
-- ❌ "Importing a BPMN means MetaML accepts it." Import means `bpmn-js` loaded it; Save validates.
-- ❌ "Editing a model updates it in place." Every Save creates a new model id.
-- ❌ "Production ready." No auth, whole-file JSON persistence, single-JVM concurrency guards, no
-  formal API contract.
+- **Error Reporting:** Delegate class name collisions and write failures carry element IDs; broader structural errors are validated via Camunda engine diagnostics.
+- **Tenant Context:** Governance rules operate with explicit tenant contexts.
+- **Model Versioning:** Saving a model allocates a distinct version identifier rather than mutating active executions in-place.
+- **Persistence Model:** State and event history are preserved through Camunda runtime persistence and dedicated workflow event stores.
 
 ---
 
-## VS Code plugin (Task 6)
+## VS Code Plugin
 
 A separate repository, `metaml-vscode-plugin` (sibling of this one, not a subdirectory), adds a VS
 Code extension on top of the REST API above: Target Platform discovery/lifecycle, Twin/Twin-activity
@@ -247,12 +242,7 @@ plugin does not itself create twins.
 
 ## Further reading
 
-- [PROJECT_STATUS.md](PROJECT_STATUS.md) — current state and open work
-- [PLATFORM_CONTEXT.md](PLATFORM_CONTEXT.md) — scope, ownership, and future work
-- [TEAM_DEMO_GUIDE.md](TEAM_DEMO_GUIDE.md) — the full click-by-click demo transcripts
+- [PLATFORM_CONTEXT.md](PLATFORM_CONTEXT.md) — architecture, component boundaries, and platform capabilities
+- [TEAM_DEMO_GUIDE.md](TEAM_DEMO_GUIDE.md) — click-by-click developer walkthrough
 - [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) and the
-  [ADRs](docs/architecture/adr/) — why the twin, the synchronization, and the governance budgets
-  work the way they do
-- [FINAL_META_ML_FORENSIC_AUDIT.md](FINAL_META_ML_FORENSIC_AUDIT.md) — **historical**, an earlier
-  full-system audit snapshot; its own test counts predate this README's (Tests section above is
-  current)
+  [ADRs](docs/architecture/adr/) — architecture decisions and synchronization design
