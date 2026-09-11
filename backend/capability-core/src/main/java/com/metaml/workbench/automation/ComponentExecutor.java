@@ -19,6 +19,15 @@ public interface ComponentExecutor {
         return Set.of();
     }
 
+    /**
+     * Output names this executor can produce.  The declaration is intentionally conservative: an
+     * empty set means the standalone runtime must not auto-bind this executor for a gateway-backed
+     * activity.  It is metadata for safe selection, not permission to fabricate output values.
+     */
+    default Set<String> providedOutputNames() {
+        return Set.of();
+    }
+
     /** Evaluates case-insensitive exact equality against handled types/names; fuzzy matching is prohibited. */
     default boolean handles(String agentTypeOrName) {
         if (agentTypeOrName == null || agentTypeOrName.isBlank()) {

@@ -26,6 +26,11 @@ import org.w3c.dom.NodeList;
 @Component
 public class TargetPlatformSourceGenerator {
     private static final String CAMUNDA_NS = "http://camunda.org/schema/1.0/bpmn";
+    private static final String BPMNDI_NS = "http://www.omg.org/spec/BPMN/20100524/DI";
+    private static final String DI_NS = "http://www.omg.org/spec/DD/20100524/DI";
+    private static final String DC_NS = "http://www.omg.org/spec/DD/20100524/DC";
+    private static final double SYNC_EVENT_SIZE = 36d;
+    private static final double SYNC_EVENT_GAP = 28d;
     static final String SYNC_SIGNAL_PREFIX = "sync_";
 
     // The exact set TargetPlatformTwinMirrorGenerator turns into an executable Twin serviceTask. On the
@@ -197,6 +202,7 @@ public class TargetPlatformSourceGenerator {
 
             process.appendChild(catchEvent);
             process.appendChild(bridgeFlow);
+            addProxySyncDiagramElements(document, catchEventId, newFlowId, outgoingFlows);
 
             // Signal declaration on the definitions element - must appear BEFORE BPMNDiagram per XSD
             Element signal = document.createElementNS(bpmnNs, qname(prefix, "signal"));
@@ -349,6 +355,7 @@ public class TargetPlatformSourceGenerator {
 
             process.appendChild(catchEvent);
             process.appendChild(bridgeFlow);
+            addTwinSyncDiagramElements(document, catchEventId, bridgeFlowId, incomingFlows);
 
             Element signal = document.createElementNS(bpmnNs, qname(prefix, "signal"));
             signal.setAttribute("id", signalId);
@@ -403,6 +410,148 @@ public class TargetPlatformSourceGenerator {
     }
 
     // ── DOM helpers ────────────────────────────────────────────────────────────
+
+    // The sync insertion changes a direct activity-to-activity flow into two flows with an
+    // intermediate catch event. Preserve a complete BPMN DI graph at the same time so bpmn-js can
+    // render the generated execution model instead of showing disconnected business activities.
+    private static void addProxySyncDiagramElements(Document document, String catchEventId,
+            String bridgeFlowId, List<Element> outgoingFlows) {
+        List<Element> diagramEdges = diagramEdgesFor(document, outgoingFlows);
+        if (diagramEdges.isEmpty()) return;
+
+        Point source = average(diagramEdges, true);
+        Point target = average(diagramEdges, false);
+        Point direction = direction(source, target);
+        Point center = move(source, direction, SYNC_EVENT_GAP + SYNC_EVENT_SIZE / 2d);
+        Element plane = (Element) diagramEdges.get(0).getParentNode();
+        appendSyncEventShape(document, plane, catchEventId, center);
+
+        for (Element edge : diagramEdges) {
+            Point edgeTarget = edgePoint(edge, false);
+            setEdgePoint(edge, true, boundary(center, direction(center, edgeTarget), true));
+        }
+        appendEdge(document, plane, bridgeFlowId, source, boundary(center, direction, false));
+    }
+
+    private static void addTwinSyncDiagramElements(Document document, String catchEventId,
+            String bridgeFlowId, List<Element> incomingFlows) {
+        List<Element> diagramEdges = diagramEdgesFor(document, incomingFlows);
+        if (diagramEdges.isEmpty()) return;
+
+        Point source = average(diagramEdges, true);
+        Point target = average(diagramEdges, false);
+        Point direction = direction(source, target);
+        Point center = move(target, direction, -(SYNC_EVENT_GAP + SYNC_EVENT_SIZE / 2d));
+        Element plane = (Element) diagramEdges.get(0).getParentNode();
+        appendSyncEventShape(document, plane, catchEventId, center);
+
+        for (Element edge : diagramEdges) {
+            Point edgeSource = edgePoint(edge, true);
+            setEdgePoint(edge, false, boundary(center, direction(edgeSource, center), false));
+        }
+        appendEdge(document, plane, bridgeFlowId, boundary(center, direction, true), target);
+    }
+
+    private static List<Element> diagramEdgesFor(Document document, List<Element> flows) {
+        List<Element> result = new ArrayList<>();
+        for (Element flow : flows) {
+            Element edge = findDiagramEdge(document, flow.getAttribute("id"));
+            if (edge != null && waypointCount(edge) >= 2) result.add(edge);
+        }
+        return result;
+    }
+
+    private static Element findDiagramEdge(Document document, String flowId) {
+        NodeList edges = document.getElementsByTagNameNS(BPMNDI_NS, "BPMNEdge");
+        for (int i = 0; i < edges.getLength(); i++) {
+            Element edge = (Element) edges.item(i);
+            if (flowId.equals(edge.getAttribute("bpmnElement"))) return edge;
+        }
+        return null;
+    }
+
+    private static int waypointCount(Element edge) {
+        return edge.getElementsByTagNameNS(DI_NS, "waypoint").getLength();
+    }
+
+    private static Point average(List<Element> edges, boolean first) {
+        double x = 0d;
+        double y = 0d;
+        for (Element edge : edges) {
+            Point point = edgePoint(edge, first);
+            x += point.x;
+            y += point.y;
+        }
+        return new Point(x / edges.size(), y / edges.size());
+    }
+
+    private static Point edgePoint(Element edge, boolean first) {
+        NodeList waypoints = edge.getElementsByTagNameNS(DI_NS, "waypoint");
+        Element waypoint = (Element) waypoints.item(first ? 0 : waypoints.getLength() - 1);
+        return new Point(Double.parseDouble(waypoint.getAttribute("x")),
+                Double.parseDouble(waypoint.getAttribute("y")));
+    }
+
+    private static void setEdgePoint(Element edge, boolean first, Point point) {
+        NodeList waypoints = edge.getElementsByTagNameNS(DI_NS, "waypoint");
+        Element waypoint = (Element) waypoints.item(first ? 0 : waypoints.getLength() - 1);
+        waypoint.setAttribute("x", coordinate(point.x));
+        waypoint.setAttribute("y", coordinate(point.y));
+    }
+
+    private static Point direction(Point from, Point to) {
+        double dx = to.x - from.x;
+        double dy = to.y - from.y;
+        double length = Math.hypot(dx, dy);
+        return length == 0d ? new Point(1d, 0d) : new Point(dx / length, dy / length);
+    }
+
+    private static Point move(Point start, Point direction, double distance) {
+        return new Point(start.x + direction.x * distance, start.y + direction.y * distance);
+    }
+
+    private static Point boundary(Point center, Point direction, boolean outbound) {
+        double distance = outbound ? SYNC_EVENT_SIZE / 2d : -SYNC_EVENT_SIZE / 2d;
+        return move(center, direction, distance);
+    }
+
+    private static void appendSyncEventShape(Document document, Element plane, String catchEventId,
+            Point center) {
+        String diPrefix = plane.getPrefix() == null ? "bpmndi" : plane.getPrefix();
+        Element shape = document.createElementNS(BPMNDI_NS, qname(diPrefix, "BPMNShape"));
+        shape.setAttribute("id", uniqueId(document, "BPMNShape_" + catchEventId));
+        shape.setAttribute("bpmnElement", catchEventId);
+        Element bounds = document.createElementNS(DC_NS, "dc:Bounds");
+        bounds.setAttribute("x", coordinate(center.x - SYNC_EVENT_SIZE / 2d));
+        bounds.setAttribute("y", coordinate(center.y - SYNC_EVENT_SIZE / 2d));
+        bounds.setAttribute("width", coordinate(SYNC_EVENT_SIZE));
+        bounds.setAttribute("height", coordinate(SYNC_EVENT_SIZE));
+        shape.appendChild(bounds);
+        plane.appendChild(shape);
+    }
+
+    private static void appendEdge(Document document, Element plane, String flowId, Point start, Point end) {
+        String diPrefix = plane.getPrefix() == null ? "bpmndi" : plane.getPrefix();
+        Element edge = document.createElementNS(BPMNDI_NS, qname(diPrefix, "BPMNEdge"));
+        edge.setAttribute("id", uniqueId(document, "BPMNEdge_" + flowId));
+        edge.setAttribute("bpmnElement", flowId);
+        edge.appendChild(waypoint(document, start));
+        edge.appendChild(waypoint(document, end));
+        plane.appendChild(edge);
+    }
+
+    private static Element waypoint(Document document, Point point) {
+        Element waypoint = document.createElementNS(DI_NS, "di:waypoint");
+        waypoint.setAttribute("x", coordinate(point.x));
+        waypoint.setAttribute("y", coordinate(point.y));
+        return waypoint;
+    }
+
+    private static String coordinate(double value) {
+        return value == Math.rint(value) ? Long.toString(Math.round(value)) : Double.toString(value);
+    }
+
+    private record Point(double x, double y) { }
 
     // Inserts a child element into definitions BEFORE the first BPMNDiagram element (or any DI namespace element). BPMN 2.0 XSD requires rootElements (signal, message, process, etc.) before BPMNDiagram elements. Falls back to appendChild if no diagram is found.
     private static void insertBeforeDiagram(Element definitions, Element child) {

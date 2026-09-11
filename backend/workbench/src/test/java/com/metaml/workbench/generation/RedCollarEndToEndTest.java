@@ -50,7 +50,7 @@ class RedCollarEndToEndTest {
     }
 
     @Test
-    void redCollarProcessesCompileLaunchAndExecuteWithExternalTaskWorkersAndSignalSynchronization() throws Exception {
+    void redCollarProcessesCompileLaunchSynchronizeAndFailClosedForUnboundGatewayOutput() throws Exception {
         assumeFixturesPresent();
         assertThat(Files.isDirectory(REAL_TEMPLATE))
                 .as("templates/camundademo must exist at %s", REAL_TEMPLATE.toAbsolutePath())
@@ -174,27 +174,19 @@ class RedCollarEndToEndTest {
                     .as("agentInvocationId must be set as a process variable on the twin instance")
                     .contains("agentInvocationId");
 
-            // Gateway variables should have been set non-deterministically
-            String gatewayLog = awaitLogContaining(project.directory(),
-                    "Worker completion variables:", Duration.ofSeconds(30));
-            assertThat(gatewayLog).as("Gateway-preceding workers should log their variables")
-                    .contains("Worker completion variables:");
-
-            // Same causal check for the manufacturing side: orderApproved (or qualityPassed, whichever
-            // gateway-preceding worker fired first) must be a real variable on the real instance, read
-            // back immediately after the log confirms a gateway-preceding worker just ran.
-            String manufVariables = awaitVariableContaining(http, statusBase, manufInstanceId, "Approved",
-                    Duration.ofSeconds(20));
-            if (!manufVariables.contains("Approved")) {
-                // Checking (qualityPassed) may have completed before orderApproved was observed depending on signal timing;
-                // either gateway variable confirms runtime state propagation.
-                manufVariables = awaitVariableContaining(http, statusBase, manufInstanceId, "qualityPassed",
-                        Duration.ofSeconds(10));
-            }
-            assertThat(manufVariables)
-                    .as("a gateway variable (orderApproved or qualityPassed) must be a real process variable on "
-                            + "the manufacturing instance itself, not merely a value the worker logged")
-                    .containsAnyOf("orderApproved", "qualityPassed");
+            // Manuf-camunda.bpmn routes on orderApproved/qualityPassed but declares no legitimate
+            // producer for either. The generated worker must therefore surface a real, actionable
+            // failure rather than invent a gateway value just to continue this hand-authored fixture.
+            String gatewayBlocker = awaitLogContaining(project.directory(),
+                    "Gateway variable 'orderApproved' must be set by a legitimate producer", Duration.ofSeconds(30));
+            assertThat(gatewayBlocker).contains("bind a capability provider to this activity")
+                    .doesNotContain("Worker completion variables: {orderApproved=");
+            assertThat(awaitIncidentCount(http, statusBase, manufInstanceId, 1, Duration.ofSeconds(30)))
+                    .as("an unbound gateway output must become a visible Camunda incident").isTrue();
+            String manufStatus = fetchStatus(http, statusBase, manufInstanceId);
+            assertThat(manufStatus).as("the Main must remain blocked rather than fabricate a continuation")
+                    .contains("\"active\":true")
+                    .doesNotContain("orderApproved", "qualityPassed");
 
             // Signal broadcaster should have fired
             // (no explicit log for signal broadcast by design — verification is that processes
@@ -210,10 +202,13 @@ class RedCollarEndToEndTest {
         }
     }
 
-    // Verifies RedCollar Main-to-Twin signal handoff over an external RabbitMQ broker.
+    // Verifies that enabling a real RabbitMQ broker does not bypass an unbound gateway
+    // decision in this hand-authored fixture. Its Main reaches the Manuf-only orderVerifySignal
+    // before either process can rendezvous at a shared signal, so a TASK/RESPONSE message would
+    // be evidence of an incorrect cross-process handoff, not successful messaging.
     // Skips execution if no broker is reachable at localhost:15672.
     @Test
-    void realRedCollarMainAndTwinCommunicateOverARealRabbitMqBroker() throws Exception {
+    void realRabbitMqBrokerDoesNotBypassUnboundRedCollarGatewaySafety() throws Exception {
         assumeFixturesPresent();
         HttpClient rabbitAdmin = HttpClient.newHttpClient();
         if (!rabbitMqReachable(rabbitAdmin)) {
@@ -275,29 +270,6 @@ class RedCollarEndToEndTest {
             assertThat(twinStart.statusCode()).as("twin start failed: %s", twinStart.body()).isEqualTo(200);
             String twinInstanceId = extractProcessInstanceId(twinStart.body());
 
-            // Verify publishing to task and response queues over RabbitMQ exchange.
-            String publishLog = awaitLogContaining(project.directory(),
-                    "TASK: published activity", Duration.ofSeconds(90));
-            assertThat(publishLog)
-                    .as("Main->Twin TASK must be published to the real per-activity task queue")
-                    .contains("TASK: published activity")
-                    .contains("to RabbitMQ exchange");
-
-            String responseLog = awaitLogContaining(project.directory(),
-                    "RESPONSE: published activity", Duration.ofSeconds(90));
-            assertThat(responseLog)
-                    .as("Twin->Main RESPONSE must also be published to the real per-activity response queue")
-                    .contains("RESPONSE: published activity")
-                    .contains("to RabbitMQ exchange");
-
-            // Verify message consumption and signal delivery.
-            String consumeLog = awaitLogContaining(project.directory(),
-                    "delivered signal", Duration.ofSeconds(30));
-            assertThat(consumeLog)
-                    .as("SignalDeliveryListener must have consumed at least one message and delivered the "
-                            + "real Camunda signal because of it")
-                    .contains("via RabbitMQ");
-
             // Verify twin delegate executed simulated invocation.
             String twinLog = awaitLogContaining(project.directory(),
                     "[Twin] Invoking simulated ML agent", Duration.ofSeconds(30));
@@ -307,22 +279,25 @@ class RedCollarEndToEndTest {
             assertThat(twinVariables).as("Twin's simulated invocation must be a real process variable")
                     .contains("agentInvocationId");
 
-            // Verify Main process advanced past its RabbitMQ-mediated wait state.
-            boolean manufAdvanced = awaitInstanceInactive(http, statusBase, manufInstanceId, Duration.ofSeconds(120))
-                    || activityVisitCount(http, statusBase, manufInstanceId, "_FB42C5F3-6B4A-49A0-BCFD-BE2666946C16")
-                            >= 1;
-            assertThat(manufAdvanced).as("Main must have advanced past its request barrier").isTrue();
+            // Broker activation must not fabricate a value merely so the process can proceed. No
+            // shared Main<->Twin signal rendezvous is reachable before this fixture's unbound
+            // orderApproved decision, so there must be an incident rather than broker traffic.
+            assertThat(awaitIncidentCount(http, statusBase, manufInstanceId, 1, Duration.ofSeconds(60)))
+                    .as("unbound orderApproved must surface as a real Camunda incident with RabbitMQ enabled")
+                    .isTrue();
+            String manufStatus = fetchStatus(http, statusBase, manufInstanceId);
+            assertThat(manufStatus).as("the Main must remain active and must not contain a fabricated gateway output")
+                    .contains("\"active\":true")
+                    .doesNotContain("orderApproved", "qualityPassed");
 
-            // Query RabbitMQ management API to verify queue creation and message throughput.
+            // The enabled listener configuration must still declare this generated project's own
+            // queues. Their lack of traffic is correct: no genuine shared handoff was reached.
             String allQueuesJson = listRabbitQueues(rabbitAdmin);
             java.util.List<String> ownQueues = queueSegmentsMatchingPrefix(allQueuesJson, project.projectId());
             assertThat(ownQueues).as("broker must report this project's own task/response queues").isNotEmpty();
             long publishCount = ownQueues.stream().mapToLong(q -> extractLongField(q, "publish")).sum();
-            long deliverCount = ownQueues.stream().mapToLong(q -> extractLongField(q, "deliver_get")).sum();
-            assertThat(publishCount).as("aggregate broker-reported publish count across this project's queues")
-                    .isGreaterThan(0);
-            assertThat(deliverCount).as("aggregate broker-reported deliver count across this project's queues")
-                    .isGreaterThan(0);
+            assertThat(publishCount).as("no broker message may bypass the unbound gateway decision")
+                    .isZero();
         } finally {
             launcher.stop(project.projectId());
         }
@@ -396,15 +371,15 @@ class RedCollarEndToEndTest {
         return Long.parseLong(json.substring(start, end));
     }
 
-    // Validates that quality-rework loops fallback correctly when paired Twin is no longer co-waiting,
-    // ensuring all process instances reach completion without deadlocks.
+    // The hand-authored RedCollar fixture declares no producer for orderApproved or qualityPassed.
+    // Concurrent pairs must each fail closed at that unbound decision boundary; treating the block as
+    // a synchronization deadlock or fabricating a rework outcome would hide the missing capability.
     @Test
-    void reworkLoopOnQualityFailureFallsBackCorrectlyAndEveryPairStillCompletes() throws Exception {
+    void concurrentUnboundRedCollarPairsFailClosedInsteadOfFabricatingQualityRework() throws Exception {
         assumeFixturesPresent();
         assertThat(Files.isDirectory(REAL_TEMPLATE)).isTrue();
         String manufBpmnXml = Files.readString(REPO_ROOT.resolve("Manuf-camunda.bpmn"));
         String twinBpmnXml = Files.readString(REPO_ROOT.resolve("Twin-camunda.bpmn"));
-        String stitchingCatchActivityId = "_3B1579A6-631E-49C1-A21A-C40D5DE37836";
 
         Path outputDir = tempDir.resolve("generated-projects");
         SpringBootProjectGenerator generator = new SpringBootProjectGenerator(REAL_TEMPLATE.toString(),
@@ -448,29 +423,17 @@ class RedCollarEndToEndTest {
                 twinIds[i] = extractProcessInstanceId(twinStart.body());
             }
 
-            // Every pair must reach a terminal state - none deadlocked, whether or not it happened
-            // to take the rework path.
+            // Every Main must reach the same explicit incident rather than silently completing a
+            // branch or looking like a synchronization deadlock. The first unbound gateway is
+            // orderApproved, so qualityPassed/rework is intentionally unreachable in this fixture.
             for (int i = 0; i < pairCount; i++) {
-                assertThat(awaitInstanceInactive(http, statusBase, mainIds[i], Duration.ofSeconds(150)))
-                        .as("pair %d's Main must reach completion (no deadlock)", i).isTrue();
-                assertThat(awaitInstanceInactive(http, statusBase, twinIds[i], Duration.ofSeconds(30)))
-                        .as("pair %d's Twin must reach completion (no deadlock)", i).isTrue();
+                assertThat(awaitIncidentCount(http, statusBase, mainIds[i], 1, Duration.ofSeconds(60)))
+                        .as("pair %d's Main must show the unbound-gateway incident", i).isTrue();
+                String mainStatus = fetchStatus(http, statusBase, mainIds[i]);
+                assertThat(mainStatus).as("pair %d's Main must remain blocked, not fabricated-complete", i)
+                        .contains("\"active\":true")
+                        .doesNotContain("orderApproved", "qualityPassed");
             }
-
-            // Verify via HistoryService that rework path execution occurred across runs:
-            boolean anyPairReworked = false;
-            for (int i = 0; i < pairCount; i++) {
-                long visits = activityVisitCount(http, statusBase, mainIds[i], stitchingCatchActivityId);
-                assertThat(visits).as("pair %d must have visited the stitching barrier at least once", i)
-                        .isGreaterThanOrEqualTo(1);
-                if (visits >= 2) {
-                    anyPairReworked = true;
-                }
-            }
-            assertThat(anyPairReworked)
-                    .as("at least one of %d pairs should have taken the real quality-rework path "
-                            + "(P(none do) = 0.5^%d ≈ %.3f%%)", pairCount, pairCount, Math.pow(0.5, pairCount) * 100)
-                    .isTrue();
         } finally {
             launcher.stop(project.projectId());
         }
@@ -661,6 +624,21 @@ class RedCollarEndToEndTest {
         return http.send(HttpRequest.newBuilder(URI.create(statusBase + "/" + processInstanceId + "/status")).GET()
                         .build(), HttpResponse.BodyHandlers.ofString())
                 .body();
+    }
+
+    private static boolean awaitIncidentCount(HttpClient http, String statusBase, String processInstanceId,
+            long expected, Duration timeout) throws IOException, InterruptedException {
+        Instant deadline = Instant.now().plus(timeout);
+        while (Instant.now().isBefore(deadline)) {
+            String body = http.send(HttpRequest.newBuilder(
+                            URI.create(statusBase + "/" + processInstanceId + "/incidents/count")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString()).body();
+            if (extractLongField(body, "incidentCount") >= expected) {
+                return true;
+            }
+            Thread.sleep(300);
+        }
+        return false;
     }
 
         // Verifies signal broadcasting advances twin catch events in synchronization with proxy process.

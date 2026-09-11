@@ -20,6 +20,7 @@ import org.camunda.bpm.engine.task.Task;
 import org.camunda.bpm.model.bpmn.BpmnModelInstance;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -80,6 +81,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.net.URI;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -137,6 +139,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
     private final SpringBootProjectLauncher springBootProjectLauncher;
     // Authoritative tracker for Model -> Generate -> Launch workflow pipeline progression.
     private final WorkflowStateTracker workflowStateTracker;
+
+    // An enterprise deployment may point the Workbench at an externally managed Target Platform.
+    // When absent, generated projects retain their actual local launcher endpoint below.
+    @Value("${workbench.target-platform.runtime-url:}")
+    private String configuredTargetPlatformRuntimeUrl;
     // Optional by construction (MetaML Scope 6, Phase 5): field-injected rather than a constructor
     // parameter so every existing test that builds this class with `new WorkbenchServiceImpl(...)`
     // keeps compiling and running unchanged. CapabilityGapService itself depends on WorkbenchService
@@ -763,16 +770,18 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     ? Map.of("METAML_MESSAGING_ENABLED", "true")
                     : Map.of();
             LaunchedProject launched = springBootProjectLauncher.launch(project, extraEnv);
+            ProcessModel model = modelId != null ? processModels.get(modelId) : null;
+            String displayName = model != null ? model.getName() : project.displayName();
+            LaunchedProject result = withTargetPlatformUrl(launched, modelId,
+                    displayName != null ? displayName : launched.processKey());
             if (modelId != null) {
                 workflowStateTracker.record(modelId, WorkflowStage.LAUNCH, StageStatus.COMPLETED,
                         "port " + launched.port());
             }
-            ProcessModel model = modelId != null ? processModels.get(modelId) : null;
-            String displayName = model != null ? model.getName() : project.displayName();
-            return new LaunchedProject(launched.projectId(), launched.processKey(), launched.port(),
-                    launched.launchedAt(), modelId, displayName != null ? displayName : launched.processKey());
+            return result;
         } catch (RuntimeException e) {
-            if (modelId != null) {
+            if (modelId != null && workflowStateTracker.stateFor(modelId).stages()
+                    .get(WorkflowStage.LAUNCH).status() == StageStatus.IN_PROGRESS) {
                 workflowStateTracker.record(modelId, WorkflowStage.LAUNCH, StageStatus.FAILED, e.getMessage(),
                         launchErrorFrom(e, projectId));
             }
@@ -841,10 +850,33 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                     ProcessModel model = modelId != null ? processModels.get(modelId) : null;
                     GeneratedProject gp = generatedProjects.get(launched.projectId());
                     String displayName = model != null ? model.getName() : (gp != null ? gp.displayName() : launched.displayName());
-                    return new LaunchedProject(launched.projectId(), launched.processKey(), launched.port(),
-                            launched.launchedAt(), modelId, displayName != null ? displayName : launched.processKey());
+                    return withTargetPlatformUrl(launched, modelId,
+                            displayName != null ? displayName : launched.processKey());
                 })
                 .toList();
+    }
+
+    private LaunchedProject withTargetPlatformUrl(LaunchedProject launched, String modelId, String displayName) {
+        return new LaunchedProject(launched.projectId(), launched.processKey(), launched.port(), launched.launchedAt(),
+                modelId, displayName, resolveTargetPlatformUrl(configuredTargetPlatformRuntimeUrl, launched.port()));
+    }
+
+    static String resolveTargetPlatformUrl(String configuredUrl, int localPort) {
+        if (configuredUrl != null && !configuredUrl.isBlank()) {
+            String candidate = configuredUrl.trim();
+            try {
+                URI endpoint = URI.create(candidate);
+                String scheme = endpoint.getScheme();
+                if (("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
+                        && endpoint.getRawAuthority() != null) {
+                    return endpoint.toString();
+                }
+            } catch (IllegalArgumentException ignored) {
+                // Fall through to the known local runtime instead of returning an unusable link.
+            }
+            logger.warn("Ignoring invalid workbench.target-platform.runtime-url value");
+        }
+        return localPort > 0 ? "http://127.0.0.1:" + localPort : null;
     }
 
     @Override

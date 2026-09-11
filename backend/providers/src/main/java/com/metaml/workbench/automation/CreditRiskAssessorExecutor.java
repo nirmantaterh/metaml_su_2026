@@ -25,6 +25,8 @@ public class CreditRiskAssessorExecutor implements ComponentExecutor {
         return AGENT_TYPE;
     }
 
+    @Override public Set<String> providedOutputNames() { return Set.of("riskScore", "riskFlagged", "riskThreshold", "assessmentReason"); }
+
     @Override
     public Set<String> getHandledAgentNames() {
         return Set.of(AGENT_NAME, AGENT_NAME_STUB);

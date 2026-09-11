@@ -1,9 +1,23 @@
-// MetaML Target Platform portal. Every value rendered here comes from this same application's own
-// /api/portal endpoints, which read the embedded Camunda engine, this JVM's own log records, and (for
-// the RabbitMQ badge) an actual AMQP connection probe. There is no client-side state machine and no
-// timer-driven animation - state changes only because a poll returned a different answer.
+// MetaML Target Platform portal data is refreshed from this application's API.
 
 const REFRESH_MS = 2000;
+
+// Presets are portal-only demo choices. The API stores an arbitrary provider-identity -> FIFO
+// output-map configuration; it contains no RedCollar routing or activity knowledge.
+const SCENARIO_PRESETS = Object.freeze({
+  happy: { label: 'Happy Path', responses: {
+    'order-approval': [{ orderApproved: true }],
+    'quality-check': [{ qualityPassed: true }]
+  }},
+  edit: { label: 'Order Requires Editing', responses: {
+    'order-approval': [{ orderApproved: false }, { orderApproved: true }],
+    'quality-check': [{ qualityPassed: true }]
+  }},
+  rework: { label: 'Quality/Rework Until Resolved', responses: {
+    'order-approval': [{ orderApproved: true }],
+    'quality-check': [{ qualityPassed: false }, { qualityPassed: false }, { qualityPassed: true }]
+  }}
+});
 
 const state = {
   view: 'overview',
@@ -45,9 +59,7 @@ function fmtMs(ms) {
 }
 
 // ---------------------------------------------------------------------------
-// BPMN rendering: the ACTUAL deployed XML for the pair's own process definition key, rendered by
-// bpmn-js, with real per-activity state overlaid as marker classes (see styles.css). No diagram is
-// hand-drawn; nothing renders that was not fetched from /api/portal/bpmn/{key}.
+// bpmn-js renders deployed BPMN XML; state markers are based on live lockstep data.
 // ---------------------------------------------------------------------------
 
 class BpmnPane {
@@ -150,18 +162,50 @@ async function probePairStart() {
   $('btnStartRun2').hidden = !state.pairStartAvailable;
 }
 
+function selectedScenario() {
+  return SCENARIO_PRESETS[$('scenarioPreset').value] || SCENARIO_PRESETS.happy;
+}
+function stableJson(value) {
+  if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']';
+  if (value && typeof value === 'object') return '{' + Object.keys(value).sort()
+    .map(key => JSON.stringify(key) + ':' + stableJson(value[key])).join(',') + '}';
+  return JSON.stringify(value);
+}
+function configuredScenarioLabel(configuration) {
+  if (!configuration || !Object.keys(configuration).length) return 'Scenario configuration cleared after run completion.';
+  const actual = stableJson(configuration);
+  for (const preset of Object.values(SCENARIO_PRESETS)) {
+    if (actual === stableJson(preset.responses)) return 'Scenario: ' + preset.label;
+  }
+  return 'Scenario: custom provider responses';
+}
+
 async function startNewRun() {
   const key = 'run-' + Date.now().toString(36);
+  const scenario = selectedScenario();
   $('ovStartHint').textContent = 'starting ' + key + '...';
   try {
-    const p = await fetch('/api/proxy/start?businessKey=' + encodeURIComponent(key), { method: 'POST' });
+    // STEP is configured before the first Camunda instance is created. Generated workers may see
+    // the tasks, but RunExecutionGate keeps both sides held until configuration below succeeds.
+    const mode = '&executionMode=STEP';
+    const p = await fetch('/api/proxy/start?businessKey=' + encodeURIComponent(key) + mode, { method: 'POST' });
     const pj = await p.json();
     if (!p.ok) { $('ovStartHint').textContent = 'proxy start failed: ' + JSON.stringify(pj); return; }
     const t = await fetch('/api/twin/start?businessKey=' + encodeURIComponent(key), { method: 'POST' });
     const tj = await t.json();
     if (!t.ok) { $('ovStartHint').textContent = 'twin start failed: ' + JSON.stringify(tj); return; }
+    const configured = await fetch('/api/portal/runs/' + encodeURIComponent(key) + '/capability-responses', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(scenario.responses)
+    });
+    const configurationBody = await configured.json();
+    if (!configured.ok) {
+      $('ovStartHint').textContent = 'pair started and remains held; scenario configuration failed: '
+        + (configurationBody.error || configured.status);
+      return;
+    }
     state.userKey = key;
-    $('ovStartHint').textContent = 'started ' + key;
+    $('ovStartHint').textContent = 'started ' + key + ' — ' + scenario.label
+      + ' configured and held. Use Go to Next Step or Complete Process.';
     await tick();
   } catch (e) {
     $('ovStartHint').textContent = 'start failed: ' + e.message;
@@ -290,6 +334,15 @@ async function renderLive() {
   $('liveBody').style.display = d ? '' : 'none';
   if (!d) return;
 
+  const execution = await getJson('/api/portal/runs/' + encodeURIComponent(d.businessKey) + '/execution');
+  $('executionControl').hidden = false;
+  $('executionState').textContent = execution.mode === 'STEP_WAITING'
+    ? 'Step mode — waiting for release' : execution.mode === 'STEP_RUNNING'
+      ? 'Step mode — running current boundary' : 'Automatic — workers may continue';
+  const used = execution.providersUsed || [];
+  $('configuredScenario').textContent = configuredScenarioLabel(execution.capabilityResponseConfiguration);
+  $('providersUsed').textContent = 'Capability providers used: ' + (used.length ? used.join(', ') : 'None yet');
+
   $('pairOriginalStatus').className = 'pill ' + (d.original.active ? 'RUNNING' : 'ENDED');
   $('pairOriginalStatus').textContent = 'Original: ' + (d.original.active ? 'running' : 'ended');
   $('pairTwinStatus').className = 'pill ' + (d.twin.active ? 'RUNNING' : 'ENDED');
@@ -321,6 +374,21 @@ async function renderLive() {
     { label: 'Original', cell: r => pill(r.originalState) },
     { label: 'Twin', cell: r => pill(r.twinState) }
   ], d.steps, 'No steps.');
+}
+
+async function controlExecution(action) {
+  const key = effectiveKey();
+  if (!key) return;
+  const id = action === 'next' ? 'btnNextStep' : 'btnCompleteProcess';
+  const button = $(id);
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/portal/runs/' + encodeURIComponent(key) + '/' + action, { method: 'POST' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    await tick();
+  } catch (e) {
+    $('executionState').textContent = 'Control failed: ' + e.message;
+  } finally { button.disabled = false; }
 }
 
 async function renderHumanTaskPanel(businessKey) {
@@ -514,6 +582,8 @@ document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () =>
 $('btnOpenLive').addEventListener('click', () => showView('live'));
 $('btnStartRun').addEventListener('click', startNewRun);
 $('btnStartRun2').addEventListener('click', startNewRun);
+$('btnCompleteProcess').addEventListener('click', () => controlExecution('complete'));
+$('btnNextStep').addEventListener('click', () => controlExecution('next'));
 $('pairSelect').addEventListener('change', (e) => { state.userKey = e.target.value || null; tick(); });
 document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
   document.querySelectorAll('.chip').forEach(x => x.classList.remove('active'));

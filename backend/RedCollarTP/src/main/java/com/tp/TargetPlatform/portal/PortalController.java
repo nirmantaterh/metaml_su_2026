@@ -54,6 +54,33 @@ public class PortalController {
         return runtime.tasks();
     }
 
+    @GetMapping("/runs/{businessKey}/execution")
+    public Map<String, Object> execution(@PathVariable String businessKey) {
+        return runtime.executionState(businessKey);
+    }
+
+    // These controls only release real generated workers.  They neither complete BPMN work nor
+    // bypass human tasks, RabbitMQ, capability dispatch, or the pair synchronization protocol.
+    @PostMapping("/runs/{businessKey}/complete")
+    public Map<String, Object> completeProcess(@PathVariable String businessKey) {
+        return runtime.completeProcess(businessKey);
+    }
+
+    @PostMapping("/runs/{businessKey}/next")
+    public Map<String, Object> nextStep(@PathVariable String businessKey) {
+        return runtime.nextStep(businessKey);
+    }
+
+    @PostMapping("/runs/{businessKey}/capability-responses")
+    public ResponseEntity<Map<String, Object>> configureCapabilityResponses(@PathVariable String businessKey,
+            @RequestBody Map<String, List<Map<String, Object>>> responses) {
+        try {
+            return ResponseEntity.ok(runtime.configureCapabilityResponses(businessKey, responses));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
     // Completes a REAL Camunda user task through TaskService. The response reports the engine's own
     // outcome; a task that cannot be completed returns the engine's error rather than a success the
     // UI could misread as progress.

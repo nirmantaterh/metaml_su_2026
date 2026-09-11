@@ -165,6 +165,10 @@ public final class CapabilityDispatcher {
                 executor.getClass().getSimpleName(), provider == null ? "none" : provider.providerId());
 
         AutomationResult result = executor.execute(context, activityId, identity);
+        // A sequence belongs to the provider this instance actually resolved, not to the executor's
+        // broad family.  That keeps a rebind/replacement honest: the configured response follows
+        // the same concrete identity that dispatch and provider-use evidence report.
+        result = CapabilityResponseSequences.apply(context, identity, result);
 
         // The single boundary between what the provider computed and what control flow may see.
         // publish() throws before this line is reached if the output set violated the contract, so

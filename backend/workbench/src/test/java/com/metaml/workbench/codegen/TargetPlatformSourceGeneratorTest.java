@@ -336,6 +336,33 @@ class TargetPlatformSourceGeneratorTest {
                 """.formatted(processId, activityXml);
     }
 
+    private static String diagrammedFlowBpmn(String processId, String activityXml) {
+        return """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                    xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                    id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">
+                  <bpmn2:process id="%s" name="Flow" isExecutable="true">
+                    <bpmn2:startEvent id="Start"><bpmn2:outgoing>f0</bpmn2:outgoing></bpmn2:startEvent>
+                    <bpmn2:sequenceFlow id="f0" sourceRef="Start" targetRef="StepOne" />
+                    %s
+                    <bpmn2:sequenceFlow id="f1" sourceRef="StepOne" targetRef="End" />
+                    <bpmn2:endEvent id="End"><bpmn2:incoming>f1</bpmn2:incoming></bpmn2:endEvent>
+                  </bpmn2:process>
+                  <bpmndi:BPMNDiagram id="Diagram"><bpmndi:BPMNPlane id="Plane" bpmnElement="%s">
+                    <bpmndi:BPMNShape id="Start_di" bpmnElement="Start"><dc:Bounds x="80" y="100" width="36" height="36" /></bpmndi:BPMNShape>
+                    <bpmndi:BPMNShape id="StepOne_di" bpmnElement="StepOne"><dc:Bounds x="200" y="78" width="100" height="80" /></bpmndi:BPMNShape>
+                    <bpmndi:BPMNShape id="End_di" bpmnElement="End"><dc:Bounds x="380" y="100" width="36" height="36" /></bpmndi:BPMNShape>
+                    <bpmndi:BPMNEdge id="f0_di" bpmnElement="f0"><di:waypoint x="116" y="118" /><di:waypoint x="200" y="118" /></bpmndi:BPMNEdge>
+                    <bpmndi:BPMNEdge id="f1_di" bpmnElement="f1"><di:waypoint x="300" y="118" /><di:waypoint x="380" y="118" /></bpmndi:BPMNEdge>
+                  </bpmndi:BPMNPlane></bpmndi:BPMNDiagram>
+                </bpmn2:definitions>
+                """.formatted(processId, activityXml, processId);
+    }
+
     // A human task carries no delegateExpression, so the delegate scan skips it. It must still be
     // gated: the Twin mirrors it as an automated task, and without a rendezvous the Twin would run
     // that activity - and every later one - while the person had not yet finished this one.
@@ -356,6 +383,27 @@ class TargetPlatformSourceGeneratorTest {
         assertThat(result.bpmnXml())
                 .contains("sourceRef=\"StepOne\" targetRef=\"sync_evt_StepOne\"")
                 .contains("sourceRef=\"sync_evt_StepOne\" targetRef=\"End\"");
+    }
+
+    @Test
+    void syncInsertionAddsDiagramInterchangeForBothNewBpmnElements() {
+        String activity = """
+                <bpmn2:userTask id="StepOne" name="Step One">
+                  <bpmn2:incoming>f0</bpmn2:incoming><bpmn2:outgoing>f1</bpmn2:outgoing>
+                </bpmn2:userTask>
+                """;
+
+        String proxy = generator.generate(diagrammedFlowBpmn("proxy_process", activity), false).bpmnXml();
+        String twin = generator.generate(diagrammedFlowBpmn("twin_process", activity.replace("userTask", "serviceTask")
+                .replace("<bpmn2:serviceTask", "<bpmn2:serviceTask camunda:delegateExpression=\"${stepOne}\"")),
+                true, java.util.Set.of("StepOne")).bpmnXml();
+
+        assertThat(proxy)
+                .contains("bpmnElement=\"sync_evt_StepOne\"")
+                .contains("bpmnElement=\"sync_flow_StepOne\"");
+        assertThat(twin)
+                .contains("bpmnElement=\"sync_evt_StepOne\"")
+                .contains("bpmnElement=\"sync_flow_StepOne\"");
     }
 
     // manualTask and a bare task are mirrored into automated Twin activities too, so they are gated

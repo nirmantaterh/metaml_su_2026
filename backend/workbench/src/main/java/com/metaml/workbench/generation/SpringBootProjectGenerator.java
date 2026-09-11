@@ -1686,6 +1686,32 @@ public class SpringBootProjectGenerator {
     // Generates a scheduled poller that drives all GeneratedExternalTaskWorker beans. On each tick it calls fetchAndLock for every registered topic, dispatches locked tasks to the matching worker, and catches per-task exceptions so one failure doesn't stall the others.
     private void writeExternalTaskPoller(Path projectDir, String basePackage) {
         String workerPackage = basePackage + ".worker";
+        boolean targetPlatformPortal = isTargetPlatformTemplate();
+        String portalImports = targetPlatformPortal ? """
+                import %s.portal.RunExecutionGate;
+                import %s.portal.StandaloneCapabilityResolver;
+
+                """.formatted(basePackage, basePackage) : "";
+        String portalFields = targetPlatformPortal ? """
+                    private final RunExecutionGate executionGate;
+                    private final StandaloneCapabilityResolver capabilityResolver;
+                """ : "";
+        String portalConstructorParameters = targetPlatformPortal ? """
+                            RunExecutionGate executionGate,
+                            StandaloneCapabilityResolver capabilityResolver,
+                """ : "";
+        String portalConstructorAssignments = targetPlatformPortal ? """
+                        this.executionGate = executionGate;
+                        this.capabilityResolver = capabilityResolver;
+                """ : "";
+        String beforeWorkerExecution = targetPlatformPortal ? """
+                                        if (!executionGate.mayExecute(task)) {
+                                            externalTaskService.unlock(task.getId());
+                                            continue;
+                                        }
+                                        capabilityResolver.resolveIfUnambiguous(task);
+                """ : "";
+        String afterWorkerExecution = targetPlatformPortal ? "executionGate.afterExecution(task);" : "";
         String source = """
                 package %s;
 
@@ -1697,6 +1723,8 @@ public class SpringBootProjectGenerator {
                 import org.slf4j.LoggerFactory;
                 import org.springframework.scheduling.annotation.Scheduled;
                 import org.springframework.stereotype.Component;
+
+                %s
 
                 // Polls all registered external-task topics and dispatches locked tasks to the matching GeneratedExternalTaskWorker. Uses the embedded engine's ExternalTaskService directly (fetchAndLock + complete) instead of the HTTP-based external-task client starter, which depends on Jersey — incompatible with Spring Boot 4.x.
                 @Component
@@ -1710,14 +1738,17 @@ public class SpringBootProjectGenerator {
 
                     private final ExternalTaskService externalTaskService;
                     private final List<GeneratedExternalTaskWorker> workers;
+                %s
                     private final int maxRetries;
 
                     public ExternalTaskPoller(ExternalTaskService externalTaskService,
                             List<GeneratedExternalTaskWorker> workers,
+                %s
                             @org.springframework.beans.factory.annotation.Value(
                                     "${metaml.worker.max-retries:3}") int maxRetries) {
                         this.externalTaskService = externalTaskService;
                         this.workers = workers;
+                %s
                         this.maxRetries = maxRetries;
                         logger.info("ExternalTaskPoller initialized with {} worker(s): {} (maxRetries={})",
                                 workers.size(), workers.stream().map(GeneratedExternalTaskWorker::topic).toList(),
@@ -1733,7 +1764,9 @@ public class SpringBootProjectGenerator {
                                         .execute();
                                 for (LockedExternalTask task : tasks) {
                                     try {
+                %s
                                         worker.execute(task, externalTaskService);
+                                        %s
                                     } catch (Exception e) {
                                         handleWorkerFailure(worker, task, e);
                                     }
@@ -1760,7 +1793,8 @@ public class SpringBootProjectGenerator {
                                 Math.max(remaining, 0), RETRY_BACKOFF_MS);
                     }
                 }
-                """.formatted(workerPackage);
+                """.formatted(workerPackage, portalImports, portalFields, portalConstructorParameters,
+                portalConstructorAssignments, beforeWorkerExecution, afterWorkerExecution);
         Path packageDir = projectDir.resolve("src/main/java").resolve(workerPackage.replace('.', '/'));
         writeFile(packageDir.resolve("ExternalTaskPoller.java"), source);
     }

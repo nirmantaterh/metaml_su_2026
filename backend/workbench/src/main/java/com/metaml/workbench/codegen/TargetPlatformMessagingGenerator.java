@@ -670,7 +670,10 @@ public class TargetPlatformMessagingGenerator {
                     private final PairRegistry pairRegistry;
                     private final TaskQueuePublisher taskQueuePublisher;
                     private final ResponseQueuePublisher responseQueuePublisher;
-                    private final Set<String> awaitingResponse = ConcurrentHashMap.newKeySet();
+                    // The responder subscription released for each handoff. A responder may loop
+                    // back to the same signal after it completes its gated work; that creates a new
+                    // subscription id and is proof that the released turn really completed.
+                    private final Map<String, String> awaitingResponderSubscriptions = new ConcurrentHashMap<>();
                     private final Set<String> everDelivered = ConcurrentHashMap.newKeySet();
                     private final Map<String, Integer> partnerArrivalTicks = new ConcurrentHashMap<>();
                     private static final int MAX_PARTNER_ARRIVAL_TICKS = 5;
@@ -725,9 +728,10 @@ public class TargetPlatformMessagingGenerator {
                         }
 
                         String handoffKey = businessKey + "|" + signalName;
-                        if (awaitingResponse.contains(handoffKey)) {
-                            if (responderHasAdvancedPast(signalName, partnerInstanceId)) {
-                                awaitingResponse.remove(handoffKey);
+                        if (awaitingResponderSubscriptions.containsKey(handoffKey)) {
+                            if (responderHasAdvancedPast(signalName, partnerInstanceId,
+                                    awaitingResponderSubscriptions.get(handoffKey))) {
+                                awaitingResponderSubscriptions.remove(handoffKey);
                                 stuckOnIncidentLogged.remove(handoffKey);
                                 deliverTo(signalName, subscription, businessKey, "RESPONSE");
                             } else {
@@ -761,7 +765,7 @@ public class TargetPlatformMessagingGenerator {
                                     .orElse(null);
                             if (responderSubscription != null) {
                                 deliverTo(signalName, responderSubscription, businessKey, "REQUEST");
-                                awaitingResponse.add(handoffKey);
+                                awaitingResponderSubscriptions.put(handoffKey, responderSubscription.getId());
                             }
                             return;
                         }
@@ -822,8 +826,11 @@ public class TargetPlatformMessagingGenerator {
                         return false;
                     }
 
-                    // Checks whether the responder has completed or transitioned past the task gated by signalName.
-                    private boolean responderHasAdvancedPast(String signalName, String responderInstanceId) {
+                    // True once the responder moved past the exact subscription that released its
+                    // gated task: it may subscribe to another signal, return to this signal through
+                    // a loop (with a new subscription id), or complete entirely.
+                    private boolean responderHasAdvancedPast(String signalName, String responderInstanceId,
+                            String releasedSubscriptionId) {
                         ProcessInstance stillActive = runtimeService.createProcessInstanceQuery()
                                 .processInstanceId(responderInstanceId)
                                 .singleResult();
@@ -834,9 +841,10 @@ public class TargetPlatformMessagingGenerator {
                                 .processInstanceId(responderInstanceId)
                                 .eventType("signal")
                                 .list();
-                        boolean stillOnSameSignal = responderSignals.stream()
-                                .anyMatch(s -> s.getEventName().equals(signalName));
-                        if (stillOnSameSignal) {
+                        boolean stillOnReleasedSubscription = responderSignals.stream()
+                                .anyMatch(s -> s.getEventName().equals(signalName)
+                                        && s.getId().equals(releasedSubscriptionId));
+                        if (stillOnReleasedSubscription) {
                             return false;
                         }
                         return !responderSignals.isEmpty();
@@ -902,6 +910,7 @@ public class TargetPlatformMessagingGenerator {
                 import org.springframework.web.bind.annotation.RestController;
 
                 import com.tp.TargetPlatform.coordination.PairRegistry;
+                import com.tp.TargetPlatform.portal.RunExecutionGate;
 
                 // REST controller starting %2$s instances and registering their businessKey with PairRegistry.
                 @RestController
@@ -910,10 +919,12 @@ public class TargetPlatformMessagingGenerator {
 
                     private final RuntimeService runtimeService;
                     private final PairRegistry pairRegistry;
+                    private final RunExecutionGate executionGate;
 
-                    public %4$s(RuntimeService runtimeService, PairRegistry pairRegistry) {
+                    public %4$s(RuntimeService runtimeService, PairRegistry pairRegistry, RunExecutionGate executionGate) {
                         this.runtimeService = runtimeService;
                         this.pairRegistry = pairRegistry;
+                        this.executionGate = executionGate;
                     }
 
                     @GetMapping("/health")
@@ -923,15 +934,20 @@ public class TargetPlatformMessagingGenerator {
 
                     // Starts a process instance; matching businessKey enables coordinated signal synchronization.
                     @PostMapping("/start")
-                    public Map<String, Object> start(@RequestParam(required = false) String businessKey) {
+                    public Map<String, Object> start(@RequestParam(required = false) String businessKey,
+                            @RequestParam(required = false) String executionMode) {
                         String key = (businessKey == null || businessKey.isBlank())
                                 ? UUID.randomUUID().toString() : businessKey;
+                        if (executionMode != null && !executionMode.isBlank()) {
+                            executionGate.configure(key, executionMode);
+                        }
                         ProcessInstance instance = runtimeService.startProcessInstanceByKey("%5$s", key);
                         String role = pairRegistry.registerAndClassify(key, instance.getProcessInstanceId());
                         Map<String, Object> body = new HashMap<>();
                         body.put("processInstanceId", instance.getProcessInstanceId());
                         body.put("businessKey", key);
                         body.put("role", role == null ? "unpaired" : role);
+                        body.put("executionMode", executionGate.mode(key).name());
                         return body;
                     }
                 }

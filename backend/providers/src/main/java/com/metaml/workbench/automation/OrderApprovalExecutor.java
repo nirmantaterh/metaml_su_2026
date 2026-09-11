@@ -33,6 +33,8 @@ public class OrderApprovalExecutor implements ComponentExecutor {
         return AGENT_TYPE;
     }
 
+    @Override public Set<String> providedOutputNames() { return Set.of("orderApproved", "approvalReason"); }
+
     @Override
     public Set<String> getHandledAgentNames() {
         return Set.of(AGENT_NAME);

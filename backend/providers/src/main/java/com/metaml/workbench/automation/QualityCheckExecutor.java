@@ -30,6 +30,8 @@ public class QualityCheckExecutor implements ComponentExecutor {
         return AGENT_TYPE;
     }
 
+    @Override public Set<String> providedOutputNames() { return Set.of("qualityPassed", "qualityMessage"); }
+
     @Override
     public Set<String> getHandledAgentNames() {
         return Set.of(AGENT_NAME);

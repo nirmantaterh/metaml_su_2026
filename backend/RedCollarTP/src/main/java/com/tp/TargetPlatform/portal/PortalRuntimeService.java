@@ -13,6 +13,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.camunda.bpm.engine.ExternalTaskService;
 import org.camunda.bpm.engine.HistoryService;
@@ -38,6 +40,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.metaml.workbench.automation.ComponentExecutor;
+import com.metaml.workbench.capability.runtime.CapabilityResponseSequences;
 
 // Assembles the portal's views straight out of the engine this JVM is running: RepositoryService for
 // what is deployed, RuntimeService/HistoryService for where each instance actually is, TaskService for
@@ -64,12 +67,15 @@ public class PortalRuntimeService {
     private final String rabbitPort;
     private final String workbenchUrl;
     private final ObjectProvider<ConnectionFactory> rabbitConnectionFactory;
+    private final RunExecutionGate executionGate;
+    private final RuntimeEventLog eventLog;
     private final long startedAt = System.currentTimeMillis();
 
     public PortalRuntimeService(RepositoryService repositoryService, RuntimeService runtimeService,
             HistoryService historyService, TaskService taskService, ExternalTaskService externalTaskService,
             List<ComponentExecutor> componentExecutors,
             ObjectProvider<ConnectionFactory> rabbitConnectionFactory,
+            RunExecutionGate executionGate, RuntimeEventLog eventLog,
             @Value("${metaml.messaging.enabled:false}") String messagingEnabled,
             @Value("${spring.rabbitmq.host:localhost}") String rabbitHost,
             @Value("${spring.rabbitmq.port:5672}") String rabbitPort,
@@ -81,10 +87,110 @@ public class PortalRuntimeService {
         this.externalTaskService = externalTaskService;
         this.componentExecutors = componentExecutors;
         this.rabbitConnectionFactory = rabbitConnectionFactory;
+        this.executionGate = executionGate;
+        this.eventLog = eventLog;
         this.messagingEnabled = messagingEnabled;
         this.rabbitHost = rabbitHost;
         this.rabbitPort = rabbitPort;
         this.workbenchUrl = workbenchUrl;
+    }
+
+    public Map<String, Object> completeProcess(String businessKey) {
+        executionGate.runAutomatically(businessKey);
+        return executionState(businessKey);
+    }
+
+    public Map<String, Object> nextStep(String businessKey) {
+        executionGate.releaseNext(businessKey);
+        return executionState(businessKey);
+    }
+
+    public Map<String, Object> executionState(String businessKey) {
+        Map<String, Object> state = new LinkedHashMap<>();
+        state.put("businessKey", businessKey);
+        state.put("mode", executionGate.mode(businessKey).name());
+        state.put("providersUsed", providersUsed(businessKey));
+        state.put("capabilityResponseConfiguration", capabilityResponseConfiguration(businessKey));
+        return state;
+    }
+
+    public Map<String, Object> configureCapabilityResponses(String businessKey,
+            Map<String, List<Map<String, Object>>> responses) {
+        Map<String, List<Map<String, Object>>> configuration = CapabilityResponseSequences.copyConfiguration(responses);
+        if (configuration.isEmpty()) {
+            throw new IllegalArgumentException("At least one provider response sequence is required");
+        }
+        List<String> configuredInstances = new ArrayList<>();
+        for (Map<String, Object> pair : lockstepPairs(50, businessKey)) {
+            for (String side : List.of("original", "twin")) {
+                @SuppressWarnings("unchecked") Map<String, Object> member = (Map<String, Object>) pair.get(side);
+                String instanceId = (String) member.get("processInstanceId");
+                ProcessInstance activeInstance = runtimeService.createProcessInstanceQuery()
+                        .processInstanceId(instanceId).active().singleResult();
+                if (activeInstance == null) {
+                    throw new IllegalArgumentException("Run pair " + businessKey
+                            + " is no longer active; scenario responses are run-local and cannot be reused");
+                }
+                configuredInstances.add(instanceId);
+            }
+            for (String instanceId : configuredInstances) {
+                // Each side receives an equivalent independent configuration. Cursors are process
+                // variables too, so one side can never consume the other side's FIFO entries.
+                runtimeService.setVariable(instanceId, CapabilityResponseSequences.CONFIG_VARIABLE,
+                        CapabilityResponseSequences.copyConfiguration(configuration));
+                runtimeService.removeVariable(instanceId, CapabilityResponseSequences.CURSOR_VARIABLE);
+            }
+            break;
+        }
+        if (configuredInstances.isEmpty()) throw new IllegalArgumentException("No run pair found for " + businessKey);
+        return Map.of("businessKey", businessKey, "configuredInstances", configuredInstances,
+                "providerIdentities", configuration.keySet(), "capabilityResponseConfiguration", configuration);
+    }
+
+    // Scenario configuration has no JVM registry. While a pair is active, its own Camunda
+    // variables are authoritative. After completion the runtime instance (and therefore the
+    // configuration) is gone, which is the intended natural cleanup boundary.
+    private Map<String, Object> capabilityResponseConfiguration(String businessKey) {
+        for (Map<String, Object> pair : lockstepPairs(50, businessKey)) {
+            for (String side : List.of("original", "twin")) {
+                @SuppressWarnings("unchecked") Map<String, Object> member = (Map<String, Object>) pair.get(side);
+                String instanceId = (String) member.get("processInstanceId");
+                if (runtimeService.createProcessInstanceQuery().processInstanceId(instanceId).active().singleResult() == null) {
+                    continue;
+                }
+                Object raw = runtimeService.getVariable(instanceId, CapabilityResponseSequences.CONFIG_VARIABLE);
+                if (raw instanceof Map<?, ?> configured) {
+                    Map<String, Object> copy = new LinkedHashMap<>();
+                    configured.forEach((providerIdentity, sequence) -> {
+                        if (providerIdentity instanceof String name) copy.put(name, sequence);
+                    });
+                    return copy;
+                }
+            }
+        }
+        return Map.of();
+    }
+
+    // Successful CAPABILITY COMPLETE lines are emitted by CapabilityDispatcher only after the real
+    // provider ran and its output boundary accepted the result.  This is therefore stronger than a
+    // registry listing or a requested binding, and is naturally scoped by instance id.
+    private static final Pattern CAPABILITY_COMPLETE = Pattern.compile(
+            "^CAPABILITY COMPLETE: .*?processInstanceId=([^\\s]+).*?providerIdentity=([^\\s]+)");
+
+    public List<String> providersUsed(String businessKey) {
+        Set<String> instanceIds = new HashSet<>();
+        for (Map<String, Object> pair : lockstepPairs(50, businessKey)) {
+            @SuppressWarnings("unchecked") Map<String, Object> original = (Map<String, Object>) pair.get("original");
+            @SuppressWarnings("unchecked") Map<String, Object> twin = (Map<String, Object>) pair.get("twin");
+            instanceIds.add((String) original.get("processInstanceId"));
+            instanceIds.add((String) twin.get("processInstanceId"));
+        }
+        Set<String> providers = new LinkedHashSet<>();
+        for (RuntimeEventLog.Entry entry : eventLog.tail(3000, Set.of("CAPABILITY"))) {
+            Matcher match = CAPABILITY_COMPLETE.matcher(entry.message());
+            if (match.find() && instanceIds.contains(match.group(1))) providers.add(match.group(2));
+        }
+        return providers.stream().sorted().toList();
     }
 
     // A real connectivity probe, not a configuration echo: opens (or reuses) an AMQP connection and

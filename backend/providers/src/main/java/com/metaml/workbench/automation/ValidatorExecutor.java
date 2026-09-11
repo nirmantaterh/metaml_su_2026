@@ -24,6 +24,8 @@ public class ValidatorExecutor implements ComponentExecutor {
         return AGENT_TYPE;
     }
 
+    @Override public Set<String> providedOutputNames() { return Set.of("validationPassed", "schemaVersion", "validationStatus", "validationMessage"); }
+
     @Override
     public Set<String> getHandledAgentNames() {
         return Set.of(AGENT_NAME);

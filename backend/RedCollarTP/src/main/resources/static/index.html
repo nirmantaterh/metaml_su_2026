@@ -25,7 +25,7 @@
     </div>
   </header>
 
-  <nav class="tabs" id="tabs">
+  <nav class="tabs" id="tabs" aria-label="Target Platform sections">
     <button class="tab active" data-view="overview">Overview</button>
     <button class="tab" data-view="live">Live Execution</button>
     <button class="tab" data-view="comm">Communication</button>
@@ -39,7 +39,7 @@
     <section id="view-overview" class="view">
       <div id="ovIncidentBanner" hidden></div>
 
-      <div class="panel">
+      <div class="panel overviewHero">
         <h2 id="ovProcessName">&mdash;</h2>
         <p class="hint">Original/Main process with a synchronized digital Twin, running on this standalone platform.</p>
 
@@ -74,7 +74,7 @@
         <ul class="syncSummary" id="ovSyncList"></ul>
       </div>
 
-      <div class="panel">
+      <div class="panel dataPanel">
         <h3>Deployed Process Definitions</h3>
         <div id="ovDefinitions"></div>
       </div>
@@ -82,7 +82,7 @@
 
     <!-- ============ LIVE EXECUTION ============ -->
     <section id="view-live" class="view" hidden>
-      <div class="panel">
+      <div class="panel liveToolbar">
         <div class="pairBar">
           <label class="hint" style="margin:0;">Pair:</label>
           <select id="pairSelect"></select>
@@ -91,7 +91,28 @@
           <span class="sep">&middot;</span>
           <span class="pill" id="pairTwinStatus">&mdash;</span>
           <span style="flex:1"></span>
+          <label class="scenarioPicker" for="scenarioPreset">Scenario
+            <select id="scenarioPreset">
+              <option value="happy">Happy Path</option>
+              <option value="edit">Order Requires Editing</option>
+              <option value="rework">Quality/Rework Until Resolved</option>
+            </select>
+          </label>
           <button class="btn secondary small" id="btnStartRun2" hidden>Start New Run</button>
+        </div>
+        <div class="executionControl" id="executionControl" hidden>
+          <div><span class="legendLabel">Execution control</span><span class="hint" id="executionState"></span></div>
+          <button class="btn secondary small" id="btnCompleteProcess">Complete Process</button>
+          <button class="btn small" id="btnNextStep">Go to Next Step</button>
+          <span class="hint" id="configuredScenario"></span>
+          <span class="hint" id="providersUsed"></span>
+        </div>
+        <div class="statusLegend" aria-label="Execution status legend">
+          <span class="legendLabel">Execution states</span>
+          <span class="pill ACTIVE">ACTIVE</span>
+          <span class="pill WAITING_SYNC">WAITING SYNC</span>
+          <span class="pill COMPLETED">COMPLETED</span>
+          <span class="pill INCIDENT">INCIDENT</span>
         </div>
         <div class="empty" id="liveEmpty" hidden>No Original/Twin pair is running. Start one, or complete the demo generation steps described in the report.</div>
       </div>
@@ -123,7 +144,7 @@
           </div>
         </div>
 
-        <div class="panel">
+        <div class="panel evidencePanel">
           <details class="evidence">
             <summary>Technical evidence: step-by-step state table</summary>
             <div id="stepTable" style="margin-top:8px;"></div>
@@ -134,7 +155,7 @@
 
     <!-- ============ COMMUNICATION ============ -->
     <section id="view-comm" class="view" hidden>
-      <div class="panel">
+      <div class="panel commPanel">
         <h2>RabbitMQ TASK / RESPONSE Exchange</h2>
         <p class="hint">For the pair selected in Live Execution. Source: real log records from this platform's own generated TaskQueuePublisher / TaskQueueListener / ResponseQueuePublisher / ResponseQueueListener.</p>
         <div class="row" style="display:flex; gap:8px; margin-bottom:10px; font-size:11px; color:var(--ink-soft); font-weight:700; text-transform:uppercase; letter-spacing:.4px;">
@@ -144,7 +165,7 @@
         <div class="empty" id="commEmpty" hidden>No TASK/RESPONSE messages recorded yet for this pair.</div>
       </div>
 
-      <div class="panel">
+      <div class="panel evidencePanel">
         <details class="evidence">
           <summary>Technical evidence: raw message log</summary>
           <div id="commTable" style="margin-top:8px;"></div>
@@ -154,7 +175,7 @@
 
     <!-- ============ RUNTIME ============ -->
     <section id="view-runtime" class="view" hidden>
-      <div class="panel">
+      <div class="panel runtimePanel">
         <div class="filterBar">
           <button class="chip active" data-kind="">All</button>
           <button class="chip" data-kind="LOG,ERROR">System</button>
@@ -184,6 +205,7 @@
       <div class="sysGrid">
         <div class="panel">
           <h3>Capability Providers</h3>
+          <p class="hint">Available to this Target Platform</p>
           <div class="providerChips" id="sysProviders"></div>
         </div>
         <div class="panel">

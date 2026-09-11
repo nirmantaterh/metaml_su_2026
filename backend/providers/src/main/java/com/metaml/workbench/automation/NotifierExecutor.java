@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 @Component("notifierExecutor")
 public class NotifierExecutor implements ComponentExecutor {
@@ -21,6 +22,8 @@ public class NotifierExecutor implements ComponentExecutor {
     public String getHandledAgentType() {
         return AGENT_TYPE;
     }
+
+    @Override public Set<String> providedOutputNames() { return Set.of("notificationDispatched", "dispatchChannel"); }
 
     @Override
     public java.util.Set<String> getHandledAgentNames() {

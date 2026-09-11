@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.camunda.bpm.engine.RepositoryService;
 import org.camunda.bpm.engine.delegate.DelegateExecution;
@@ -195,6 +196,82 @@ class CapabilityDispatcherTest {
         assertThatThrownBy(() -> dispatcher.dispatch(new DelegateExecutionContext(execution), ACTIVITY, null))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Ambiguous executor resolution");
+    }
+
+    // ---- deterministic response sequences --------------------------------
+
+    @Test
+    void executesTheRealProviderBeforeApplyingItsConfiguredProviderScopedResponse() {
+        AtomicInteger executions = new AtomicInteger();
+        ComponentExecutor provider = countingAssessor(executions);
+        DelegateExecution execution = boundDelegateExecution(PROVIDER_NAME, PROVIDER_TYPE, 80);
+        given(execution.getVariable(CapabilityResponseSequences.CONFIG_VARIABLE)).willReturn(
+                Map.of(PROVIDER_NAME, List.of(Map.of(GATEWAY_VARIABLE, false))));
+
+        CapabilityDispatcher dispatcher = new CapabilityDispatcher(List.of(provider), sourceFor(declaredProvider()),
+                repositoryServiceFor(bpmn(ACTIVITY, GATEWAY_VARIABLE)));
+        Optional<AutomationResult> result = dispatcher.dispatch(new DelegateExecutionContext(execution), ACTIVITY, null);
+
+        assertThat(executions).hasValue(1);
+        assertThat(result).isPresent();
+        assertThat(result.get().outputs()).containsEntry(GATEWAY_VARIABLE, false);
+        verify(execution).setVariable(GATEWAY_VARIABLE, false);
+    }
+
+    @Test
+    void configuredResponseUsesTheResolvedProviderIdentityNotItsExecutorFamily() {
+        DelegateExecution execution = boundDelegateExecution(PROVIDER_NAME, PROVIDER_TYPE, 80);
+        // A sequence for the type must not override a run that was explicitly bound to this provider
+        // name. Rebinding the instance changes the scenario key in the same way it changes dispatch.
+        given(execution.getVariable(CapabilityResponseSequences.CONFIG_VARIABLE)).willReturn(
+                Map.of(PROVIDER_TYPE, List.of(Map.of(GATEWAY_VARIABLE, false))));
+
+        CapabilityDispatcher dispatcher = new CapabilityDispatcher(List.of(new AlphaAssessor()),
+                sourceFor(declaredProvider()), repositoryServiceFor(bpmn(ACTIVITY, GATEWAY_VARIABLE)));
+
+        assertThat(dispatcher.dispatch(new DelegateExecutionContext(execution), ACTIVITY, null)).isPresent();
+        verify(execution).setVariable(GATEWAY_VARIABLE, true);
+    }
+
+    @Test
+    void invalidConfiguredResponseFailsAtTheNormalOutputContractBoundaryAfterProviderExecution() {
+        AtomicInteger executions = new AtomicInteger();
+        DelegateExecution execution = boundDelegateExecution(PROVIDER_NAME, PROVIDER_TYPE, 80);
+        given(execution.getVariable(CapabilityResponseSequences.CONFIG_VARIABLE)).willReturn(
+                Map.of(PROVIDER_NAME, List.of(Map.of("undeclaredDecision", false))));
+        CapabilityDispatcher dispatcher = new CapabilityDispatcher(List.of(countingAssessor(executions)),
+                sourceFor(declaredProvider()), repositoryServiceFor(bpmn(ACTIVITY, GATEWAY_VARIABLE)));
+
+        assertThatThrownBy(() -> dispatcher.dispatch(new DelegateExecutionContext(execution), ACTIVITY, null))
+                .isInstanceOf(CapabilityOutputContractViolationException.class);
+        assertThat(executions).hasValue(1);
+        verify(execution, never()).setVariable(org.mockito.ArgumentMatchers.eq(GATEWAY_VARIABLE),
+                org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void withoutASequenceTheProviderResultIsUnchanged() {
+        AtomicInteger executions = new AtomicInteger();
+        DelegateExecution execution = boundDelegateExecution(PROVIDER_NAME, PROVIDER_TYPE, 80);
+        CapabilityDispatcher dispatcher = new CapabilityDispatcher(List.of(countingAssessor(executions)),
+                sourceFor(declaredProvider()), repositoryServiceFor(bpmn(ACTIVITY, GATEWAY_VARIABLE)));
+
+        assertThat(dispatcher.dispatch(new DelegateExecutionContext(execution), ACTIVITY, null)
+                .orElseThrow().outputs()).containsEntry(GATEWAY_VARIABLE, true);
+        assertThat(executions).hasValue(1);
+        verify(execution).setVariable(GATEWAY_VARIABLE, true);
+    }
+
+    private static ComponentExecutor countingAssessor(AtomicInteger executions) {
+        return new ComponentExecutor() {
+            @Override public String getHandledAgentType() { return PROVIDER_TYPE; }
+            @Override public Set<String> getHandledAgentNames() { return Set.of(PROVIDER_NAME); }
+            @Override public AutomationResult execute(CapabilityExecutionContext context, String activityId,
+                    String agentName) {
+                executions.incrementAndGet();
+                return new AutomationResult("provider really executed", Map.of(GATEWAY_VARIABLE, true));
+            }
+        };
     }
 
     // ---- output contract --------------------------------------------------

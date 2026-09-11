@@ -59,11 +59,36 @@ class RedCollarTargetPlatformGenerationTest {
         assertThat(tpRoot.resolve("messaging/ResponseQueueListener.java")).exists();
         assertThat(tpRoot.resolve("messaging/ResponseQueuePublisher.java")).exists();
         assertThat(tpRoot.resolve("signal/SignalBroadcaster.java")).exists();
+        assertThat(Files.readString(tpRoot.resolve("signal/SignalBroadcaster.java")))
+                .contains("awaitingResponderSubscriptions")
+                .contains("responderSubscription.getId()")
+                .contains("return to this signal through");
 
         // 2. Verify Controllers
         assertThat(tpRoot.resolve("proxy/controller/ProxyProcessController.java")).exists();
         assertThat(tpRoot.resolve("twin/controller/TwinProcessController.java")).exists();
         assertThat(tpRoot.resolve("status/GeneratedProcessStatusController.java")).exists();
+
+        // Scenario controls are template-owned runtime artifacts. Generation must copy the complete
+        // portal/runtime support into every fresh Target Platform, not depend on an older generated
+        // directory having been patched by hand.
+        assertThat(tpRoot.resolve("portal/PortalController.java")).exists();
+        assertThat(tpRoot.resolve("portal/PortalRuntimeService.java")).exists();
+        assertThat(tpRoot.resolve("portal/RunExecutionGate.java")).exists();
+        assertThat(tpRoot.resolve("portal/StandaloneCapabilityResolver.java")).exists();
+        assertThat(Files.readString(tpRoot.resolve("portal/PortalController.java")))
+                .contains("/runs/{businessKey}/capability-responses");
+        assertThat(Files.readString(tpRoot.resolve("portal/PortalRuntimeService.java")))
+                .contains("configureCapabilityResponses")
+                .contains("CapabilityResponseSequences.CONFIG_VARIABLE");
+        Path staticRoot = project.directory().resolve("src/main/resources/static");
+        assertThat(Files.readString(staticRoot.resolve("app.js")))
+                .contains("SCENARIO_PRESETS")
+                .contains("capability-responses")
+                .contains("Order Requires Editing");
+        assertThat(Files.readString(staticRoot.resolve("index.html")))
+                .contains("scenarioPreset")
+                .contains("configuredScenario");
 
         // 3. Verify External Task Workers (Proxy & Twin)
         assertThat(tpRoot.resolve("worker/proxy/CuttingWorker.java")).exists();

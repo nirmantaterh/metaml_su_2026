@@ -15,7 +15,7 @@ import NoDataAvailable from "../../components/common/NoDataAvailable";
 const LaunchProjectListPage = () => {
     const [rows, setRows] = useState(null); // null while loading, [] once loaded
     const [error, setError] = useState(null);
-    // modelId -> { phase, launchedBaseUrl, port, processKey, pairResult, pairWarning, error, isRunning, hasOpened, stopping }
+    // modelId -> { phase, launchedBaseUrl, targetPlatformUrl, port, processKey, pairResult, pairWarning, error, isRunning, hasOpened, stopping }
     const [rowState, setRowState] = useState({});
     // modelId -> boolean (true if details expanded, false/undefined if collapsed)
     const [expandedRows, setExpandedRows] = useState({});
@@ -96,6 +96,7 @@ const LaunchProjectListPage = () => {
         });
 
         let baseUrl;
+        let targetPlatformUrl;
         let port;
         let processKey;
         try {
@@ -106,6 +107,7 @@ const LaunchProjectListPage = () => {
             }
             port = launched.port;
             processKey = launched.processKey;
+            targetPlatformUrl = launched.targetPlatformUrl || null;
             baseUrl = `${window.location.protocol}//${window.location.hostname}:${port}/`;
         } catch (err) {
             patchRow(row.id, {
@@ -119,6 +121,7 @@ const LaunchProjectListPage = () => {
         patchRow(row.id, {
             phase: "pairing",
             launchedBaseUrl: baseUrl,
+            targetPlatformUrl,
             port,
             processKey,
             isRunning: true,
@@ -166,6 +169,16 @@ const LaunchProjectListPage = () => {
             openCockpitUrl(`${baseUrl}camunda/app/cockpit/engine/`);
         }
         patchRow(row.id, { hasOpened: true });
+    };
+
+    const targetPlatformUrlFor = (row) =>
+        rowState[row.id]?.targetPlatformUrl || row.initialRunningEntry?.targetPlatformUrl || null;
+
+    const handleOpenTargetPlatform = (row) => {
+        const targetPlatformUrl = targetPlatformUrlFor(row);
+        if (targetPlatformUrl) {
+            openCockpitUrl(targetPlatformUrl);
+        }
     };
 
     const handleStop = async (row) => {
@@ -222,6 +235,7 @@ const LaunchProjectListPage = () => {
                             const isRunning =
                                 rs.isRunning ||
                                 (row.initialRunningEntry && rs.phase !== null && rs.isRunning !== false);
+                            const targetPlatformUrl = targetPlatformUrlFor(row);
                             const isGenerated = row.isGenerated;
                             const busy = rs.phase === "launching" || rs.phase === "pairing";
                             const launchLabel =
@@ -351,9 +365,15 @@ const LaunchProjectListPage = () => {
                                                                     <span className="fw-medium">{rs.processKey || row.name || "Untitled"}</span>
                                                                 </div>
                                                                 <div className="d-flex align-items-center gap-2 small mb-1">
-                                                                    <span className="text-muted" style={{ minWidth: "110px" }}>Port:</span>
+                                                                    <span className="text-muted" style={{ minWidth: "110px" }}>Engine Port:</span>
                                                                     <span className="font-monospace">{rs.port || row.initialRunningEntry?.port || "-"}</span>
                                                                 </div>
+                                                                {targetPlatformUrl && (
+                                                                    <div className="d-flex align-items-center gap-2 small mb-1">
+                                                                        <span className="text-muted" style={{ minWidth: "110px" }}>Target Platform:</span>
+                                                                        <span className="font-monospace text-break">{targetPlatformUrl}</span>
+                                                                    </div>
+                                                                )}
                                                                 {rs.pairResult?.businessKey && (
                                                                     <div className="d-flex align-items-center gap-2 small">
                                                                         <span className="text-muted" style={{ minWidth: "110px" }}>Business Key:</span>
@@ -369,6 +389,16 @@ const LaunchProjectListPage = () => {
                                                                 >
                                                                     Open Cockpit ↗
                                                                 </Button>
+                                                                {targetPlatformUrl && (
+                                                                    <Button
+                                                                        size="sm"
+                                                                        variant="outline-primary"
+                                                                        className="ms-2"
+                                                                        onClick={() => handleOpenTargetPlatform(row)}
+                                                                    >
+                                                                        Go to Target Platform ↗
+                                                                    </Button>
+                                                                )}
                                                             </div>
                                                         </div>
                                                         {rs.pairWarning && (
