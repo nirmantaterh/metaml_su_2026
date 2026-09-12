@@ -1783,11 +1783,15 @@ public class SpringBootProjectGenerator {
                         Integer currentRetries = task.getRetries();
                         int remaining = (currentRetries == null ? maxRetries : currentRetries) - 1;
                         if (remaining > 0) {
-                            logger.warn("Worker {} failed on task {} ({} retries remaining): {}",
-                                    worker.topic(), task.getId(), remaining, e.getMessage(), e);
+                            logger.warn("TECHNICAL_TASK_FAILURE: topic={} activityId={} taskId={} processInstanceId={} "
+                                            + "businessKey={} retriesRemaining={} exception={}", worker.topic(),
+                                    task.getActivityId(), task.getId(), task.getProcessInstanceId(),
+                                    task.getBusinessKey(), remaining, e.getMessage(), e);
                         } else {
-                            logger.error("Worker {} failed on task {} - no retries remaining, task now has an "
-                                    + "incident: {}", worker.topic(), task.getId(), e.getMessage(), e);
+                            logger.error("TECHNICAL_TASK_FAILURE: topic={} activityId={} taskId={} processInstanceId={} "
+                                            + "businessKey={} retriesRemaining=0 incident=true exception={}",
+                                    worker.topic(), task.getActivityId(), task.getId(), task.getProcessInstanceId(),
+                                    task.getBusinessKey(), e.getMessage(), e);
                         }
                         externalTaskService.handleFailure(task.getId(), WORKER_ID, e.getMessage(),
                                 Math.max(remaining, 0), RETRY_BACKOFF_MS);

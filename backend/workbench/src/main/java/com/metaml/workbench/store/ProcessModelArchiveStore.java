@@ -75,6 +75,7 @@ public class ProcessModelArchiveStore {
     }
 
     // Unlike findAll() above, keeps the project association - toProcessModel() has to drop it (ProcessModel has no notion of a project), but the Transmute > Generate / Launch pickers need exactly that to show which project each row belongs to, so this reads straight off the archive instead of round-tripping through ProcessModel.
+    @Transactional(readOnly = true)
     public List<ProcessModelSummaryDto> findAllSummaries() {
         return archiveRepository.findAll().stream()
                 .sorted(Comparator.comparing(ProcessModelArchive::getCreatedAt,

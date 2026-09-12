@@ -279,7 +279,7 @@ public class SpringBootProjectLauncher {
         // Maven executable. Only this path needs the explicit build step below; wrapper-based templates
         // compile as part of spring-boot:run's own lifecycle.
         if (!hasWrapper) {
-            runMavenInstall(projectDir);
+            runMavenPackage(projectDir);
         }
         List<String> command = hasWrapper
                 ? (windows ? List.of("cmd.exe", "/c", wrapper, "spring-boot:run")
@@ -307,9 +307,12 @@ public class SpringBootProjectLauncher {
     // surfacing later as an opaque "never started listening on port N".
     private static final Duration BUILD_TIMEOUT = Duration.ofMinutes(5);
 
-    private void runMavenInstall(Path projectDir) {
+    private void runMavenPackage(Path projectDir) {
         Path buildLog = projectDir.resolve("build.log");
-        List<String> command = List.of(mavenExecutable(), "clean", "install", "-DskipTests");
+        // The generated application is launched directly below; no other build needs this temporary
+        // artifact in the local Maven repository. Packaging still compiles and repackages the exact
+        // runnable application while avoiding an unnecessary shared-repository write.
+        List<String> command = List.of(mavenExecutable(), "clean", "package", "-DskipTests");
         Process build;
         try {
             build = new ProcessBuilder(command)
@@ -318,7 +321,7 @@ public class SpringBootProjectLauncher {
                     .redirectErrorStream(true)
                     .start();
         } catch (IOException e) {
-            throw new UncheckedIOException("Could not run 'mvn clean install -DskipTests' for "
+            throw new UncheckedIOException("Could not run 'mvn clean package -DskipTests' for "
                     + projectDir.toAbsolutePath(), e);
         }
         boolean finished;
@@ -327,20 +330,20 @@ public class SpringBootProjectLauncher {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             build.destroyForcibly();
-            throw new IllegalStateException("Interrupted while running 'mvn clean install -DskipTests' for "
+            throw new IllegalStateException("Interrupted while running 'mvn clean package -DskipTests' for "
                     + projectDir.toAbsolutePath());
         }
         if (!finished) {
             build.destroyForcibly();
-            throw new IllegalStateException("'mvn clean install -DskipTests' did not finish within "
+            throw new IllegalStateException("'mvn clean package -DskipTests' did not finish within "
                     + BUILD_TIMEOUT.toSeconds() + "s for " + projectDir.toAbsolutePath() + " - check "
                     + buildLog.toAbsolutePath());
         }
         if (build.exitValue() != 0) {
-            throw new IllegalStateException("'mvn clean install -DskipTests' failed (exit " + build.exitValue()
+            throw new IllegalStateException("'mvn clean package -DskipTests' failed (exit " + build.exitValue()
                     + ") for " + projectDir.toAbsolutePath() + " - check " + buildLog.toAbsolutePath());
         }
-        logger.info("'mvn clean install -DskipTests' finished for {}", projectDir.toAbsolutePath());
+        logger.info("'mvn clean package -DskipTests' finished for {}", projectDir.toAbsolutePath());
     }
 
     // An app launched from an IDE/service frequently inherits a much shorter PATH than an interactive terminal.  Resolve the standard Maven locations before falling back to PATH so a RedCollar-derived template without mvnw still launches on macOS/Homebrew and Linux.

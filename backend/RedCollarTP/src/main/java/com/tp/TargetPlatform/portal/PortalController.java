@@ -49,6 +49,21 @@ public class PortalController {
         return runtime.instances();
     }
 
+    @GetMapping("/providers/technical-modes")
+    public List<Map<String, Object>> providerTechnicalModes() {
+        return runtime.providerTechnicalModes();
+    }
+
+    @PostMapping("/providers/{providerIdentity}/technical-mode")
+    public ResponseEntity<Map<String, Object>> setProviderTechnicalMode(@PathVariable String providerIdentity,
+            @RequestBody Map<String, String> body) {
+        try {
+            return ResponseEntity.ok(runtime.setProviderTechnicalMode(providerIdentity, body.get("technicalMode")));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
     @GetMapping("/tasks")
     public List<Map<String, Object>> tasks() {
         return runtime.tasks();

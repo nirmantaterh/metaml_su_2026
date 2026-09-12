@@ -64,6 +64,8 @@ public class RuntimeEventLog {
     private static final Pattern PROTOCOL_MESSAGE = Pattern.compile(
             "^(TASK|RESPONSE|REQUEST|DELIVERED): .*?signal '([^']+)'.*?execution (\\S+) "
                     + "\\(processInstanceId=([^,]*), businessKey=([^)]*)\\)");
+    private static final Pattern PROCESS_INSTANCE_ID = Pattern.compile("\\bprocessInstanceId=([^\\s,)]+)");
+    private static final Pattern BUSINESS_KEY = Pattern.compile("\\bbusinessKey=([^\\s,)]+)");
 
     private final Deque<Entry> entries = new ConcurrentLinkedDeque<>();
     private final AtomicLong sequence = new AtomicLong();
@@ -132,6 +134,15 @@ public class RuntimeEventLog {
             // labels processInstanceId=/businessKey=.
             processInstanceId = protocolMatch.group(4);
             businessKey = protocolMatch.group(5);
+        } else if (message != null) {
+            Matcher processMatch = PROCESS_INSTANCE_ID.matcher(message);
+            if (processMatch.find()) {
+                processInstanceId = processMatch.group(1);
+            }
+            Matcher businessKeyMatch = BUSINESS_KEY.matcher(message);
+            if (businessKeyMatch.find()) {
+                businessKey = businessKeyMatch.group(1);
+            }
         }
         String side = sideOf(kind, message);
         return new Entry(seq, TIME.format(Instant.ofEpochMilli(epochMillis)), epochMillis, level,
@@ -172,12 +183,9 @@ public class RuntimeEventLog {
     // from business content:
     //  - a DELEGATE or LISTENER line's very first word is literally "PROXY" or "TWIN" (see
     //    TargetPlatformSourceGenerator's own label construction: side = twin ? "TWIN" : "PROXY").
-    //  - a CAPABILITY line is architecturally always TWIN-side: CapabilityDispatcher.dispatch() is
-    //    invoked only from a generated Twin external-task worker (see ExternalTaskWorkerGenerator's
-    //    renderTwinWorkerSource - the plain proxy worker never references it).
-    //  - a TASK/RESPONSE/SIGNAL line reports a specific processInstanceId (see the Entry field of the
-    //    same name); which pair member that belongs to is for the caller to resolve by matching it
-    //    against a known pair, not for this class to assume.
+    //  - any line without an explicit generated PROXY/TWIN label that reports a processInstanceId,
+    //    including CAPABILITY and worker-failure lines, is left unresolved here. The portal maps the
+    //    id against its selected pair; an unpaired id remains neutral rather than being guessed.
     private static String sideOf(String kind, String message) {
         // classify() puts both delegate and listener lines under "DELEGATE" - both label formats
         // start with the same PROXY/TWIN side word, so one check covers both.
@@ -185,10 +193,7 @@ public class RuntimeEventLog {
             if (message.startsWith("PROXY")) return "PROXY";
             if (message.startsWith("TWIN")) return "TWIN";
         }
-        if ("CAPABILITY".equals(kind)) {
-            return "TWIN";
-        }
-        if ("TASK".equals(kind) || "RESPONSE".equals(kind) || "SIGNAL".equals(kind)) {
+        if (message != null && message.contains("processInstanceId=")) {
             return null;
         }
         return "SYSTEM";

@@ -41,6 +41,8 @@ import org.springframework.stereotype.Service;
 
 import com.metaml.workbench.automation.ComponentExecutor;
 import com.metaml.workbench.capability.runtime.CapabilityResponseSequences;
+import com.tp.TargetPlatform.capability.ProviderTechnicalMode;
+import com.tp.TargetPlatform.capability.ProviderTechnicalModeRegistry;
 
 // Assembles the portal's views straight out of the engine this JVM is running: RepositoryService for
 // what is deployed, RuntimeService/HistoryService for where each instance actually is, TaskService for
@@ -69,6 +71,7 @@ public class PortalRuntimeService {
     private final ObjectProvider<ConnectionFactory> rabbitConnectionFactory;
     private final RunExecutionGate executionGate;
     private final RuntimeEventLog eventLog;
+    private final ProviderTechnicalModeRegistry providerTechnicalModes;
     private final long startedAt = System.currentTimeMillis();
 
     public PortalRuntimeService(RepositoryService repositoryService, RuntimeService runtimeService,
@@ -76,6 +79,7 @@ public class PortalRuntimeService {
             List<ComponentExecutor> componentExecutors,
             ObjectProvider<ConnectionFactory> rabbitConnectionFactory,
             RunExecutionGate executionGate, RuntimeEventLog eventLog,
+            ProviderTechnicalModeRegistry providerTechnicalModes,
             @Value("${metaml.messaging.enabled:false}") String messagingEnabled,
             @Value("${spring.rabbitmq.host:localhost}") String rabbitHost,
             @Value("${spring.rabbitmq.port:5672}") String rabbitPort,
@@ -89,6 +93,7 @@ public class PortalRuntimeService {
         this.rabbitConnectionFactory = rabbitConnectionFactory;
         this.executionGate = executionGate;
         this.eventLog = eventLog;
+        this.providerTechnicalModes = providerTechnicalModes;
         this.messagingEnabled = messagingEnabled;
         this.rabbitHost = rabbitHost;
         this.rabbitPort = rabbitPort;
@@ -103,6 +108,39 @@ public class PortalRuntimeService {
     public Map<String, Object> nextStep(String businessKey) {
         executionGate.releaseNext(businessKey);
         return executionState(businessKey);
+    }
+
+    /** Available provider identities and their runtime-only technical mode. */
+    public List<Map<String, Object>> providerTechnicalModes() {
+        return providerIdentities().stream().map(identity -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("providerIdentity", identity);
+            row.put("technicalMode", providerTechnicalModes.modeOf(identity).name());
+            return row;
+        }).toList();
+    }
+
+    public Map<String, Object> setProviderTechnicalMode(String providerIdentity, String requestedMode) {
+        String identity = providerIdentities().stream()
+                .filter(candidate -> candidate.equalsIgnoreCase(providerIdentity == null ? "" : providerIdentity.trim()))
+                .findFirst().orElseThrow(() -> new IllegalArgumentException("Unknown provider identity: " + providerIdentity));
+        ProviderTechnicalMode mode;
+        try {
+            mode = ProviderTechnicalMode.valueOf(requestedMode == null ? "" : requestedMode.trim().toUpperCase());
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("Unsupported technical mode: " + requestedMode);
+        }
+        providerTechnicalModes.setMode(identity, mode);
+        return Map.of("providerIdentity", identity, "technicalMode", mode.name());
+    }
+
+    private List<String> providerIdentities() {
+        return componentExecutors.stream().flatMap(executor -> {
+            Set<String> identities = new LinkedHashSet<>();
+            identities.add(executor.getHandledAgentType());
+            identities.addAll(executor.getHandledAgentNames());
+            return identities.stream();
+        }).filter(identity -> identity != null && !identity.isBlank()).sorted().toList();
     }
 
     public Map<String, Object> executionState(String businessKey) {

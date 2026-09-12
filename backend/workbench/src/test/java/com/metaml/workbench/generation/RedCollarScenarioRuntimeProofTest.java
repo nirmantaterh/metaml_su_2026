@@ -96,6 +96,59 @@ class RedCollarScenarioRuntimeProofTest {
                     .contains("\"activityId\":\"" + CHECKING + "\"")
                     .contains("\"originalState\":\"COMPLETED\"");
             assertRabbitMqRoundTrip(http, base, rework.businessKey());
+
+            // A technical provider failure is distinct from the valid false outputs in the rework
+            // run above: the provider throws before it returns an output, so the existing poller
+            // exhausts its unchanged retry budget and Camunda retains a real incident.
+            setTechnicalMode(http, base, "quality-check", "TECHNICAL_FAILURE");
+            assertThat(get(http, base + "/api/portal/providers/technical-modes"))
+                    .contains("\"providerIdentity\":\"quality-check\"")
+                    .contains("\"technicalMode\":\"TECHNICAL_FAILURE\"");
+            Run failed = startConfiguredRun(http, base, "technical-failure", "{\"order-approval\":[{\"orderApproved\":true}],"
+                    + "\"quality-check\":[{\"qualityPassed\":true}]}");
+            System.out.printf("FAILED RUN businessKey=%s original=%s twin=%s%n", failed.businessKey(),
+                    failed.originalId(), failed.twinId());
+            FailedInvocation failedInvocation = awaitIncidentOwner(http, base, failed, Duration.ofSeconds(60));
+            System.out.printf("FAILED INCIDENT side=%s processInstanceId=%s%n", failedInvocation.side(),
+                    failedInvocation.processInstanceId());
+            String failedLog = get(http, base + "/api/portal/logs?limit=400&kinds=CAPABILITY,ERROR");
+            assertThat(failedLog).contains("CAPABILITY TECHNICAL_FAILURE:")
+                    .contains("processInstanceId=" + failedInvocation.processInstanceId())
+                    .contains("businessKey=" + failed.businessKey())
+                    .contains("providerIdentity=quality-check");
+            assertThat(failedLog).contains("\"processInstanceId\":\"" + failedInvocation.processInstanceId() + "\"");
+            assertTechnicalFailureRetries(failedLog, failedInvocation.processInstanceId(), "quality-check", 3);
+            assertNoProviderCompletion(failedLog, failedInvocation.processInstanceId(), "quality-check");
+            String failedLockstep = lockstep(http, base, failed.businessKey());
+            assertThat(failedLockstep)
+                    .contains("\"processInstanceId\":\"" + failed.originalId() + "\"")
+                    .contains("\"processInstanceId\":\"" + failed.twinId() + "\"");
+            assertThat(failedLockstep).contains("\"" + failedInvocation.side().toLowerCase() + "State\":\"INCIDENT\"");
+
+            // Recovery changes only the runtime technical mode. The binding and BPMN are unchanged;
+            // a fresh business key creates a separate run while the incident remains queryable.
+            setTechnicalMode(http, base, "quality-check", "NORMAL");
+            assertThat(get(http, base + "/api/portal/providers/technical-modes"))
+                    .contains("\"providerIdentity\":\"quality-check\"")
+                    .contains("\"technicalMode\":\"NORMAL\"");
+            Run recovered = startConfiguredRun(http, base, "technical-recovery", "{\"order-approval\":[{\"orderApproved\":true}],"
+                    + "\"quality-check\":[{\"qualityPassed\":true}]}");
+            System.out.printf("RECOVERED RUN businessKey=%s original=%s twin=%s%n", recovered.businessKey(),
+                    recovered.originalId(), recovered.twinId());
+            awaitComplete(http, base, recovered, Duration.ofSeconds(150));
+            assertRunHealthy(http, base, recovered);
+            assertProviderOutput(get(http, base + "/api/portal/logs?limit=400&kinds=CAPABILITY,ERROR"),
+                    recovered.originalId(), "quality-check", "qualityPassed=true", 1);
+            assertProviderOutput(get(http, base + "/api/portal/logs?limit=400&kinds=CAPABILITY,ERROR"),
+                    recovered.twinId(), "quality-check", "qualityPassed=true", 1);
+            assertThat(get(http, base + "/api/portal/runs/" + recovered.businessKey() + "/execution"))
+                    .contains("\"providersUsed\"")
+                    .contains("quality-check");
+            assertThat(get(http, base + "/api/v1/process/" + failedInvocation.processInstanceId() + "/incidents/count"))
+                    .contains("\"incidentCount\":1");
+            assertThat(lockstep(http, base, failed.businessKey()))
+                    .contains("\"processInstanceId\":\"" + failedInvocation.processInstanceId() + "\"")
+                    .contains("\"" + failedInvocation.side().toLowerCase() + "State\":\"INCIDENT\"");
         } finally {
             launcher.stop(project.projectId());
         }
@@ -146,6 +199,52 @@ class RedCollarScenarioRuntimeProofTest {
                 .isGreaterThanOrEqualTo(atLeast);
     }
 
+    private static void assertNoProviderCompletion(String log, String processId, String provider) {
+        assertThat(Pattern.compile("CAPABILITY COMPLETE:[^\"]*?processInstanceId=" + Pattern.quote(processId)
+                + "[^\"]*?providerIdentity=" + Pattern.quote(provider)).matcher(log).find()).isFalse();
+    }
+
+    private static void assertProviderOutput(String log, String processId, String provider,
+            String output, int atLeast) {
+        int matches = Pattern.compile("CAPABILITY COMPLETE:[^\"]*?processInstanceId=" + Pattern.quote(processId)
+                + "[^\"]*?providerIdentity=" + Pattern.quote(provider) + "[^\"]*?" + Pattern.quote(output))
+                .matcher(log).results().toList().size();
+        assertThat(matches).as("provider %s output %s on process %s", provider, output, processId)
+                .isGreaterThanOrEqualTo(atLeast);
+    }
+
+    private static void assertTechnicalFailureRetries(String log, String processId, String provider, int atLeast) {
+        int matches = Pattern.compile("CAPABILITY TECHNICAL_FAILURE:[^\"]*?processInstanceId=" + Pattern.quote(processId)
+                + "[^\"]*?providerIdentity=" + Pattern.quote(provider)).matcher(log).results().toList().size();
+        assertThat(matches).as("technical failure retries for provider %s on process %s", provider, processId)
+                .isGreaterThanOrEqualTo(atLeast);
+    }
+
+    private static void setTechnicalMode(HttpClient http, String base, String providerIdentity, String mode)
+            throws Exception {
+        String response = post(http, base + "/api/portal/providers/" + providerIdentity + "/technical-mode",
+                "{\"technicalMode\":\"" + mode + "\"}");
+        assertThat(response).contains("\"providerIdentity\":\"" + providerIdentity + "\"")
+                .contains("\"technicalMode\":\"" + mode + "\"");
+    }
+
+    private static FailedInvocation awaitIncidentOwner(HttpClient http, String base, Run run, Duration timeout)
+            throws Exception {
+        Instant deadline = Instant.now().plus(timeout);
+        while (Instant.now().isBefore(deadline)) {
+            if (get(http, base + "/api/v1/process/" + run.originalId() + "/incidents/count")
+                    .contains("\"incidentCount\":1")) {
+                return new FailedInvocation("ORIGINAL", run.originalId());
+            }
+            if (get(http, base + "/api/v1/process/" + run.twinId() + "/incidents/count")
+                    .contains("\"incidentCount\":1")) {
+                return new FailedInvocation("TWIN", run.twinId());
+            }
+            Thread.sleep(1000);
+        }
+        throw new AssertionError("no process in run reached a Camunda incident: " + run.businessKey());
+    }
+
     private static void assertRabbitMqRoundTrip(HttpClient http, String base, String businessKey) throws Exception {
         String messages = get(http, base + "/api/portal/messages?limit=1000");
         assertThat(messages).contains("\"businessKey\":\"" + businessKey + "\"")
@@ -194,4 +293,6 @@ class RedCollarScenarioRuntimeProofTest {
     }
 
     private record Run(String businessKey, String originalId, String twinId) { }
+
+    private record FailedInvocation(String side, String processInstanceId) { }
 }

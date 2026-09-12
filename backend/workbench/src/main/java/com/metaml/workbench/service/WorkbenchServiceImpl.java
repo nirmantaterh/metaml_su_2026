@@ -225,10 +225,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         }
         for (ProcessModel model : processModels.values()) {
             WorkflowState state = workflowStateTracker.stateFor(model.getId());
-            String projectId = currentProjectIdOf(state);
-            // Only associate when the project directory exists on disk.
-            if (projectId != null && generatedProjects.containsKey(projectId)) {
-                modelIdByProjectId.put(projectId, model.getId());
+            for (String projectId : allGeneratedProjectIdsOf(state)) {
+                // Only associate when the project directory exists on disk.
+                if (projectId != null && generatedProjects.containsKey(projectId)) {
+                    modelIdByProjectId.put(projectId, model.getId());
+                }
             }
             if (aRecordedLaunchPortIsStillListening(state)) {
                 logger.warn("Skipping generated-project cleanup for model {} on startup - a port it previously "

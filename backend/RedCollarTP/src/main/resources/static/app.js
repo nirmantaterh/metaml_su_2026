@@ -489,11 +489,10 @@ async function renderRuntime() {
   const originalPid = d ? d.original.processInstanceId : null;
   const twinPid = d ? d.twin.processInstanceId : null;
 
-  // SIDE resolution: an entry either already carries its side (DELEGATE/CAPABILITY, from the
-  // generated code's own PROXY/TWIN labeling), or - for TASK/RESPONSE/SIGNAL - is resolved by
-  // matching its processInstanceId against the currently selected pair. SYSTEM (platform-level, no
-  // side) and anything that resolves to neither pair member go to the neutral panel below, never
-  // into a column that would misattribute them to Original or Twin.
+  // SIDE resolution: an entry may carry an explicit generated PROXY/TWIN label, otherwise its
+  // processInstanceId is matched against the selected pair. That covers capability and worker-
+  // failure records without assuming which side invoked a provider. SYSTEM (platform-level, no
+  // process id) and anything unpaired stay neutral rather than being misattributed.
   const left = [], right = [];
   let otherCount = 0;
   for (const e of logs) {
@@ -536,6 +535,34 @@ async function renderSystem() {
   $('sysProviders').innerHTML = (o.capabilityProviders || []).length
     ? o.capabilityProviders.map(p => '<span class="providerChip">' + esc(p) + '</span>').join('')
     : '<span class="hint">No capability provider is on this application’s classpath.</span>';
+
+  const modes = await getJson('/api/portal/providers/technical-modes');
+  $('sysProviderModes').innerHTML = modes.length
+    ? modes.map(p => {
+        const failing = p.technicalMode === 'TECHNICAL_FAILURE';
+        return '<div class="providerMode"><span class="identity">' + esc(p.providerIdentity) + '</span>' +
+          '<span class="mode ' + (failing ? 'failure' : '') + '">' + esc(p.technicalMode) + '</span>' +
+          '<button class="btn secondary small" data-provider-identity="' + esc(p.providerIdentity) + '" ' +
+          'data-technical-mode="' + (failing ? 'NORMAL' : 'TECHNICAL_FAILURE') + '">' +
+          (failing ? 'Restore Provider' : 'Simulate Technical Failure') + '</button></div>';
+      }).join('')
+    : '';
+  document.querySelectorAll('[data-provider-identity]').forEach(button => button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      const identity = button.dataset.providerIdentity;
+      const mode = button.dataset.technicalMode;
+      const response = await fetch('/api/portal/providers/' + encodeURIComponent(identity) + '/technical-mode', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ technicalMode: mode })
+      });
+      if (!response.ok) throw new Error('technical mode update -> HTTP ' + response.status);
+      await tick();
+    } catch (e) {
+      console.error(e);
+      button.disabled = false;
+    }
+  }));
 
   $('sysPlatform').innerHTML = [
     ['RabbitMQ', o.rabbitMq + (o.rabbitConnected ? ' (connected)' : ' (unreachable)')],

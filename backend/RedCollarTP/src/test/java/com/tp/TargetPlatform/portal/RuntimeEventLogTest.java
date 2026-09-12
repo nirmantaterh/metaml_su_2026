@@ -64,18 +64,32 @@ class RuntimeEventLogTest {
     }
 
     @Test
-    void aCapabilityLineIsAlwaysTwinSide() {
+    void aCapabilityLineExposesItsProcessIdentityWithoutGuessingASide() {
         RuntimeEventLog.Entry entry = RuntimeEventLog.buildEntry(5, 5000L, "INFO", "com.tp.TargetPlatform.x",
-                "CAPABILITY DISPATCH: activity=StepOne processInstanceId=PID providerIdentity=validator "
-                        + "executor=ValidatorExecutor contract=none");
+                "CAPABILITY DISPATCH: activity=StepOne processInstanceId=PID-ORIGINAL businessKey=run-42 "
+                        + "providerIdentity=validator executor=ValidatorExecutor contract=none");
 
         assertThat(entry.kind()).isEqualTo("CAPABILITY");
-        assertThat(entry.side()).isEqualTo("TWIN");
+        assertThat(entry.processInstanceId()).isEqualTo("PID-ORIGINAL");
+        assertThat(entry.businessKey()).isEqualTo("run-42");
+        assertThat(entry.side()).isNull();
+    }
+
+    @Test
+    void anUnpairedCapabilityLineRemainsNeutral() {
+        RuntimeEventLog.Entry entry = RuntimeEventLog.buildEntry(6, 6000L, "ERROR", "com.tp.TargetPlatform.x",
+                "CAPABILITY TECHNICAL_FAILURE: activity=StepOne processInstanceId=PID-UNKNOWN "
+                        + "businessKey=run-unknown providerIdentity=validator exception=boom");
+
+        assertThat(entry.kind()).isEqualTo("ERROR");
+        assertThat(entry.processInstanceId()).isEqualTo("PID-UNKNOWN");
+        assertThat(entry.businessKey()).isEqualTo("run-unknown");
+        assertThat(entry.side()).isNull();
     }
 
     @Test
     void anUnstructuredLogLineIsClassifiedSystemSideWithNoProtocolFields() {
-        RuntimeEventLog.Entry entry = RuntimeEventLog.buildEntry(6, 6000L, "INFO", "com.tp.TargetPlatform.x",
+        RuntimeEventLog.Entry entry = RuntimeEventLog.buildEntry(7, 7000L, "INFO", "com.tp.TargetPlatform.x",
                 "some unrelated platform log line");
 
         assertThat(entry.kind()).isEqualTo("LOG");
@@ -87,7 +101,7 @@ class RuntimeEventLogTest {
 
     @Test
     void anErrorLevelLineIsClassifiedErrorRegardlessOfWording() {
-        RuntimeEventLog.Entry entry = RuntimeEventLog.buildEntry(7, 7000L, "ERROR", "com.tp.TargetPlatform.x",
+        RuntimeEventLog.Entry entry = RuntimeEventLog.buildEntry(8, 8000L, "ERROR", "com.tp.TargetPlatform.x",
                 "TASK: publish NOT confirmed for signal 'sync_StepOne' execution EXEC-1 "
                         + "(processInstanceId=PID, businessKey=run-42): boom");
 

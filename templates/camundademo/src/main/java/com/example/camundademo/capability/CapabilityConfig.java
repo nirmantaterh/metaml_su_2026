@@ -62,8 +62,12 @@ public class CapabilityConfig {
     @Bean
     public CapabilityDispatcher capabilityDispatcher(List<ComponentExecutor> executors,
             ObjectProvider<CapabilityOutputContractSource> contractSource,
-            RepositoryService repositoryService, CapabilityBindingCache capabilityBindingCache) {
+            RepositoryService repositoryService, CapabilityBindingCache capabilityBindingCache,
+            ProviderTechnicalModeRegistry providerTechnicalModes) {
         CapabilityOutputContractSource resolvedContractSource = contractSource.getIfAvailable();
+        List<ComponentExecutor> failureModeExecutors = executors.stream()
+                .<ComponentExecutor>map(executor -> new FailureModeComponentExecutor(executor, providerTechnicalModes))
+                .toList();
         // Logged into this application's OWN log, because "the providers were on the classpath" and
         // "the dispatcher can actually resolve one" are different claims, and only the second is
         // worth anything at runtime. Identities come from the providers themselves, never from a
@@ -73,6 +77,7 @@ public class CapabilityConfig {
                 executors.stream().map(ComponentExecutor::getHandledAgentType).sorted().toList(),
                 resolvedContractSource == null ? "none - no contract enforced until a binding supplies one"
                         : resolvedContractSource.getClass().getSimpleName());
-        return new CapabilityDispatcher(executors, resolvedContractSource, repositoryService, capabilityBindingCache);
+        return new CapabilityDispatcher(failureModeExecutors, resolvedContractSource, repositoryService,
+                capabilityBindingCache);
     }
 }

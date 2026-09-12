@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.camunda.bpm.engine.HistoryService;
 import org.camunda.bpm.engine.RepositoryService;
@@ -15,6 +16,9 @@ import org.camunda.bpm.model.bpmn.BpmnModelInstance;
 import org.camunda.bpm.model.bpmn.instance.FlowNode;
 
 import com.example.camundademo.coordination.PairRegistry;
+import com.example.camundademo.capability.ProviderTechnicalMode;
+import com.example.camundademo.capability.ProviderTechnicalModeRegistry;
+import com.metaml.workbench.automation.ComponentExecutor;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
@@ -34,15 +38,20 @@ public class GeneratedPlatformInfoController {
     private final RuntimeService runtimeService;
     private final HistoryService historyService;
     private final PairRegistry pairRegistry;
+    private final List<ComponentExecutor> componentExecutors;
+    private final ProviderTechnicalModeRegistry providerTechnicalModes;
     private final boolean messagingEnabled;
 
     public GeneratedPlatformInfoController(RepositoryService repositoryService, RuntimeService runtimeService,
-            HistoryService historyService, PairRegistry pairRegistry,
+            HistoryService historyService, PairRegistry pairRegistry, List<ComponentExecutor> componentExecutors,
+            ProviderTechnicalModeRegistry providerTechnicalModes,
             @Value("${metaml.messaging.enabled:false}") boolean messagingEnabled) {
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
         this.historyService = historyService;
         this.pairRegistry = pairRegistry;
+        this.componentExecutors = componentExecutors;
+        this.providerTechnicalModes = providerTechnicalModes;
         this.messagingEnabled = messagingEnabled;
     }
 
@@ -89,6 +98,47 @@ public class GeneratedPlatformInfoController {
             result.add(entry);
         }
         return ResponseEntity.ok(result);
+    }
+
+    /** Available provider identities and their runtime-only technical mode. */
+    @GetMapping("/providers/technical-modes")
+    public ResponseEntity<List<Map<String, Object>>> providerTechnicalModes() {
+        List<Map<String, Object>> rows = providerIdentities().stream().map(identity -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("providerIdentity", identity);
+            row.put("technicalMode", providerTechnicalModes.modeOf(identity).name());
+            return row;
+        }).toList();
+        return ResponseEntity.ok(rows);
+    }
+
+    @PostMapping("/providers/{providerIdentity}/technical-mode")
+    public ResponseEntity<Map<String, Object>> setProviderTechnicalMode(@PathVariable String providerIdentity,
+            @RequestBody Map<String, String> body) {
+        String identity = providerIdentities().stream()
+                .filter(candidate -> candidate.equalsIgnoreCase(providerIdentity == null ? "" : providerIdentity.trim()))
+                .findFirst().orElse(null);
+        if (identity == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Unknown provider identity: " + providerIdentity));
+        }
+        try {
+            ProviderTechnicalMode mode = ProviderTechnicalMode.valueOf(
+                    body == null || body.get("technicalMode") == null ? "" : body.get("technicalMode").trim().toUpperCase());
+            providerTechnicalModes.setMode(identity, mode);
+            return ResponseEntity.ok(Map.of("providerIdentity", identity, "technicalMode", mode.name()));
+        } catch (IllegalArgumentException invalid) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Unsupported technical mode: "
+                    + (body == null ? null : body.get("technicalMode"))));
+        }
+    }
+
+    private List<String> providerIdentities() {
+        return componentExecutors.stream().flatMap(executor -> {
+            Set<String> identities = new java.util.LinkedHashSet<>();
+            identities.add(executor.getHandledAgentType());
+            identities.addAll(executor.getHandledAgentNames());
+            return identities.stream();
+        }).filter(identity -> identity != null && !identity.isBlank()).sorted().toList();
     }
 
     // Generic instance-start with caller-supplied business data (e.g. an order id/number) - each process's own actual BPMN-declared variable names, not any fixed schema. Every deployed generated controller's own /start endpoint only takes a business key (see GeneratedManufacturingController/GeneratedTwinController), and this template does not mount Camunda's own REST API - this is the smallest generic addition needed to demonstrate that business data supplied at start really does flow through to the runtime the dashboard reads from, for any process key this application has deployed, not just one.

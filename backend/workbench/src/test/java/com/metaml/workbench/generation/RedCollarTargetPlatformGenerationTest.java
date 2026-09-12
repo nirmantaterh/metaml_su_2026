@@ -76,19 +76,28 @@ class RedCollarTargetPlatformGenerationTest {
         assertThat(tpRoot.resolve("portal/PortalRuntimeService.java")).exists();
         assertThat(tpRoot.resolve("portal/RunExecutionGate.java")).exists();
         assertThat(tpRoot.resolve("portal/StandaloneCapabilityResolver.java")).exists();
+        assertThat(tpRoot.resolve("capability/ProviderTechnicalModeRegistry.java")).exists();
+        assertThat(tpRoot.resolve("capability/FailureModeComponentExecutor.java")).exists();
         assertThat(Files.readString(tpRoot.resolve("portal/PortalController.java")))
-                .contains("/runs/{businessKey}/capability-responses");
+                .contains("/runs/{businessKey}/capability-responses")
+                .contains("/providers/{providerIdentity}/technical-mode");
         assertThat(Files.readString(tpRoot.resolve("portal/PortalRuntimeService.java")))
                 .contains("configureCapabilityResponses")
-                .contains("CapabilityResponseSequences.CONFIG_VARIABLE");
+                .contains("CapabilityResponseSequences.CONFIG_VARIABLE")
+                .contains("providerTechnicalModes");
+        assertThat(Files.readString(tpRoot.resolve("capability/CapabilityConfig.java")))
+                .contains("FailureModeComponentExecutor")
+                .contains("ProviderTechnicalModeRegistry");
         Path staticRoot = project.directory().resolve("src/main/resources/static");
         assertThat(Files.readString(staticRoot.resolve("app.js")))
                 .contains("SCENARIO_PRESETS")
                 .contains("capability-responses")
-                .contains("Order Requires Editing");
+                .contains("Order Requires Editing")
+                .contains("technical-mode");
         assertThat(Files.readString(staticRoot.resolve("index.html")))
                 .contains("scenarioPreset")
-                .contains("configuredScenario");
+                .contains("configuredScenario")
+                .contains("sysProviderModes");
 
         // 3. Verify External Task Workers (Proxy & Twin)
         assertThat(tpRoot.resolve("worker/proxy/CuttingWorker.java")).exists();

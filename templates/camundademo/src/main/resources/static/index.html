@@ -92,6 +92,12 @@
   .refresh-note { font-size: 11px; color: var(--text-dim); }
   .activity-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
   .activity-tag { font-size: 10px; background: rgba(139,123,255,0.12); color: var(--text-dim); border-radius: 4px; padding: 2px 6px; }
+  .provider-mode { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--panel-border); }
+  .provider-mode:last-child { border-bottom:0; }
+  .provider-mode .identity { flex:1; font-family:ui-monospace, Menlo, monospace; font-size:12px; }
+  .mode { font-size:11px; color:var(--ok); font-weight:600; }
+  .mode.failure { color:var(--warn); }
+  .provider-mode button { background:transparent; border:1px solid var(--accent); color:var(--text); border-radius:6px; padding:6px 9px; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -112,6 +118,12 @@
     </div>
 
     <div class="cards-row" id="stat-cards"></div>
+
+    <div class="panel">
+      <h2>Capability Providers</h2>
+      <p class="refresh-note">Technical simulation changes provider availability only; it never sets BPMN business results.</p>
+      <div id="provider-modes"><div class="empty">Loading&hellip;</div></div>
+    </div>
 
     <div class="panel">
       <h2>Recent Runtime Activity</h2>
@@ -251,6 +263,33 @@
     });
   }
 
+  function renderProviderModes(modes) {
+    var host = document.getElementById("provider-modes");
+    if (!modes || modes.length === 0) {
+      host.innerHTML = '<div class="empty">No capability provider is on this application\'s classpath.</div>';
+      return;
+    }
+    host.innerHTML = modes.map(function (provider) {
+      var failing = provider.technicalMode === "TECHNICAL_FAILURE";
+      return '<div class="provider-mode"><span class="identity">' + escapeHtml(provider.providerIdentity) + '</span>' +
+        '<span class="mode ' + (failing ? 'failure' : '') + '">' + escapeHtml(provider.technicalMode) + '</span>' +
+        '<button data-provider-identity="' + escapeHtml(provider.providerIdentity) + '" data-technical-mode="' +
+          (failing ? 'NORMAL' : 'TECHNICAL_FAILURE') + '">' +
+          (failing ? 'Restore Provider' : 'Simulate Technical Failure') + '</button></div>';
+    }).join("");
+    Array.prototype.forEach.call(host.querySelectorAll("button[data-provider-identity]"), function (button) {
+      button.addEventListener("click", function () {
+        button.disabled = true;
+        fetch("/api/v1/platform/providers/" + encodeURIComponent(button.getAttribute("data-provider-identity")) +
+          "/technical-mode", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ technicalMode: button.getAttribute("data-technical-mode") }) })
+          .then(function (response) { if (!response.ok) throw new Error("technical mode update failed"); return response.json(); })
+          .then(function () { refresh(); })
+          .catch(function () { button.disabled = false; });
+      });
+    });
+  }
+
   function refresh() {
     fetch("/api/v1/platform/info").then(function (r) { return r.json(); }).then(renderProcesses)
       .catch(function () {
@@ -259,6 +298,10 @@
     fetch("/api/v1/platform/recent-instances").then(function (r) { return r.json(); }).then(renderInstances)
       .catch(function () {
         document.getElementById("instances-body").innerHTML = '<tr><td colspan="5" class="empty">Unable to reach platform runtime.</td></tr>';
+      });
+    fetch("/api/v1/platform/providers/technical-modes").then(function (r) { return r.json(); }).then(renderProviderModes)
+      .catch(function () {
+        document.getElementById("provider-modes").innerHTML = '<div class="empty">Unable to reach provider controls.</div>';
       });
   }
 

@@ -379,6 +379,35 @@ class GeneratedProjectRetentionTest {
         assertThat(directoryOf(second)).exists();
     }
 
+    @Test
+    void restartRestoresSourceModelAssociationForRetainedSupersededRunningProject() throws IOException {
+        String modelId = saveModel("m1");
+        GeneratedProject first = service.generateSpringBootProject(modelId);
+        launch(first);
+        GeneratedProject second = service.generateSpringBootProject(modelId);
+        assertProjectIntact(first);
+
+        // Restart workbench while the launcher process is still active
+        WorkbenchServiceImpl restarted = newService(newTracker());
+        when(processModelArchiveStore.findAll()).thenReturn(List.of(modelNamed(modelId)));
+        restarted.restoreState();
+
+        // 1. Through listRunningProjects(), prove the retained superseded project still resolves to its modelId
+        assertThat(restarted.listRunningProjects())
+                .extracting(LaunchedProject::projectId)
+                .containsExactly(first.projectId());
+        assertThat(restarted.listRunningProjects())
+                .extracting(LaunchedProject::modelId)
+                .containsExactly(modelId);
+
+        // 2. Through stopGeneratedProject(), prove stopping it resolves modelId and triggers collection
+        assertThat(restarted.stopGeneratedProject(first.projectId())).isTrue();
+        assertThat(directoryOf(first)).as("stopping superseded project after restart collects it").doesNotExist();
+        assertThat(directoryOf(second)).as("current generation remains intact").exists();
+        assertThat(restarted.getWorkflowState(modelId).stages().get(WorkflowStage.LAUNCH).status())
+                .isEqualTo(StageStatus.STOPPED);
+    }
+
     private static void waitUntilFree(int port) {
         long deadline = System.currentTimeMillis() + 20_000;
         while (System.currentTimeMillis() < deadline) {
