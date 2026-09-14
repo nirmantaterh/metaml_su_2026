@@ -525,7 +525,9 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             }
         }
 
-        ProcessModel model = new ProcessModel(modelId, name, bpmnXml, twinBpmnXml, mappings, Instant.now(),
+        ProcessModel previous = processModels.get(modelId);
+        Instant createdAt = previous != null && previous.getCreatedAt() != null ? previous.getCreatedAt() : Instant.now();
+        ProcessModel model = new ProcessModel(modelId, name, bpmnXml, twinBpmnXml, mappings, createdAt,
                 definition.getId(), tenantId);
         // A new save creates the ID once; an existing ID replaces its current in-memory definition.
         // Archive persistence below performs the matching one-row upsert and preserves project ownership.

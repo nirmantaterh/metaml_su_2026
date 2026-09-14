@@ -41,6 +41,7 @@ public class ProcessModelArchiveStore {
     }
 
     // projectId is supplied by the Project UI.  A null value is retained only for legacy direct service callers and old persisted-workflow tests; new HTTP requests must provide it.
+    // Upserts on modelId: re-saving a model the editor already holds (see WorkbenchServiceImpl.doSaveProcessModelEntry) updates its row in place - same id, bumped minor version - rather than adding a second row, which is what the Transmute > Generate / Launch pickers would otherwise list as a duplicate process.
     public ProcessModelArchive save(ProcessModel model, Path bpmnFilePath, Path twinBpmnFilePath, Long projectId) {
         ProcessModelArchive archive = archiveRepository.findByModelId(model.getId()).orElse(null);
         Project project;
@@ -53,6 +54,9 @@ public class ProcessModelArchiveStore {
             archive = new ProcessModelArchive();
             archive.setModelId(model.getId());
             archive.setProject(project);
+            archive.setMajor(1);
+            archive.setMinor(0);
+            archive.setPatch(0);
         } else {
             project = archive.getProject();
             if (project == null) {
@@ -62,6 +66,8 @@ public class ProcessModelArchiveStore {
                 throw new IllegalArgumentException("Process model " + model.getId()
                         + " belongs to project " + project.getId() + " and cannot be moved by save");
             }
+            archive.setMinor((archive.getMinor() == null ? 0 : archive.getMinor()) + 1);
+            archive.setPatch(0);
         }
         archive.setName(model.getName());
         archive.setBpmnXml(model.getBpmnXml());
@@ -71,9 +77,6 @@ public class ProcessModelArchiveStore {
         archive.setProxyTwinActivityMappings(new java.util.ArrayList<>(model.getProxyTwinActivityMappings()));
         archive.setProcessDefinitionId(model.getProcessDefinitionId());
         archive.setTenantId(model.getTenantId());
-        archive.setMajor(1);
-        archive.setMinor(0);
-        archive.setPatch(0);
         return archiveRepository.save(archive);
     }
 

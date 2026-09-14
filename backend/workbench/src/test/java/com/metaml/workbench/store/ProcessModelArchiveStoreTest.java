@@ -2,17 +2,22 @@ package com.metaml.workbench.store;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+
+import org.mockito.ArgumentCaptor;
 
 import com.metaml.workbench.dto.ProcessModelSummaryDto;
 import com.metaml.workbench.model.ProcessModel;
@@ -49,6 +54,44 @@ class ProcessModelArchiveStoreTest {
         project.setId(id);
         project.setDisplayName(displayName);
         return project;
+    }
+
+    // save() is an upsert on modelId - a re-saved model must land on its existing row (see WorkbenchServiceImpl's update path), or the pickers list it twice.
+    @Test
+    void savingAModelIdThatAlreadyHasARowUpdatesThatRowAndBumpsTheMinorVersion() {
+        Project project = project(5L, "RedCollar Suits");
+        ProcessModelArchive existing = archive("m-1", "New Process", LocalDateTime.of(2026, 1, 1, 0, 0), project);
+        existing.setMajor(1);
+        existing.setMinor(0);
+        existing.setPatch(0);
+        when(archiveRepository.findByModelId("m-1")).thenReturn(Optional.of(existing));
+        when(archiveRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        store().save(new ProcessModel("m-1", "ProcessSample", "<xml/>", Instant.now(), "def-2"),
+                Path.of("models/m-1.bpmn"), null, 5L);
+
+        ArgumentCaptor<ProcessModelArchive> saved = ArgumentCaptor.forClass(ProcessModelArchive.class);
+        verify(archiveRepository).save(saved.capture());
+        assertThat(saved.getValue()).isSameAs(existing);
+        assertThat(saved.getValue().getName()).isEqualTo("ProcessSample");
+        assertThat(saved.getValue().getProcessDefinitionId()).isEqualTo("def-2");
+        assertThat(saved.getValue().getMinor()).isEqualTo(1);
+    }
+
+    @Test
+    void savingANewModelIdInsertsAFreshRowAtVersion1_0_0() {
+        Project project = project(5L, "RedCollar Suits");
+        when(projectRepository.findById(5L)).thenReturn(Optional.of(project));
+        when(archiveRepository.findByModelId("m-1")).thenReturn(Optional.empty());
+        when(archiveRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProcessModelArchive saved = store().save(new ProcessModel("m-1", "New Process", "<xml/>", Instant.now(), "def-1"),
+                Path.of("models/m-1.bpmn"), null, 5L);
+
+        assertThat(saved.getModelId()).isEqualTo("m-1");
+        assertThat(saved.getMajor()).isEqualTo(1);
+        assertThat(saved.getMinor()).isEqualTo(0);
+        assertThat(saved.getPatch()).isEqualTo(0);
     }
 
     @Test
