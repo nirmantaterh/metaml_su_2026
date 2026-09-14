@@ -9,6 +9,9 @@ import { saveModel, getModel, getWorkflowState, listTenants } from "../../servic
 
 // name has to start with "mock" to be referenced from a jest.mock factory below
 const mockModelXml = "<definitions id=\"test-model\" />";
+// what the hook reports as the bpmn:Process name (as edited in the properties panel); tests set it to simulate a panel edit
+let mockProcessName = null;
+const mockSetProcessName = jest.fn();
 
 jest.mock("../../services/workbench/WorkbenchService", () => ({
     saveModel: jest.fn(),
@@ -34,6 +37,8 @@ jest.mock("../../components/bpmn/useBpmnModeler", () => ({
         selectedActivityId: null,
         importXml: jest.fn().mockResolvedValue(undefined),
         currentXml: jest.fn().mockResolvedValue(mockModelXml),
+        processName: mockProcessName,
+        setProcessName: mockSetProcessName,
     }),
 }));
 
@@ -103,6 +108,7 @@ const saveTheModel = async () => {
 describe("ModelPage - save", () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        mockProcessName = null;
         backendWorkflowState = NOTHING_YET;
         getWorkflowState.mockImplementation(async () => backendWorkflowState);
         listProjects.mockResolvedValue([{ id: "7", displayName: "RedCollar Suits", name: "redcollar_suits" }]);
@@ -171,6 +177,30 @@ describe("ModelPage - save", () => {
             await waitFor(() => expect(saveModel).toHaveBeenCalledTimes(2));
 
             expect(saveModel).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: null }));
+        });
+
+        // the name field and the properties panel's process name are one value - see handleModelNameChange
+        test("typing in the name field renames the bpmn:Process too, so the saved name matches the XML", async () => {
+            renderPage();
+            expect(await screen.findByRole("option", { name: "RedCollar Suits" })).toBeInTheDocument();
+
+            const nameField = screen.getByPlaceholderText("Model name");
+            userEvent.clear(nameField);
+            userEvent.type(nameField, "Suit Fitting");
+
+            expect(mockSetProcessName).toHaveBeenLastCalledWith("Suit Fitting");
+            await saveTheModel();
+            expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ name: "Suit Fitting" }));
+        });
+
+        test("a process name edited in the properties panel becomes the saved model name", async () => {
+            mockProcessName = "Renamed In Panel";
+            renderPage();
+            expect(await screen.findByRole("option", { name: "RedCollar Suits" })).toBeInTheDocument();
+
+            expect(screen.getByPlaceholderText("Model name")).toHaveValue("Renamed In Panel");
+            await saveTheModel();
+            expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ name: "Renamed In Panel" }));
         });
 
         test("disables Save while the request is in flight, re-enables it after", async () => {
