@@ -880,7 +880,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 .orElse(null);
         boolean wasRunning = springBootProjectLauncher.stop(projectId);
         String modelId = modelIdByProjectId.get(projectId);
-        if (wasRunning && modelId != null) {
+        // Only a launch that still counts records STOPPED. If the model was saved again since, its pipeline has
+        // restarted (see WorkflowStateTracker.stateFor) and LAUNCH already reads PENDING - there is nothing to
+        // stop in workflow terms, even though the stale app itself was just shut down.
+        if (wasRunning && modelId != null && workflowStateTracker.stateFor(modelId).stages()
+                .get(WorkflowStage.LAUNCH).status() == StageStatus.COMPLETED) {
             workflowStateTracker.record(modelId, WorkflowStage.LAUNCH, StageStatus.STOPPED, portDetail);
         }
         // Clean up superseded projects once running process terminates.

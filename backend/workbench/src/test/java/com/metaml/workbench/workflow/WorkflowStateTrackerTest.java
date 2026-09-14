@@ -191,4 +191,59 @@ class WorkflowStateTrackerTest {
         assertThat(tracker.stateFor("m1").stages().get(WorkflowStage.MODEL).timestamp())
                 .isEqualTo(historicalTime);
     }
+
+    // Saving the model again is a new version of it: what was generated/launched before was built from the old one.
+    @Test
+    void savingTheModelAgainResetsGenerateAndLaunchToPendingButKeepsTheHistory() {
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.IN_PROGRESS, null);
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.COMPLETED, null);
+        tracker.record("m1", WorkflowStage.GENERATE, StageStatus.IN_PROGRESS, null);
+        tracker.record("m1", WorkflowStage.GENERATE, StageStatus.COMPLETED, "project-123");
+        tracker.record("m1", WorkflowStage.LAUNCH, StageStatus.IN_PROGRESS, null);
+        tracker.record("m1", WorkflowStage.LAUNCH, StageStatus.COMPLETED, "port 4567");
+
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.IN_PROGRESS, null);
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.COMPLETED, null);
+
+        WorkflowState state = tracker.stateFor("m1");
+        assertThat(state.stages().get(WorkflowStage.MODEL).status()).isEqualTo(StageStatus.COMPLETED);
+        assertThat(state.stages().get(WorkflowStage.GENERATE).status()).isEqualTo(StageStatus.PENDING);
+        assertThat(state.stages().get(WorkflowStage.GENERATE).detail()).isNull();
+        assertThat(state.stages().get(WorkflowStage.LAUNCH).status()).isEqualTo(StageStatus.PENDING);
+        assertThat(state.currentStage()).isEqualTo(WorkflowStage.GENERATE);
+        assertThat(state.history()).hasSize(8);
+    }
+
+    @Test
+    void aFailedResaveDoesNotResetAnythingTheModelIsStillTheGeneratedVersion() {
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.IN_PROGRESS, null);
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.COMPLETED, null);
+        tracker.record("m1", WorkflowStage.GENERATE, StageStatus.IN_PROGRESS, null);
+        tracker.record("m1", WorkflowStage.GENERATE, StageStatus.COMPLETED, "project-123");
+
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.IN_PROGRESS, null);
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.FAILED, "bad xml");
+
+        WorkflowState state = tracker.stateFor("m1");
+        assertThat(state.stages().get(WorkflowStage.GENERATE).status()).isEqualTo(StageStatus.COMPLETED);
+        assertThat(state.stages().get(WorkflowStage.GENERATE).detail()).isEqualTo("project-123");
+        assertThat(state.currentStage()).isEqualTo(WorkflowStage.MODEL);
+    }
+
+    @Test
+    void generatingAgainAfterAResaveCompletesFromPendingWithoutTheOldProjectLeakingThrough() {
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.IN_PROGRESS, null);
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.COMPLETED, null);
+        tracker.record("m1", WorkflowStage.GENERATE, StageStatus.IN_PROGRESS, null);
+        tracker.record("m1", WorkflowStage.GENERATE, StageStatus.COMPLETED, "project-old");
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.IN_PROGRESS, null);
+        tracker.record("m1", WorkflowStage.MODEL, StageStatus.COMPLETED, null);
+
+        tracker.record("m1", WorkflowStage.GENERATE, StageStatus.IN_PROGRESS, null);
+        assertThat(tracker.stateFor("m1").currentStage()).isEqualTo(WorkflowStage.GENERATE);
+        tracker.record("m1", WorkflowStage.GENERATE, StageStatus.COMPLETED, "project-new");
+
+        assertThat(tracker.stateFor("m1").stages().get(WorkflowStage.GENERATE).detail()).isEqualTo("project-new");
+        assertThat(tracker.stateFor("m1").currentStage()).isEqualTo(WorkflowStage.LAUNCH);
+    }
 }

@@ -174,6 +174,31 @@ describe("LaunchProjectListPage", () => {
         expect(screen.getByRole("button", { name: "Launch" })).toBeInTheDocument();
     });
 
+    // Saving the model again resets its pipeline (GENERATE back to PENDING on the backend), but an app launched from the previous version can still be up - it must stay visible and stoppable, while Launch stays off until the model is regenerated.
+    test("an app still running from a version that has since been re-saved shows Running and can be stopped", async () => {
+        listModelSummaries.mockResolvedValue([
+            { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
+        ]);
+        getWorkflowState.mockResolvedValue({ stages: { GENERATE: { status: "PENDING" } } });
+        listRunningProjects.mockResolvedValue([
+            { projectId: "gp-stale", modelId: "m-1", port: 8091, processKey: "wireTransferReview" },
+        ]);
+        stopProject.mockResolvedValue({ success: true });
+
+        render(<LaunchProjectListPage />);
+        await screen.findByText("Wire Transfer Review");
+
+        expect(screen.getByText("Running")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Launch" })).not.toBeInTheDocument();
+
+        userEvent.click(await screen.findByRole("button", { name: "Open" }));
+        userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+        await waitFor(() => expect(stopProject).toHaveBeenCalledWith({ projectId: "gp-stale" }));
+        expect(await screen.findByText("Not Generated")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Launch" })).not.toBeInTheDocument();
+    });
+
     test("a launch failure never attempts to pair", async () => {
         listModelSummaries.mockResolvedValue([
             { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },

@@ -112,12 +112,28 @@ public class WorkflowStateTracker {
     public WorkflowState stateFor(String modelId) {
         List<StageEvent> history = eventsByModelId.getOrDefault(modelId, List.of());
 
+        // Every save of the model restarts its pipeline: whatever was generated or launched before the latest
+        // MODEL/COMPLETED was built from an older version of the model, so GENERATE and LAUNCH resolve only
+        // over the events after it (PENDING again until the model is generated afresh). The earlier events
+        // stay in history - the service still uses them to find and retire superseded generated projects.
+        List<StageEvent> sinceLastSave = history.subList(indexAfterLatestModelCompleted(history), history.size());
+
         Map<WorkflowStage, StageInfo> stages = new EnumMap<>(WorkflowStage.class);
         for (WorkflowStage stage : WorkflowStage.values()) {
-            stages.put(stage, latestFor(history, stage));
+            stages.put(stage, latestFor(stage == WorkflowStage.MODEL ? history : sinceLastSave, stage));
         }
 
         return new WorkflowState(modelId, resolveCurrentStage(stages), stages, new ArrayList<>(history));
+    }
+
+    private static int indexAfterLatestModelCompleted(List<StageEvent> history) {
+        for (int i = history.size() - 1; i >= 0; i--) {
+            StageEvent event = history.get(i);
+            if (event.stage() == WorkflowStage.MODEL && event.status() == StageStatus.COMPLETED) {
+                return i + 1;
+            }
+        }
+        return 0;
     }
 
     // last event recorded for this stage wins - a retried Generate after a FAILED attempt overwrites the stage's resolved status back to IN_PROGRESS/COMPLETED, while the FAILED event stays in history underneath it

@@ -184,8 +184,10 @@ const LaunchProjectListPage = () => {
     const handleStop = async (row) => {
         patchRow(row.id, { stopping: true });
         try {
-            if (row.generatedProjectId) {
-                await stopProject({ projectId: row.generatedProjectId });
+            // A model saved again since its last launch reads as not generated (its pipeline restarted), but the app launched from the older version may still be up - stop it by the project id the launcher reported.
+            const projectId = row.generatedProjectId || row.initialRunningEntry?.projectId;
+            if (projectId) {
+                await stopProject({ projectId });
             }
         } catch (err) {
             // ignore 404 or transient stop error
@@ -236,7 +238,8 @@ const LaunchProjectListPage = () => {
                                 rs.isRunning ||
                                 (row.initialRunningEntry && rs.phase !== null && rs.isRunning !== false);
                             const targetPlatformUrl = targetPlatformUrlFor(row);
-                            const isGenerated = row.isGenerated;
+                            // running implies there is something to Open/Stop even when the workflow no longer counts the generation (model re-saved since); Launch itself stays gated on row.isGenerated via !isRunning below
+                            const isGenerated = row.isGenerated || Boolean(isRunning);
                             const busy = rs.phase === "launching" || rs.phase === "pairing";
                             const launchLabel =
                                 rs.phase === "launching"
