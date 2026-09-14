@@ -28,12 +28,21 @@ const ModelPage = () => {
     const location = useLocation();
     const navigate = useNavigate();
 
-    const { canvasRef, propertiesPanelRef, modelerRef, selected, importXml, currentXml } = useBpmnModeler();
+    const { canvasRef, propertiesPanelRef, modelerRef, selected, importXml, currentXml, processName, setProcessName } =
+        useBpmnModeler();
 
     const bpmnFileInputRef = useRef(null);
     const twinFileInputRef = useRef(null);
 
+    // The name field above the canvas and the process name in the properties panel are the same value: the field writes into the bpmn:Process (setProcessName) and edits made in the panel come back here through processName. Both Generate and Launch label the generated platform with this saved name, so letting the two drift apart meant generating under a name the user never saw.
     const [modelName, setModelName] = useState("New Process");
+    useEffect(() => {
+        if (processName !== null && processName !== undefined) setModelName(processName);
+    }, [processName]);
+    const handleModelNameChange = (name) => {
+        setModelName(name);
+        setProcessName(name);
+    };
     // Raw XML of an independently authored Twin BPMN, provided alongside the Main diagram in the canvas above - not rendered in the canvas itself (the modeler only ever shows one process), just carried alongside it and sent together on Save (see saveModelWithAuthoredTwin). null means "no Twin attached" -> Save falls back to the original single-BPMN path.
     const [twinBpmnXml, setTwinBpmnXml] = useState(null);
     const [twinFileName, setTwinFileName] = useState(null);
@@ -133,6 +142,8 @@ const ModelPage = () => {
                     throw new Error("Model has no BPMN XML");
                 }
                 await importXml(model.bpmnXml);
+                // The saved name is what the catalogue and Generate show, so it wins over whatever the XML says - and is written into the XML so the next Save persists them in agreement.
+                if (model.name) setProcessName(model.name);
                 setModelName(model.name || "Untitled");
                 setTenantId(model.tenantId || "");
                 // Restore a previously-attached Twin so re-saving (e.g. after editing Main) keeps persisting both, rather than silently dropping back to single-BPMN.
@@ -400,7 +411,7 @@ const ModelPage = () => {
                         size="sm"
                         className="bpmn-model-name"
                         value={modelName}
-                        onChange={(e) => setModelName(e.target.value)}
+                        onChange={(e) => handleModelNameChange(e.target.value)}
                         placeholder="Model name"
                     />
                     <Form.Select

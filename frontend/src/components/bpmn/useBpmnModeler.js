@@ -33,6 +33,26 @@ function fitViewport(modeler) {
     }
 }
 
+// The bpmn:Process the diagram is about. A plain process is the root element itself; in a collaboration the root is the bpmn:Collaboration and the process hangs off the first participant's processRef.
+function findRootProcess(modeler) {
+    try {
+        const root = modeler.get("canvas").getRootElement();
+        if (!root || !root.businessObject) return null;
+        if (root.type === "bpmn:Process") {
+            return { element: root, process: root.businessObject };
+        }
+        if (root.type === "bpmn:Collaboration") {
+            const participant = modeler
+                .get("elementRegistry")
+                .filter((el) => el.type === "bpmn:Participant" && el.businessObject?.processRef)[0];
+            return participant ? { element: participant, process: participant.businessObject.processRef } : null;
+        }
+    } catch (e) {
+        // ignore: no diagram imported yet
+    }
+    return null;
+}
+
 // Shared canvas hook; handles both the editable (with properties panel) and read-only cases.
 export default function useBpmnModeler({ withPropertiesPanel = true } = {}) {
     const canvasRef = useRef(null);
@@ -43,6 +63,12 @@ export default function useBpmnModeler({ withPropertiesPanel = true } = {}) {
     // properties-panel edits only change modelerRef; bump revision to re-render consumers
     const [, setRevision] = useState(0);
     const bump = useCallback(() => setRevision((r) => r + 1), []);
+    // name of the bpmn:Process in the XML - the same value the properties panel shows for the process (or participant), mirrored into React state so the page can keep its own name field in sync with it. null until a diagram is imported.
+    const [processName, setProcessNameState] = useState(null);
+    const syncProcessName = useCallback(() => {
+        const found = findRootProcess(modelerRef.current);
+        setProcessNameState(found ? found.process.name || "" : null);
+    }, []);
 
     useEffect(() => {
         let destroyed = false;
@@ -74,9 +100,13 @@ export default function useBpmnModeler({ withPropertiesPanel = true } = {}) {
             const next = e.newSelection && e.newSelection.length ? e.newSelection[0] : rootAsSelection();
             setSelected(next);
         });
-        eventBus.on("commandStack.changed", bump);
+        eventBus.on("commandStack.changed", () => {
+            syncProcessName();
+            bump();
+        });
         eventBus.on("import.done", () => {
             setSelected(rootAsSelection());
+            syncProcessName();
             bump();
         });
 
@@ -97,7 +127,22 @@ export default function useBpmnModeler({ withPropertiesPanel = true } = {}) {
                 container.innerHTML = "";
             }
         };
-    }, [bump, withPropertiesPanel]);
+    }, [bump, syncProcessName, withPropertiesPanel]);
+
+    // Writes the name into the bpmn:Process itself (through the command stack, so it's undoable and the properties panel picks it up), rather than only into page state - otherwise the page's name field and the process name in the saved XML drift apart.
+    const setProcessName = useCallback((name) => {
+        const modeler = modelerRef.current;
+        const found = modeler ? findRootProcess(modeler) : null;
+        if (!found || (found.process.name || "") === (name || "")) return;
+        // empty -> undefined, matching what the properties panel writes when its name field is cleared
+        const value = name || undefined;
+        const modeling = modeler.get("modeling");
+        if (found.element.type === "bpmn:Process") {
+            modeling.updateProperties(found.element, { name: value });
+        } else {
+            modeling.updateModdleProperties(found.element, found.process, { name: value });
+        }
+    }, []);
 
     // guard BEFORE importXML - see assertRenderableBpmn: once bpmn-js has been handed a DI-less model the properties panel is wedged for the rest of the page's life
     const importXml = async (xml) => {
@@ -119,5 +164,15 @@ export default function useBpmnModeler({ withPropertiesPanel = true } = {}) {
             ? selected.id
             : null;
 
-    return { canvasRef, propertiesPanelRef, modelerRef, selected, selectedActivityId, importXml, currentXml };
+    return {
+        canvasRef,
+        propertiesPanelRef,
+        modelerRef,
+        selected,
+        selectedActivityId,
+        importXml,
+        currentXml,
+        processName,
+        setProcessName,
+    };
 }
