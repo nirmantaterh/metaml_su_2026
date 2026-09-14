@@ -12,7 +12,9 @@ export const WorkbenchRoutes = {
     ProjectProcesses: { path: `/projects/:projectId/processes` },
     SamplePage: { path: `/wb/sample` },
     // Legacy path retained for backward compatibility.
+    // resumes the last model opened/saved in the editor, blank if none - what Transmute > Model links to
     ModelPage: { path: `/wb/model` },
+    // always a blank editor
     CreateModel: { path: `/wb/model/new` },
     // Legacy route for direct model editing.
     EditModel: { path: `/wb/model/edit` },

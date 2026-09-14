@@ -1,11 +1,12 @@
 import React from "react";
 import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 
 import ModelPage from "./ModelPage";
 import { listProjects } from "../../services/workbench/ProjectService";
-import { saveModel, getModel, getWorkflowState, listTenants } from "../../services/workbench/WorkbenchService";
+import { saveModel, getModel, getWorkflowState, listModelSummaries, listTenants } from "../../services/workbench/WorkbenchService";
+import { readLastOpenedModel, rememberLastOpenedModel } from "./lastOpenedModel";
 
 // name has to start with "mock" to be referenced from a jest.mock factory below
 const mockModelXml = "<definitions id=\"test-model\" />";
@@ -17,6 +18,7 @@ jest.mock("../../services/workbench/WorkbenchService", () => ({
     saveModel: jest.fn(),
     getModel: jest.fn(),
     getWorkflowState: jest.fn(),
+    listModelSummaries: jest.fn(),
     listTenants: jest.fn(),
 }));
 
@@ -89,6 +91,20 @@ const renderPage = () => render(
     </MemoryRouter>
 );
 
+// Real routes, for the tests about where the editor sends the URL: the resume redirect and Save moving onto the saved id.
+const LocationProbe = () => <div data-testid="location">{useLocation().pathname}</div>;
+const renderRouted = (pathname, state = { projectId: "7" }) => render(
+    <MemoryRouter initialEntries={[{ pathname, state }]}>
+        <LocationProbe />
+        <Routes>
+            <Route path="/wb/model" element={<ModelPage />} />
+            <Route path="/wb/model/new" element={<ModelPage />} />
+            <Route path="/wb/model/:id" element={<ModelPage />} />
+        </Routes>
+    </MemoryRouter>
+);
+const currentPath = () => screen.getByTestId("location").textContent;
+
 const saveTheModel = async () => {
     userEvent.click(button("Save"));
     await waitFor(() => expect(saveModel).toHaveBeenCalled());
@@ -98,8 +114,10 @@ const saveTheModel = async () => {
 describe("ModelPage - save", () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        window.localStorage.clear();
         mockProcessName = null;
         backendWorkflowState = NOTHING_YET;
+        listModelSummaries.mockResolvedValue([]);
         getWorkflowState.mockImplementation(async () => backendWorkflowState);
         listProjects.mockResolvedValue([{ id: "7", displayName: "RedCollar Suits", name: "redcollar_suits" }]);
         listTenants.mockResolvedValue([]);
@@ -196,6 +214,70 @@ describe("ModelPage - save", () => {
             const messageRow = message.closest(".bpmn-toolbar-row");
             const saveButtonRow = button("Save").closest(".bpmn-toolbar-row");
             expect(messageRow).not.toBe(saveButtonRow);
+        });
+    });
+
+    // Transmute > Model must bring back the model being worked on, not a blank canvas - the resume pointer is written on load and on save.
+    describe("resuming the last model", () => {
+        test("Save moves the URL onto the saved id and remembers it for next time", async () => {
+            renderRouted("/wb/model/new");
+            expect(await screen.findByRole("option", { name: "RedCollar Suits" })).toBeInTheDocument();
+
+            await saveTheModel();
+
+            await waitFor(() => expect(currentPath()).toBe("/wb/model/m-1"));
+            expect(readLastOpenedModel()).toEqual({ id: "m-1", projectId: "7" });
+            // the URL change must not reload the model the editor already holds
+            expect(getModel).not.toHaveBeenCalled();
+            expect(screen.getByText(/Saved model "New Process" \(id m-1\)/)).toBeInTheDocument();
+        });
+
+        test("/wb/model with a remembered model redirects into that model's editor", async () => {
+            rememberLastOpenedModel("m-1", "7");
+
+            renderRouted("/wb/model", undefined);
+
+            await waitFor(() => expect(currentPath()).toBe("/wb/model/m-1"));
+            await waitFor(() => expect(getModel).toHaveBeenCalledWith("m-1"));
+            expect(await screen.findByText(/Loaded "New Process"/)).toBeInTheDocument();
+        });
+
+        test("/wb/model with nothing remembered stays a blank editor", async () => {
+            renderRouted("/wb/model", undefined);
+            expect(await screen.findByRole("option", { name: "RedCollar Suits" })).toBeInTheDocument();
+
+            expect(currentPath()).toBe("/wb/model");
+            expect(getModel).not.toHaveBeenCalled();
+        });
+
+        test("opening a model by URL alone recovers its project from the summaries", async () => {
+            listModelSummaries.mockResolvedValue([{ id: "m-1", name: "New Process", projectId: 7 }]);
+
+            renderRouted("/wb/model/m-1", undefined);
+
+            expect(await screen.findByText(/Loaded "New Process"/)).toBeInTheDocument();
+            await waitFor(() => expect(screen.getByRole("option", { name: "RedCollar Suits" }).selected).toBe(true));
+            expect(readLastOpenedModel()).toEqual({ id: "m-1", projectId: "7" });
+        });
+
+        test("a remembered model that no longer loads is forgotten", async () => {
+            rememberLastOpenedModel("m-gone", "7");
+            getModel.mockRejectedValue(new Error("not found"));
+
+            renderRouted("/wb/model", undefined);
+
+            expect(await screen.findByText(/Load failed: not found/)).toBeInTheDocument();
+            expect(readLastOpenedModel()).toBeNull();
+        });
+
+        test("New model clears the editor back to a blank canvas at /wb/model/new", async () => {
+            renderRouted("/wb/model/m-1");
+            expect(await screen.findByText(/Loaded "New Process"/)).toBeInTheDocument();
+
+            userEvent.click(button("New model"));
+
+            await waitFor(() => expect(currentPath()).toBe("/wb/model/new"));
+            expect(await screen.findByText(/New model. Nothing is saved yet/)).toBeInTheDocument();
         });
     });
 
