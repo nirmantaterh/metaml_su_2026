@@ -35,9 +35,9 @@ const Header = () => {
                                 Delete
                             </NavDropdown.Item>
                         </NavDropdown>
-                        {/* Model / Generate / Launch is one pipeline (see WorkflowStage) but three separate pickers, not one editor with three buttons: Model always starts a blank editor (Save is the only thing it does); Generate and Launch each list every saved process across every project and act on whichever row you pick - see GenerateProjectListPage / LaunchProjectListPage. */}
+                        {/* Model / Generate / Launch is one pipeline (see WorkflowStage) but three separate pickers, not one editor with three buttons: Model resumes the model last opened or saved in the editor (blank if there is none - see ModelPage's resume redirect, and its "New model" button for an explicit blank canvas); Generate and Launch each list every saved process across every project and act on whichever row you pick - see GenerateProjectListPage / LaunchProjectListPage. */}
                         <NavDropdown title="Transmute" id="transmute-nav-dropdown">
-                            <NavDropdown.Item as={Link} to={WorkbenchRoutes.CreateModel.path}>
+                            <NavDropdown.Item as={Link} to={WorkbenchRoutes.ModelPage.path}>
                                 Model
                             </NavDropdown.Item>
                             <NavDropdown.Item as={Link} to={WorkbenchRoutes.GenerateModelList.path}>

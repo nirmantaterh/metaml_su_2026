@@ -1,6 +1,7 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 
 import GenerateProjectListPage from "./GenerateProjectListPage";
 import { listModelSummaries, generateProject, getWorkflowState } from "../../services/workbench/WorkbenchService";
@@ -18,6 +19,8 @@ const GENERATED = {
 };
 
 const button = (name) => screen.getByRole("button", { name });
+// rows link into the editor, which needs a router around the page
+const renderPage = () => render(<MemoryRouter><GenerateProjectListPage /></MemoryRouter>);
 
 describe("GenerateProjectListPage", () => {
     beforeEach(() => {
@@ -32,7 +35,7 @@ describe("GenerateProjectListPage", () => {
         ]);
         generateProject.mockResolvedValue({ projectId: "gp-1", processKey: "wireTransferReview" });
 
-        render(<GenerateProjectListPage />);
+        renderPage();
 
         expect(await screen.findByText("Wire Transfer Review")).toBeInTheDocument();
         expect(screen.getByText("Loan Approval")).toBeInTheDocument();
@@ -55,7 +58,7 @@ describe("GenerateProjectListPage", () => {
         ]);
         getWorkflowState.mockImplementation(async (id) => (id === "m-1" ? GENERATED : NOT_GENERATED));
 
-        render(<GenerateProjectListPage />);
+        renderPage();
         await screen.findByText("Wire Transfer Review");
 
         expect(screen.getByText("Generated")).toBeInTheDocument();
@@ -70,7 +73,7 @@ describe("GenerateProjectListPage", () => {
         ]);
         generateProject.mockResolvedValue({ projectId: "gp-1", processKey: "wireTransferReview" });
 
-        render(<GenerateProjectListPage />);
+        renderPage();
         await screen.findByText("Wire Transfer Review");
         expect(screen.getByText("Not Generated")).toBeInTheDocument();
 
@@ -87,7 +90,7 @@ describe("GenerateProjectListPage", () => {
         ]);
         generateProject.mockRejectedValue(new Error("Kaboom"));
 
-        render(<GenerateProjectListPage />);
+        renderPage();
         await screen.findByText("Wire Transfer Review");
 
         userEvent.click(button("Generate"));
@@ -95,10 +98,21 @@ describe("GenerateProjectListPage", () => {
         expect(await screen.findByText(/Generate failed: Kaboom/)).toBeInTheDocument();
     });
 
+    test("the process name links into the editor for that model, carrying its project", async () => {
+        listModelSummaries.mockResolvedValue([
+            { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
+        ]);
+
+        renderPage();
+
+        const link = await screen.findByRole("link", { name: "Wire Transfer Review" });
+        expect(link).toHaveAttribute("href", "/wb/model/m-1");
+    });
+
     test("shows an empty state when nothing has been saved yet", async () => {
         listModelSummaries.mockResolvedValue([]);
 
-        render(<GenerateProjectListPage />);
+        renderPage();
 
         expect(await screen.findByText(/Nothing saved yet/)).toBeInTheDocument();
     });

@@ -13,6 +13,7 @@ import {
     saveModelWithAuthoredTwin,
     getModel,
     getWorkflowState,
+    listModelSummaries,
     listTenants,
     generateProject,
     launchProject,
@@ -21,6 +22,10 @@ import {
 import { listProjects } from "../../services/workbench/ProjectService";
 import { openCockpitUrl } from "../../components/workbench/openCockpitUrl";
 import { WorkbenchRoutes } from "../../routes";
+import { readLastOpenedModel, rememberLastOpenedModel, forgetLastOpenedModel } from "./lastOpenedModel";
+import defaultDiagram from "../../components/bpmn/defaultDiagram";
+
+const editorPathFor = (modelId) => WorkbenchRoutes.ModelEditor.path.replace(":id", modelId);
 
 // Two entry points into Model -> Generate -> Launch, both converging on the same backend calls (generateProject / launchProject - see WorkbenchService): the catalogue pickers (GenerateProjectListPage / LaunchProjectListPage), for choosing among every saved process across every project, and - directly here - the contextual path for whichever one process is already open in the editor, so Save -> Generate -> Launch never requires leaving the canvas. Neither path has its own copy of the generation/launch logic; both just call the same service functions the other one does.
 const ModelPage = () => {
@@ -85,6 +90,19 @@ const ModelPage = () => {
     const [detailsOpen, setDetailsOpen] = useState(false);
     // The saved id of whichever model this editor currently represents - null until the first successful Save. Generate needs this (it targets one saved model); Launch instead reads its own target off workflowState (see generatedProjectId below), same as the catalogue does.
     const [currentModelId, setCurrentModelId] = useState(routeModelId || null);
+    // Set right before Save moves the URL onto the newly saved id, so the load effect below knows the editor already holds that model and must not re-import it (which would drop the "Saved" status and re-fit the canvas for nothing).
+    const justSavedIdRef = useRef(null);
+
+    // Transmute > Model (the bare /wb/model path) resumes whichever model was last opened or saved here, so leaving for Generate/Launch and coming back lands on the same model, not a blank canvas. /wb/model/new is the explicit blank editor.
+    const isResumePath = location.pathname === WorkbenchRoutes.ModelPage.path;
+    useEffect(() => {
+        if (routeModelId || !isResumePath) return;
+        const last = readLastOpenedModel();
+        if (last) {
+            navigate(editorPathFor(last.id), { replace: true, state: { projectId: last.projectId || undefined } });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [routeModelId, isResumePath]);
     const [generating, setGenerating] = useState(false);
     const [launching, setLaunching] = useState(false);
     // Populated only by a successful Launch here - port/processKey/pairing detail, same shape LaunchProjectListPage keeps per row. Cleared on every new Generate, since a fresh generation invalidates whatever was previously launched.
@@ -134,6 +152,11 @@ const ModelPage = () => {
             setCurrentModelId(null);
             return;
         }
+        if (justSavedIdRef.current === routeModelId) {
+            // URL just caught up with a Save - the editor already holds this model
+            justSavedIdRef.current = null;
+            return;
+        }
         let cancelled = false;
         (async () => {
             setBusy(true);
@@ -149,6 +172,21 @@ const ModelPage = () => {
                 if (model.name) setProcessName(model.name);
                 setModelName(model.name || "Untitled");
                 setTenantId(model.tenantId || "");
+                // A ProcessModel doesn't know its project; only the summaries do. Needed when the editor was reached by URL or the Model nav item rather than a project page's "Edit model" link (which passes projectId in location.state).
+                let projectIdForModel = selectedProjectId;
+                if (!projectIdForModel) {
+                    try {
+                        const summariesRes = await listModelSummaries();
+                        const summary = (summariesRes.data || summariesRes || []).find((m) => m.id === routeModelId);
+                        if (summary?.projectId != null) {
+                            projectIdForModel = String(summary.projectId);
+                            if (!cancelled) setSelectedProjectId(projectIdForModel);
+                        }
+                    } catch (e) {
+                        // leave the project picker empty; Save will ask for one
+                    }
+                }
+                rememberLastOpenedModel(model.id || routeModelId, projectIdForModel || null);
                 // Restore a previously-attached Twin so re-saving (e.g. after editing Main) keeps persisting both, rather than silently dropping back to single-BPMN.
                 if (model.authoredTwinBpmnXml) {
                     setTwinBpmnXml(model.authoredTwinBpmnXml);
@@ -163,6 +201,8 @@ const ModelPage = () => {
                 await refreshWorkflowState(model.id || routeModelId);
             } catch (err) {
                 if (!cancelled) {
+                    // don't keep resuming into a model that no longer loads (deleted, backend restarted)
+                    forgetLastOpenedModel(routeModelId);
                     setStatus({ type: "err", text: "Load failed: " + (err.response?.data?.message || err.message) });
                 }
             } finally {
@@ -174,6 +214,25 @@ const ModelPage = () => {
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [routeModelId, location.pathname]);
+
+    // Back to the blank canvas the editor starts with - the in-page counterpart of the /wb/model/new route, since Transmute > Model now resumes the last model instead.
+    const handleNewModel = async () => {
+        setBusy(true);
+        try {
+            await importXml(defaultDiagram);
+            setModelName("New Process");
+            setTenantId("");
+            setTwinBpmnXml(null);
+            setTwinFileName(null);
+            setCurrentModelId(null);
+            setWorkflowState(null);
+            setLaunchInfo(null);
+            setStatus({ type: "info", text: "New model. Nothing is saved yet - press Save when ready." });
+            navigate(WorkbenchRoutes.CreateModel.path, { replace: true, state: { projectId: selectedProjectId || undefined } });
+        } finally {
+            setBusy(false);
+        }
+    };
 
     const handleOpenBpmnFile = async (event) => {
         const file = event.target.files && event.target.files[0];
@@ -245,6 +304,12 @@ const ModelPage = () => {
                     : `Saved model "${saved.name || modelName}" (id ${saved.id ?? "?"}).`,
             });
             setCurrentModelId(saved.id);
+            // Every Save is a new model id on the backend (ids are never overwritten), so keep the URL and the resume pointer on the newest one - a refresh, Back, or Transmute > Model all return to what was just saved.
+            rememberLastOpenedModel(saved.id, selectedProjectId || null);
+            if (saved.id && saved.id !== routeModelId) {
+                justSavedIdRef.current = saved.id;
+                navigate(editorPathFor(saved.id), { replace: true, state: { projectId: selectedProjectId || undefined } });
+            }
             await refreshWorkflowState(saved.id);
         } catch (err) {
             setStatus({ type: "err", text: "Save failed: " + (err.response?.data?.message || err.message) });
@@ -463,6 +528,15 @@ const ModelPage = () => {
                             Back to project processes
                         </Button>
                     )}
+                    <Button
+                        size="sm"
+                        variant="outline-secondary"
+                        onClick={handleNewModel}
+                        disabled={busy}
+                        title="Start a blank model. Whatever is open here stays saved under its own id."
+                    >
+                        New model
+                    </Button>
                     <Button size="sm" variant="outline-primary" onClick={handleSave} disabled={busy}>
                         Save
                     </Button>

@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Alert, Button, Container, Table } from "react-bootstrap";
+import { Link } from "react-router-dom";
+
+import { WorkbenchRoutes } from "../../routes";
 
 import { listModelSummaries, generateProject, getWorkflowState } from "../../services/workbench/WorkbenchService";
 import ProcessSpinner from "../../components/common/ProcessSpinner";
@@ -96,7 +99,15 @@ const GenerateProjectListPage = () => {
                             return (
                                 <React.Fragment key={process.id}>
                                     <tr>
-                                        <td>{process.name || "Untitled"}</td>
+                                        <td>
+                                            {/* straight into the editor for this row, so Model <-> Generate stays about the same process; projectId travels in state the same way ProjectProcessListPage's "Edit model" passes it */}
+                                            <Link
+                                                to={WorkbenchRoutes.ModelEditor.path.replace(":id", process.id)}
+                                                state={{ projectId: process.projectId != null ? Number(process.projectId) : undefined }}
+                                            >
+                                                {process.name || "Untitled"}
+                                            </Link>
+                                        </td>
                                         <td>
                                             {process.projectDisplayName
                                                 ? `${process.projectDisplayName} (${process.projectId})`

@@ -30,7 +30,7 @@ const router = createBrowserRouter(
                 <Route index element={<Home />}/>
 
                 <Route path={WorkbenchRoutes.SamplePage.path} element={<SamplPage/>} />
-                {/* legacy path, still works if bookmarked - starts blank, same as CreateModel */}
+                {/* resumes the last opened/saved model (see ModelPage), blank if there is none */}
                 <Route path={WorkbenchRoutes.ModelPage.path} element={<ModelPage/>} />
                 <Route path={WorkbenchRoutes.CreateModel.path} element={<ModelPage/>} />
                 <Route path={WorkbenchRoutes.ModelEditor.path} element={<ModelPage/>} />
