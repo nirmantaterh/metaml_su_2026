@@ -305,11 +305,14 @@ const ModelPage = () => {
                 ? await saveModelWithAuthoredTwin({ ...payload, twinBpmnXml })
                 : await saveModel(payload);
             const saved = res.data || res;
+            // a save restarts the pipeline on the backend (GENERATE/LAUNCH read pending again - see WorkflowStateTracker.stateFor), so say so when there was a generation to lose
+            const hadGeneration = workflowState?.stages?.GENERATE?.status === "COMPLETED";
             setStatus({
                 type: "ok",
-                text: twinBpmnXml
+                text: (twinBpmnXml
                     ? `Saved Main + Twin "${saved.name || modelName}" (id ${saved.id ?? "?"}).`
-                    : `Saved model "${saved.name || modelName}" (id ${saved.id ?? "?"}).`,
+                    : `Saved model "${saved.name || modelName}" (id ${saved.id ?? "?"}).`)
+                    + (hadGeneration ? " The previous generation is now out of date - press Generate again." : ""),
             });
             setCurrentModelId(saved.id);
             // First Save mints the id; keep the URL and the resume pointer on it so a refresh, Back, or Transmute > Model all return to what was just saved. Later Saves come back with the same id and change nothing here.

@@ -156,7 +156,7 @@ class ModelUpdateInPlaceTest {
     }
 
     @Test
-    void anUpdateRecordsAnotherModelCompletedEventWithoutLosingEarlierHistory() {
+    void anUpdateResetsGenerateAndLaunchWhileKeepingEarlierHistory() {
         ProcessModel first = service.saveProcessModel(null, "New Process", loanApprovalBpmn("New Process"), null, 7L);
         String modelId = first.getId();
         service.generateSpringBootProject(modelId);
@@ -168,9 +168,31 @@ class ModelUpdateInPlaceTest {
                 .hasSize(2);
         assertThat(history).filteredOn(e -> e.stage() == WorkflowStage.GENERATE && e.status() == StageStatus.COMPLETED)
                 .as("the earlier generation stays on record").hasSize(1);
-        // the pickers still see the generated project (Generated / Regenerate) until the model is generated again
+        // ...but no longer counts: the edit restarted the pipeline, so the pickers show the model as needing
+        // generation again rather than offering the stale generation
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).status())
+                .isEqualTo(StageStatus.PENDING);
+        assertThat(service.getWorkflowState(modelId).currentStage()).isEqualTo(WorkflowStage.GENERATE);
+    }
+
+    @Test
+    void generatingAgainAfterAnUpdateCompletesGenerateNormallyAndRetiresTheStaleGeneration() {
+        ProcessModel first = service.saveProcessModel(null, "New Process", loanApprovalBpmn("New Process"), null, 7L);
+        String modelId = first.getId();
+        com.metaml.workbench.generation.GeneratedProject stale = service.generateSpringBootProject(modelId);
+        service.saveProcessModel(modelId, "ProcessSample", loanApprovalBpmn("ProcessSample"), null, 7L);
+        assertThat(stale.directory()).as("an edit alone keeps the stale generation on disk").exists();
+
+        com.metaml.workbench.generation.GeneratedProject fresh = service.generateSpringBootProject(modelId);
+
+        assertThat(fresh.projectId()).isNotEqualTo(stale.projectId());
         assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).status())
                 .isEqualTo(StageStatus.COMPLETED);
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).detail())
+                .isEqualTo(fresh.projectId());
+        assertThat(fresh.directory()).exists();
+        assertThat(stale.directory()).as("the generation from the older version is collected once superseded")
+                .doesNotExist();
     }
 
     @Test

@@ -384,6 +384,19 @@ describe("ModelPage - save", () => {
             await waitFor(() => expect(screen.getByTitle("COMPLETED: proj-9")).toBeInTheDocument());
         });
 
+        test("saving a model that was already generated says the generation is now stale", async () => {
+            backendWorkflowState = GENERATED;
+            renderRouted("/wb/model/m-1");
+            await screen.findByTitle("COMPLETED: proj-9");
+
+            backendWorkflowState = SAVED;
+            await saveTheModel();
+
+            expect(await screen.findByText(/press Generate again/)).toBeInTheDocument();
+            // the breadcrumb follows the backend: GENERATE is pending again
+            await waitFor(() => expect(screen.queryByTitle("COMPLETED: proj-9")).not.toBeInTheDocument());
+        });
+
         test("View details is disabled until there is workflow state to show", async () => {
             renderPage();
 
