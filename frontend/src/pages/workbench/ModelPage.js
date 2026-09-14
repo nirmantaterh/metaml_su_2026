@@ -290,9 +290,17 @@ const ModelPage = () => {
         try {
             const bpmnXml = await currentXml();
             // "" must become null; backend skips tenant governance only on strict null, not empty string
+            // id: the model this editor already holds (loaded or previously saved), so a second Save updates that model in place rather than filing a new one - the backend treats a live id as an edit. Omitted for a model never saved yet.
+            const payload = {
+                ...(currentModelId ? { id: currentModelId } : {}),
+                name: modelName,
+                bpmnXml,
+                tenantId: tenantId || null,
+                projectId: Number(selectedProjectId),
+            };
             const res = twinBpmnXml
-                ? await saveModelWithAuthoredTwin({ name: modelName, bpmnXml, twinBpmnXml, tenantId: tenantId || null, projectId: Number(selectedProjectId) })
-                : await saveModel({ name: modelName, bpmnXml, tenantId: tenantId || null, projectId: Number(selectedProjectId) });
+                ? await saveModelWithAuthoredTwin({ ...payload, twinBpmnXml })
+                : await saveModel(payload);
             const saved = res.data || res;
             setStatus({
                 type: "ok",
@@ -301,7 +309,7 @@ const ModelPage = () => {
                     : `Saved model "${saved.name || modelName}" (id ${saved.id ?? "?"}).`,
             });
             setCurrentModelId(saved.id);
-            // Every Save is a new model id on the backend (ids are never overwritten), so keep the URL and the resume pointer on the newest one - a refresh, Back, or Transmute > Model all return to what was just saved.
+            // First Save mints the id; keep the URL and the resume pointer on it so a refresh, Back, or Transmute > Model all return to what was just saved. Later Saves come back with the same id and change nothing here.
             rememberLastOpenedModel(saved.id, selectedProjectId || null);
             if (saved.id && saved.id !== routeModelId) {
                 justSavedIdRef.current = saved.id;
@@ -530,7 +538,7 @@ const ModelPage = () => {
                         variant="outline-secondary"
                         onClick={handleNewModel}
                         disabled={busy}
-                        title="Start a blank model. Whatever is open here stays saved under its own id."
+                        title="Start a blank model. The next Save files it as a new process; whatever was open here stays saved as it was."
                     >
                         New model
                     </Button>

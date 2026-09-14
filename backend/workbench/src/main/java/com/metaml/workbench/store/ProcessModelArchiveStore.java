@@ -41,6 +41,7 @@ public class ProcessModelArchiveStore {
     }
 
     // projectId is supplied by the Project UI.  A null value is retained only for legacy direct service callers and old persisted-workflow tests; new HTTP requests must provide it.
+    // Upserts on modelId: re-saving a model the editor already holds (see WorkbenchServiceImpl.doSaveProcessModelEntry) updates its row in place - same id, bumped minor version - rather than adding a second row, which is what the Transmute > Generate / Launch pickers would otherwise list as a duplicate process.
     public ProcessModelArchive save(ProcessModel model, Path bpmnFilePath, Path twinBpmnFilePath, Long projectId) {
         Project project = projectId == null
                 ? projectRepository.findByName(model.getName())
@@ -48,8 +49,17 @@ public class ProcessModelArchiveStore {
                 : projectRepository.findById(projectId)
                         .orElseThrow(() -> new IllegalArgumentException("Project not found: " + projectId));
 
-        ProcessModelArchive archive = new ProcessModelArchive();
-        archive.setModelId(model.getId());
+        ProcessModelArchive archive = archiveRepository.findByModelId(model.getId()).orElse(null);
+        if (archive == null) {
+            archive = new ProcessModelArchive();
+            archive.setModelId(model.getId());
+            archive.setMajor(1);
+            archive.setMinor(0);
+            archive.setPatch(0);
+        } else {
+            archive.setMinor((archive.getMinor() == null ? 0 : archive.getMinor()) + 1);
+            archive.setPatch(0);
+        }
         archive.setName(model.getName());
         archive.setBpmnXml(model.getBpmnXml());
         archive.setBpmnFilePath(bpmnFilePath == null ? null : bpmnFilePath.toString());
@@ -57,9 +67,6 @@ public class ProcessModelArchiveStore {
         archive.setTwinBpmnFilePath(twinBpmnFilePath == null ? null : twinBpmnFilePath.toString());
         archive.setProcessDefinitionId(model.getProcessDefinitionId());
         archive.setTenantId(model.getTenantId());
-        archive.setMajor(1);
-        archive.setMinor(0);
-        archive.setPatch(0);
         archive.setProject(project);
         return archiveRepository.save(archive);
     }

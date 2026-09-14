@@ -93,6 +93,7 @@ import java.util.stream.Stream;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
@@ -445,9 +446,15 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 throw new IllegalArgumentException("Process model id may only contain letters, digits, "
                         + "'-' and '_': " + id);
             }
-            // Prevent overwriting existing active model definition.
+            // A live model saved again under its own id is an edit of that model, not a new one - the editor
+            // sends back the id it loaded/last saved so repeated Saves don't pile up duplicates in the pickers.
             if (processModels.containsKey(id)) {
-                throw new IllegalArgumentException("Process model already exists: " + id);
+                synchronized (modelLockFor(id)) {
+                    if (processModels.containsKey(id)) {
+                        return recordingModelStage(id,
+                                () -> doUpdateProcessModel(id, name, bpmnXml, twinBpmnXml, tenantId, projectId));
+                    }
+                }
             }
             // Reject reuse of retired model IDs to preserve history.
             if (isRetiredModelId(id)) {
@@ -458,10 +465,15 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         } else {
             modelId = UUID.randomUUID().toString();
         }
+        return recordingModelStage(modelId,
+                () -> doSaveProcessModel(modelId, name, bpmnXml, twinBpmnXml, tenantId, projectId));
+    }
 
+    // MODEL stage bookkeeping shared by create and update: IN_PROGRESS going in, FAILED (with the error) if the save throws; the save itself records COMPLETED.
+    private ProcessModel recordingModelStage(String modelId, Supplier<ProcessModel> save) {
         workflowStateTracker.record(modelId, WorkflowStage.MODEL, StageStatus.IN_PROGRESS, null);
         try {
-            return doSaveProcessModel(modelId, name, bpmnXml, twinBpmnXml, tenantId, projectId);
+            return save.get();
         } catch (RuntimeException e) {
             workflowStateTracker.record(modelId, WorkflowStage.MODEL, StageStatus.FAILED, e.getMessage(),
                     new StageError(e.getClass().getSimpleName(), "SAVE_MODEL", null, null, null, null, null));
@@ -469,8 +481,44 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         }
     }
 
-    private ProcessModel doSaveProcessModel(String modelId, String name, String bpmnXml, String twinBpmnXml,
+    // Edit of a model that already exists: the same validation and deployment as a first save (Camunda versions
+    // the definition under the same key), then the in-memory entry, the .bpmn files and the archive row are all
+    // replaced under the same model id. The previous deployment is deliberately kept - twins created from the
+    // older version carry its processDefinitionId (see createTwin) and keep running against it. Workflow history
+    // simply gains another MODEL COMPLETED event; anything generated from the older version stays recorded and
+    // launchable until the model is generated again.
+    private ProcessModel doUpdateProcessModel(String modelId, String name, String bpmnXml, String twinBpmnXml,
             String tenantId, Long projectId) {
+        ProcessModel previous = processModels.get(modelId);
+        Deployment deployment = deployValidated(name, modelId, bpmnXml, twinBpmnXml);
+        ProcessDefinition definition = repositoryService.createProcessDefinitionQuery()
+                .deploymentId(deployment.getId())
+                .singleResult();
+        ProcessModel model = new ProcessModel(modelId, name, bpmnXml, twinBpmnXml, previous.getCreatedAt(),
+                definition.getId(), tenantId);
+        Path bpmnFilePath;
+        Path twinBpmnFilePath = null;
+        try {
+            bpmnFilePath = modelFileStore.save(modelId, bpmnXml);
+            if (twinBpmnXml != null) {
+                twinBpmnFilePath = modelFileStore.saveTwin(modelId, twinBpmnXml);
+            }
+        } catch (RuntimeException e) {
+            discardDeployment(deployment.getId());
+            throw e;
+        }
+        processModels.put(modelId, model);
+        processModelArchiveStore.save(model, bpmnFilePath, twinBpmnFilePath, projectId);
+        persistState();
+        workflowStateTracker.record(modelId, WorkflowStage.MODEL, StageStatus.COMPLETED, null);
+        logger.info("Updated process model {} in place and deployed process definition {} (previously {})",
+                modelId, definition.getId(), previous.getProcessDefinitionId());
+        detectStaticCapabilityGapsIfApplicable(modelId, definition.getId());
+        return model;
+    }
+
+    // Deploys bpmnXml to the engine and checks it declares exactly one executable process (as does twinBpmnXml, when given); the deployment is discarded again on any of those failures.
+    private Deployment deployValidated(String name, String modelId, String bpmnXml, String twinBpmnXml) {
         Deployment deployment;
         try {
             deployment = repositoryService.createDeployment()
@@ -482,7 +530,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             throw new IllegalArgumentException("Invalid BPMN XML, could not deploy to process engine: "
                     + e.getMessage());
         }
-
         ProcessDefinition definition;
         try {
             definition = repositoryService.createProcessDefinitionQuery()
@@ -507,6 +554,15 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 throw e;
             }
         }
+        return deployment;
+    }
+
+    private ProcessModel doSaveProcessModel(String modelId, String name, String bpmnXml, String twinBpmnXml,
+            String tenantId, Long projectId) {
+        Deployment deployment = deployValidated(name, modelId, bpmnXml, twinBpmnXml);
+        ProcessDefinition definition = repositoryService.createProcessDefinitionQuery()
+                .deploymentId(deployment.getId())
+                .singleResult();
 
         ProcessModel model = new ProcessModel(modelId, name, bpmnXml, twinBpmnXml, Instant.now(),
                 definition.getId(), tenantId);

@@ -167,6 +167,27 @@ describe("ModelPage - save", () => {
             expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ name: "Renamed In Panel" }));
         });
 
+        // Second Save of the same model must be an update, not a second catalogue entry - see the backend's live-id path in WorkbenchServiceImpl.doSaveProcessModelEntry.
+        test("saving again sends the id from the first save, so the backend updates instead of duplicating", async () => {
+            renderPage();
+            expect(await screen.findByRole("option", { name: "RedCollar Suits" })).toBeInTheDocument();
+
+            await saveTheModel();
+            expect(saveModel).toHaveBeenLastCalledWith(expect.not.objectContaining({ id: expect.anything() }));
+
+            await saveTheModel();
+            expect(saveModel).toHaveBeenCalledTimes(2);
+            expect(saveModel).toHaveBeenLastCalledWith(expect.objectContaining({ id: "m-1", name: "New Process" }));
+        });
+
+        test("saving a model opened by id sends that id", async () => {
+            renderRouted("/wb/model/m-1");
+            expect(await screen.findByText(/Loaded "New Process"/)).toBeInTheDocument();
+
+            await saveTheModel();
+            expect(saveModel).toHaveBeenLastCalledWith(expect.objectContaining({ id: "m-1" }));
+        });
+
         test("disables Save while the request is in flight, re-enables it after", async () => {
             let resolveSave;
             saveModel.mockReturnValue(new Promise((resolve) => {
