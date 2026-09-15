@@ -8,6 +8,7 @@ import com.metaml.workbench.governance.Approval;
 import com.metaml.workbench.model.AgentDecision;
 import com.metaml.workbench.workflow.WorkflowState;
 import com.metaml.workbench.model.ProcessModel;
+import com.metaml.workbench.model.ProxyTwinActivityMapping;
 import com.metaml.workbench.model.TwinAdvance;
 import com.metaml.workbench.model.TwinActivityExecutionState;
 import com.metaml.workbench.model.TwinProcess;
@@ -38,6 +39,11 @@ public interface WorkbenchService {
     default ProcessModel saveProcessModelWithAuthoredTwin(String id, String name, String bpmnXml, String twinBpmnXml,
             String tenantId, Long projectId) {
         return saveProcessModelWithAuthoredTwin(id, name, bpmnXml, twinBpmnXml, tenantId);
+    }
+
+    default ProcessModel saveProcessModelWithAuthoredTwin(String id, String name, String bpmnXml, String twinBpmnXml,
+            List<ProxyTwinActivityMapping> mappings, String tenantId, Long projectId) {
+        return saveProcessModelWithAuthoredTwin(id, name, bpmnXml, twinBpmnXml, tenantId, projectId);
     }
 
     ProcessModel getProcessModel(String id);

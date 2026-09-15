@@ -63,7 +63,6 @@ const GenerateProjectListPage = () => {
                 <Table hover responsive>
                     <thead>
                         <tr>
-                            <th>Process ID</th>
                             <th>Process name</th>
                             <th>Project</th>
                             <th />
@@ -75,7 +74,6 @@ const GenerateProjectListPage = () => {
                             return (
                                 <React.Fragment key={process.id}>
                                     <tr>
-                                        <td className="text-muted small">{process.id}</td>
                                         <td>{process.name || "Untitled"}</td>
                                         <td>
                                             {process.projectDisplayName
@@ -96,7 +94,7 @@ const GenerateProjectListPage = () => {
                                     {/* Own row below the button, same reasoning as ModelPage's own status row - a per-process result never shares a line with the button that produced it. */}
                                     {rs && (
                                         <tr>
-                                            <td colSpan={4} className="pt-0">
+                                            <td colSpan={3} className="pt-0">
                                                 <span
                                                     className={
                                                         rs.type === "err" ? "text-danger small"

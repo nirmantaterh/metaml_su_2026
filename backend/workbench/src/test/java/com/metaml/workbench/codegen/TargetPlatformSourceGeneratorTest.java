@@ -2,14 +2,183 @@ package com.metaml.workbench.codegen;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
+import javax.xml.parsers.DocumentBuilderFactory;
+
+import org.camunda.bpm.model.bpmn.Bpmn;
+import org.camunda.bpm.model.bpmn.BpmnModelInstance;
 import org.junit.jupiter.api.Test;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
         // Verifies generated source file paths align with declared Java package directory structure.
 class TargetPlatformSourceGeneratorTest {
 
     private final TargetPlatformSourceGenerator generator = new TargetPlatformSourceGenerator();
+
+    @Test
+    void usesTheExplicitMappedSynchronizationIdentityForDifferentProxyAndTwinIds() {
+        String proxy = linearBpmn("proxy_validate", "Proxy wording");
+        String twin = linearBpmn("digital_check", "Different twin wording");
+
+        TargetPlatformSourceGenerator.Result proxyResult = generator.generate(proxy, false, null,
+                Map.of("proxy_validate", "sync_validate-order"));
+        TargetPlatformSourceGenerator.Result twinResult = generator.generate(twin, true, null,
+                Map.of("digital_check", "sync_validate-order"));
+
+        assertThat(proxyResult.syncSignalNames()).containsExactly("sync_validate-order");
+        assertThat(twinResult.syncSignalNames()).containsExactly("sync_validate-order");
+        assertThat(proxyResult.bpmnXml()).contains("name=\"sync_validate-order\"");
+        assertThat(twinResult.bpmnXml()).contains("name=\"sync_validate-order\"");
+    }
+
+    @Test
+    void mappedProxySyncKeepsOutgoingBeforeServiceTaskSpecificChildren() throws Exception {
+        String synchronizationKey = "schema-order-test";
+        String signalName = "sync_" + synchronizationKey;
+        TargetPlatformSourceGenerator.Result proxyResult = generator.generate(richProxyBpmn(), false, null,
+                Map.of("proxy_task", signalName));
+        TargetPlatformSourceGenerator.Result twinResult = generator.generate(
+                linearBpmn("twin_task", "Twin task"), true, null, Map.of("twin_task", signalName));
+
+        assertThat(proxyResult.syncSignalNames()).containsExactly(signalName);
+        assertThat(twinResult.syncSignalNames()).containsExactly(signalName);
+
+        BpmnModelInstance parsedProxy = Bpmn.readModelFromStream(
+                new ByteArrayInputStream(proxyResult.bpmnXml().getBytes(StandardCharsets.UTF_8)));
+        Bpmn.validateModel(parsedProxy);
+
+        Document document = parseXml(proxyResult.bpmnXml());
+        Element proxyTask = elementById(document, "proxy_task");
+        List<String> childNames = childElementNames(proxyTask);
+        assertThat(childNames).containsExactly("incoming", "outgoing", "ioSpecification",
+                "dataInputAssociation", "dataOutputAssociation");
+        assertThat(childNames.indexOf("outgoing")).isLessThan(childNames.indexOf("ioSpecification"));
+        assertThat(childNames.indexOf("outgoing")).isLessThan(childNames.indexOf("dataInputAssociation"));
+        assertThat(childNames.indexOf("outgoing")).isLessThan(childNames.indexOf("dataOutputAssociation"));
+
+        assertThat(proxyTask.getAttribute("name")).isEqualTo("Rich proxy task");
+        assertThat(proxyTask.getAttributeNS("http://camunda.org/schema/1.0/bpmn", "delegateExpression"))
+                .isEqualTo("${proxy_task}");
+        assertThat(childNames).contains("ioSpecification", "dataInputAssociation", "dataOutputAssociation");
+
+        String rewrittenFlowId = textOfDirectChild(proxyTask, "outgoing");
+        assertThat(rewrittenFlowId).isEqualTo("sync_flow_proxy_task");
+        Element bridgeFlow = elementById(document, rewrittenFlowId);
+        assertThat(bridgeFlow.getAttribute("sourceRef")).isEqualTo("proxy_task");
+        assertThat(bridgeFlow.getAttribute("targetRef")).isEqualTo("sync_evt_proxy_task");
+
+        Element proxyGate = elementById(document, "sync_evt_proxy_task");
+        assertThat(textOfDirectChild(proxyGate, "incoming")).isEqualTo(rewrittenFlowId);
+        assertThat(textOfDirectChild(proxyGate, "outgoing")).isEqualTo("flow_to_end");
+        assertThat(elementById(document, "flow_to_end").getAttribute("sourceRef"))
+                .isEqualTo("sync_evt_proxy_task");
+        assertThat(proxyResult.bpmnXml()).contains("name=\"" + signalName + "\"");
+        assertThat(twinResult.bpmnXml()).contains("name=\"" + signalName + "\"");
+    }
+
+    @Test
+    void doesNotInventAMappingForDifferentAuthoredIds() {
+        TargetPlatformSourceGenerator.Result twinResult = generator.generate(
+                linearBpmn("digital_check", "Different twin wording"), true, null, Map.of());
+
+        assertThat(twinResult.syncSignalNames()).isEmpty();
+        assertThat(twinResult.bpmnXml()).doesNotContain("sync_proxy_validate");
+    }
+
+    private static String linearBpmn(String activityId, String name) {
+        return """
+                <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:camunda="http://camunda.org/schema/1.0/bpmn">
+                  <bpmn2:process id="process" isExecutable="true">
+                    <bpmn2:startEvent id="start"><bpmn2:outgoing>flow1</bpmn2:outgoing></bpmn2:startEvent>
+                    <bpmn2:serviceTask id="%s" name="%s" camunda:delegateExpression="${worker}">
+                      <bpmn2:incoming>flow1</bpmn2:incoming><bpmn2:outgoing>flow2</bpmn2:outgoing>
+                    </bpmn2:serviceTask>
+                    <bpmn2:endEvent id="end"><bpmn2:incoming>flow2</bpmn2:incoming></bpmn2:endEvent>
+                    <bpmn2:sequenceFlow id="flow1" sourceRef="start" targetRef="%s"/>
+                    <bpmn2:sequenceFlow id="flow2" sourceRef="%s" targetRef="end"/>
+                  </bpmn2:process>
+                </bpmn2:definitions>
+                """.formatted(activityId, name, activityId, activityId);
+    }
+
+    private static String richProxyBpmn() {
+        return """
+                <bpmn2:definitions xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                    targetNamespace="http://metaml.test/schema-order">
+                  <bpmn2:process id="proxy_process" isExecutable="true">
+                    <bpmn2:dataObject id="input_data" name="input" />
+                    <bpmn2:dataObject id="output_data" name="output" />
+                    <bpmn2:startEvent id="start"><bpmn2:outgoing>flow_to_proxy</bpmn2:outgoing></bpmn2:startEvent>
+                    <bpmn2:serviceTask id="proxy_task" name="Rich proxy task"
+                        camunda:delegateExpression="${proxy_task}">
+                      <bpmn2:incoming>flow_to_proxy</bpmn2:incoming>
+                      <bpmn2:outgoing>flow_to_end</bpmn2:outgoing>
+                      <bpmn2:ioSpecification id="proxy_io">
+                        <bpmn2:dataInput id="proxy_input" name="input" />
+                        <bpmn2:dataOutput id="proxy_output" name="output" />
+                        <bpmn2:inputSet id="proxy_input_set"><bpmn2:dataInputRefs>proxy_input</bpmn2:dataInputRefs></bpmn2:inputSet>
+                        <bpmn2:outputSet id="proxy_output_set"><bpmn2:dataOutputRefs>proxy_output</bpmn2:dataOutputRefs></bpmn2:outputSet>
+                      </bpmn2:ioSpecification>
+                      <bpmn2:dataInputAssociation id="proxy_input_association">
+                        <bpmn2:sourceRef>input_data</bpmn2:sourceRef><bpmn2:targetRef>proxy_input</bpmn2:targetRef>
+                      </bpmn2:dataInputAssociation>
+                      <bpmn2:dataOutputAssociation id="proxy_output_association">
+                        <bpmn2:sourceRef>proxy_output</bpmn2:sourceRef><bpmn2:targetRef>output_data</bpmn2:targetRef>
+                      </bpmn2:dataOutputAssociation>
+                    </bpmn2:serviceTask>
+                    <bpmn2:endEvent id="end"><bpmn2:incoming>flow_to_end</bpmn2:incoming></bpmn2:endEvent>
+                    <bpmn2:sequenceFlow id="flow_to_proxy" sourceRef="start" targetRef="proxy_task" />
+                    <bpmn2:sequenceFlow id="flow_to_end" sourceRef="proxy_task" targetRef="end" />
+                  </bpmn2:process>
+                </bpmn2:definitions>
+                """;
+    }
+
+    private static Document parseXml(String xml) throws Exception {
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        return factory.newDocumentBuilder().parse(
+                new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static Element elementById(Document document, String id) {
+        NodeList elements = document.getElementsByTagNameNS("*", "*");
+        for (int i = 0; i < elements.getLength(); i++) {
+            Element element = (Element) elements.item(i);
+            if (id.equals(element.getAttribute("id"))) return element;
+        }
+        throw new AssertionError("No BPMN element with id " + id);
+    }
+
+    private static List<String> childElementNames(Element parent) {
+        List<String> names = new ArrayList<>();
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            if (children.item(i) instanceof Element element) names.add(element.getLocalName());
+        }
+        return names;
+    }
+
+    private static String textOfDirectChild(Element parent, String localName) {
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node child = children.item(i);
+            if (child instanceof Element element && localName.equals(element.getLocalName())) {
+                return element.getTextContent().trim();
+            }
+        }
+        throw new AssertionError("No " + localName + " child on " + parent.getAttribute("id"));
+    }
 
     private static String bpmn(String activityXml) {
         return """

@@ -42,30 +42,54 @@ public class ProcessModelArchiveStore {
 
     // projectId is supplied by the Project UI.  A null value is retained only for legacy direct service callers and old persisted-workflow tests; new HTTP requests must provide it.
     public ProcessModelArchive save(ProcessModel model, Path bpmnFilePath, Path twinBpmnFilePath, Long projectId) {
-        Project project = projectId == null
-                ? projectRepository.findByName(model.getName())
-                        .orElseGet(() -> createLegacyProject(model.getName()))
-                : projectRepository.findById(projectId)
-                        .orElseThrow(() -> new IllegalArgumentException("Project not found: " + projectId));
-
-        ProcessModelArchive archive = new ProcessModelArchive();
-        archive.setModelId(model.getId());
+        ProcessModelArchive archive = archiveRepository.findByModelId(model.getId()).orElse(null);
+        Project project;
+        if (archive == null) {
+            project = projectId == null
+                    ? projectRepository.findByName(model.getName())
+                            .orElseGet(() -> createLegacyProject(model.getName()))
+                    : projectRepository.findById(projectId)
+                            .orElseThrow(() -> new IllegalArgumentException("Project not found: " + projectId));
+            archive = new ProcessModelArchive();
+            archive.setModelId(model.getId());
+            archive.setProject(project);
+        } else {
+            project = archive.getProject();
+            if (project == null) {
+                throw new IllegalStateException("Process model archive has no owning project: " + model.getId());
+            }
+            if (projectId != null && !projectId.equals(project.getId())) {
+                throw new IllegalArgumentException("Process model " + model.getId()
+                        + " belongs to project " + project.getId() + " and cannot be moved by save");
+            }
+        }
         archive.setName(model.getName());
         archive.setBpmnXml(model.getBpmnXml());
         archive.setBpmnFilePath(bpmnFilePath == null ? null : bpmnFilePath.toString());
         archive.setTwinBpmnXml(model.getAuthoredTwinBpmnXml());
         archive.setTwinBpmnFilePath(twinBpmnFilePath == null ? null : twinBpmnFilePath.toString());
+        archive.setProxyTwinActivityMappings(new java.util.ArrayList<>(model.getProxyTwinActivityMappings()));
         archive.setProcessDefinitionId(model.getProcessDefinitionId());
         archive.setTenantId(model.getTenantId());
         archive.setMajor(1);
         archive.setMinor(0);
         archive.setPatch(0);
-        archive.setProject(project);
         return archiveRepository.save(archive);
     }
 
     public Optional<ProcessModel> findByModelId(String modelId) {
         return archiveRepository.findByModelId(modelId).map(ProcessModelArchiveStore::toProcessModel);
+    }
+
+    // ProcessModel deliberately has no Project field. Generation needs only the user-facing project
+    // label for its output path, so keep that lookup at the archive boundary rather than coupling IDs.
+    @Transactional(readOnly = true)
+    public Optional<String> findProjectDisplayName(String modelId) {
+        return archiveRepository.findByModelId(modelId)
+                .map(ProcessModelArchive::getProject)
+                .map(project -> project.getDisplayName() == null || project.getDisplayName().isBlank()
+                        ? project.getName()
+                        : project.getDisplayName());
     }
 
     public List<ProcessModel> findAll() {
@@ -98,7 +122,8 @@ public class ProcessModelArchiveStore {
                 ? null
                 : archive.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant();
         return new ProcessModel(archive.getModelId(), archive.getName(), archive.getBpmnXml(),
-                archive.getTwinBpmnXml(), createdAt, archive.getProcessDefinitionId(), archive.getTenantId());
+                archive.getTwinBpmnXml(), archive.getProxyTwinActivityMappings(), createdAt,
+                archive.getProcessDefinitionId(), archive.getTenantId());
     }
 
     private Project createLegacyProject(String name) {

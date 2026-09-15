@@ -164,6 +164,59 @@ class NamingSeparationTest {
     }
 
     @Test
+    void workbenchGenerationUsesProjectAndModelNamesForNestedDirectoryAndProxyResource() throws IOException {
+        SpringBootProjectGenerator gen = generator();
+        String bpmn = minimalBpmnXml("technicalProcessKey");
+
+        GeneratedProject project = gen.generate(bpmn, List.of(), "TestProj", "ProcessSample");
+
+        assertThat(project.directory()).isEqualTo(outputDir.resolve("TestProj").resolve("ProcessSample"));
+        assertThat(project.directory().resolve("pom.xml")).exists();
+        Path proxy = project.directory().resolve("src/main/resources/processes/ProcessSample.bpmn");
+        assertThat(proxy).exists();
+        assertThat(Files.readString(proxy)).contains("id=\"technicalProcessKey\"");
+        assertThat(project.directory().resolve("src/main/resources/processes/technicalProcessKey.bpmn")).doesNotExist();
+        assertThat(gen.scanExisting()).extracting(GeneratedProject::projectId).contains(project.projectId());
+        assertThat(gen.findProjectDirectoryById(project.projectId())).isEqualTo(project.directory());
+    }
+
+    @Test
+    void nestedProjectDirectoriesAvoidCollisionsAndReuseCanonicalPathAfterStoppedCleanup() throws IOException {
+        SpringBootProjectGenerator gen = generator();
+        String bpmn = minimalBpmnXml("technicalProcessKey");
+
+        GeneratedProject first = gen.generate(bpmn, List.of(), "TestProj", "ProcessSample");
+        GeneratedProject otherProject = gen.generate(bpmn, List.of(), "OtherProj", "ProcessSample");
+        GeneratedProject otherProcess = gen.generate(bpmn, List.of(), "TestProj", "OtherProcess");
+
+        assertThat(otherProject.directory()).isEqualTo(outputDir.resolve("OtherProj").resolve("ProcessSample"));
+        assertThat(otherProcess.directory()).isEqualTo(outputDir.resolve("TestProj").resolve("OtherProcess"));
+
+        assertThat(gen.delete(first.projectId())).isTrue();
+        GeneratedProject regenerated = gen.generate(bpmn, List.of(), "TestProj", "ProcessSample");
+        assertThat(regenerated.directory()).isEqualTo(outputDir.resolve("TestProj").resolve("ProcessSample"));
+        assertThat(regenerated.directory().getFileName().toString()).doesNotContain("-2");
+    }
+
+    @Test
+    void runningPredecessorUsesTemporarySiblingUntilItCanBePromoted() throws IOException {
+        SpringBootProjectGenerator gen = generator();
+        String bpmn = minimalBpmnXml("technicalProcessKey");
+        GeneratedProject running = gen.generate(bpmn, List.of(), "TestProj", "ProcessSample");
+        GeneratedProject replacement = gen.generate(bpmn, List.of(), "TestProj", "ProcessSample");
+
+        assertThat(replacement.directory().getFileName().toString())
+                .startsWith("ProcessSample--running-");
+        assertThat(gen.scanExisting()).extracting(GeneratedProject::projectId)
+                .contains(running.projectId(), replacement.projectId());
+
+        assertThat(gen.delete(running.projectId())).isTrue();
+        GeneratedProject promoted = gen.promoteToCanonicalPath(replacement);
+        assertThat(promoted.directory()).isEqualTo(outputDir.resolve("TestProj").resolve("ProcessSample"));
+        assertThat(gen.findProjectDirectoryById(promoted.projectId())).isEqualTo(promoted.directory());
+    }
+
+    @Test
     void collisionHandlingProducesSuffixedDirectoryAndClassName() throws IOException {
         SpringBootProjectGenerator gen = generator();
         String bpmn = minimalBpmnXml("redcollarmanuf");

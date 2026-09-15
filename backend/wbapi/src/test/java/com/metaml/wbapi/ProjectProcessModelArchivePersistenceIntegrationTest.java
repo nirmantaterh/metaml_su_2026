@@ -109,6 +109,51 @@ class ProjectProcessModelArchivePersistenceIntegrationTest {
     }
 
     @Test
+    void updatingAnExistingModelReplacesItsArchiveContentWithoutChangingIdentityOrProject() {
+        Project project = createProject("Update Probe Project", null);
+        ProcessModel created = workbenchService.saveProcessModel(null, "Before update", SIMPLE_BPMN, null,
+                project.getId());
+
+        String updatedXml = SIMPLE_BPMN.replace("PersistenceProbeProcess", "PersistenceProbeProcessUpdated");
+        ProcessModel updated = workbenchService.saveProcessModel(created.getId(), "After update", updatedXml, null,
+                project.getId());
+        ProcessModel updatedAgain = workbenchService.saveProcessModel(created.getId(), "After second update",
+                updatedXml, null, project.getId());
+
+        assertThat(updated.getId()).isEqualTo(created.getId());
+        assertThat(updatedAgain.getId()).isEqualTo(created.getId());
+        assertThat(workbenchService.getProcessModel(created.getId()).getName()).isEqualTo("After second update");
+        assertThat(workbenchService.getProcessModel(created.getId()).getBpmnXml()).isEqualTo(updatedXml);
+
+        ProcessModelArchive archive = archiveRepository.findByModelId(created.getId()).orElseThrow();
+        assertThat(archive.getName()).isEqualTo("After second update");
+        assertThat(archive.getBpmnXml()).isEqualTo(updatedXml);
+        assertThat(archive.getProject().getId()).isEqualTo(project.getId());
+        assertThat(archiveRepository.findAll()).extracting(ProcessModelArchive::getModelId)
+                .filteredOn(created.getId()::equals).hasSize(1);
+        assertThat(projectService.getProjectProcessModels(project.getId()))
+                .extracting(ProcessModelSummaryDto::getId).containsExactly(created.getId());
+
+        // restoreState reads this archive-store representation after a Workbench restart.
+        ProcessModel restored = archiveStore.findAll().stream()
+                .filter(model -> model.getId().equals(created.getId()))
+                .findFirst().orElseThrow();
+        assertThat(restored.getName()).isEqualTo("After second update");
+        assertThat(restored.getBpmnXml()).isEqualTo(updatedXml);
+    }
+
+    @Test
+    void suppliedUnknownModelIdFailsWithoutCreatingAnArchive() {
+        Project project = createProject("Unknown Update Project", null);
+
+        assertThatThrownBy(() -> workbenchService.saveProcessModel("missing-model", "Missing", SIMPLE_BPMN, null,
+                project.getId()))
+                .isInstanceOf(NoSuchElementException.class)
+                .hasMessageContaining("Process model not found: missing-model");
+        assertThat(archiveRepository.findByModelId("missing-model")).isEmpty();
+    }
+
+    @Test
     void deletingAProjectCascadesTheDeleteToItsArchivedProcessModels() {
         Project project = createProject("Deletable Project", null);
         ProcessModel model = workbenchService.saveProcessModel(null, "Doomed Process", SIMPLE_BPMN, null,

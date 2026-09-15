@@ -121,7 +121,10 @@ const ModelPage = () => {
     };
 
     useEffect(() => {
-        if (!routeModelId) return;
+        if (!routeModelId) {
+            setCurrentModelId(null);
+            return;
+        }
         let cancelled = false;
         (async () => {
             setBusy(true);
@@ -159,7 +162,7 @@ const ModelPage = () => {
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [routeModelId]);
+    }, [routeModelId, location.pathname]);
 
     const handleOpenBpmnFile = async (event) => {
         const file = event.target.files && event.target.files[0];
@@ -221,8 +224,8 @@ const ModelPage = () => {
             const bpmnXml = await currentXml();
             // "" must become null; backend skips tenant governance only on strict null, not empty string
             const res = twinBpmnXml
-                ? await saveModelWithAuthoredTwin({ name: modelName, bpmnXml, twinBpmnXml, tenantId: tenantId || null, projectId: Number(selectedProjectId) })
-                : await saveModel({ name: modelName, bpmnXml, tenantId: tenantId || null, projectId: Number(selectedProjectId) });
+                ? await saveModelWithAuthoredTwin({ id: currentModelId, name: modelName, bpmnXml, twinBpmnXml, tenantId: tenantId || null, projectId: Number(selectedProjectId) })
+                : await saveModel({ id: currentModelId, name: modelName, bpmnXml, tenantId: tenantId || null, projectId: Number(selectedProjectId) });
             const saved = res.data || res;
             setStatus({
                 type: "ok",

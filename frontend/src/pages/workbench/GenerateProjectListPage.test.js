@@ -19,7 +19,7 @@ describe("GenerateProjectListPage", () => {
 
     test("lists every saved process with its project, and generates the row that's clicked", async () => {
         listModelSummaries.mockResolvedValue([
-            { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
+            { id: "123e4567-e89b-12d3-a456-426614174000", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
             { id: "m-2", name: "Loan Approval", projectId: 6, projectDisplayName: "Loans" },
         ]);
         generateProject.mockResolvedValue({ projectId: "gp-1", processKey: "wireTransferReview" });
@@ -29,11 +29,12 @@ describe("GenerateProjectListPage", () => {
         expect(await screen.findByText("Wire Transfer Review")).toBeInTheDocument();
         expect(screen.getByText("Loan Approval")).toBeInTheDocument();
         expect(screen.getByText("RedCollar Suits (5)")).toBeInTheDocument();
+        expect(screen.queryByText("123e4567-e89b-12d3-a456-426614174000")).not.toBeInTheDocument();
 
         const generateButtons = screen.getAllByRole("button", { name: "Generate" });
         userEvent.click(generateButtons[0]);
 
-        await waitFor(() => expect(generateProject).toHaveBeenCalledWith({ modelId: "m-1" }));
+        await waitFor(() => expect(generateProject).toHaveBeenCalledWith({ modelId: "123e4567-e89b-12d3-a456-426614174000" }));
         expect(await screen.findByText(/Generate successful \("wireTransferReview"\)/))
             .toBeInTheDocument();
     });

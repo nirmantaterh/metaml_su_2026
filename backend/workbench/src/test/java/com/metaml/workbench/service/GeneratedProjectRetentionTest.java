@@ -14,6 +14,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Optional;
+import java.util.stream.Stream;
 
 import org.camunda.bpm.engine.HistoryService;
 import org.camunda.bpm.engine.RepositoryService;
@@ -139,9 +141,8 @@ class GeneratedProjectRetentionTest {
                 java.time.Instant.now(), "definition-1", null);
     }
 
-    private String saveModel(String modelId) {
-        service.saveProcessModel(modelId, modelId, loanApprovalBpmn(), null);
-        return modelId;
+    private String saveModel(String name) {
+        return service.saveProcessModel(null, name, loanApprovalBpmn(), null).getId();
     }
 
     private Path directoryOf(GeneratedProject project) {
@@ -161,6 +162,14 @@ class GeneratedProjectRetentionTest {
                 .contains(project.projectId());
     }
 
+    private void assertProjectPresent(GeneratedProject project) {
+        assertThat(generator.scanExisting()).extracting(GeneratedProject::projectId).contains(project.projectId());
+    }
+
+    private void assertProjectCollected(GeneratedProject project) {
+        assertThat(generator.scanExisting()).extracting(GeneratedProject::projectId).doesNotContain(project.projectId());
+    }
+
     // makes an already-generated project actually launchable by the fake-listener launcher
     private LaunchedProject launch(GeneratedProject project) throws IOException {
         Files.writeString(directoryOf(project).resolve("mvnw.cmd"), FAKE_LISTENER_SCRIPT, StandardCharsets.UTF_8);
@@ -175,8 +184,8 @@ class GeneratedProjectRetentionTest {
 
         GeneratedProject second = service.generateSpringBootProject(modelId);
 
-        assertThat(directoryOf(first)).as("superseded generation should be gone").doesNotExist();
-        assertThat(directoryOf(second)).as("current generation must survive").exists();
+        assertProjectCollected(first);
+        assertProjectPresent(second);
     }
 
     @Test
@@ -189,6 +198,38 @@ class GeneratedProjectRetentionTest {
 
         assertThat(generator.scanExisting()).extracting(GeneratedProject::projectId)
                 .containsExactly(latest.projectId());
+    }
+
+    @Test
+    void workbenchIdleRegenerationKeepsTheProjectProcessPathCanonical() throws IOException {
+        String modelId = saveModel("ProcessSampleVerify");
+        when(processModelArchiveStore.findProjectDisplayName(modelId))
+                .thenReturn(Optional.of("JoannaFolderVerify"));
+        Path projectRoot = outputDir.resolve("JoannaFolderVerify");
+        Path canonical = projectRoot.resolve("ProcessSampleVerify");
+
+        for (int generation = 1; generation <= 3; generation++) {
+            GeneratedProject generated = service.generateSpringBootProject(modelId);
+
+            assertThat(generated.directory()).isEqualTo(canonical);
+            assertThat(canonical).isDirectory();
+            try (Stream<Path> children = Files.list(projectRoot)) {
+                assertThat(children.map(path -> path.getFileName().toString()).toList())
+                        .containsExactly("ProcessSampleVerify");
+            }
+        }
+
+        String differentProcess = saveModel("DifferentProcess");
+        when(processModelArchiveStore.findProjectDisplayName(differentProcess))
+                .thenReturn(Optional.of("JoannaFolderVerify"));
+        String sameProcessDifferentProject = saveModel("ProcessSampleVerify");
+        when(processModelArchiveStore.findProjectDisplayName(sameProcessDifferentProject))
+                .thenReturn(Optional.of("OtherProject"));
+
+        assertThat(service.generateSpringBootProject(differentProcess).directory())
+                .isEqualTo(projectRoot.resolve("DifferentProcess"));
+        assertThat(service.generateSpringBootProject(sameProcessDifferentProject).directory())
+                .isEqualTo(outputDir.resolve("OtherProject").resolve("ProcessSampleVerify"));
     }
 
     @Test
@@ -219,8 +260,8 @@ class GeneratedProjectRetentionTest {
 
         service.stopGeneratedProject(first.projectId());
 
-        assertThat(directoryOf(first)).as("stopping is what makes it collectable").doesNotExist();
-        assertThat(directoryOf(second)).exists();
+        assertProjectCollected(first);
+        assertProjectPresent(second);
     }
 
     @Test
@@ -235,8 +276,8 @@ class GeneratedProjectRetentionTest {
         // cleanup still runs - that honesty is the point, not an obstacle
         assertThat(service.stopGeneratedProject(first.projectId())).isFalse();
 
-        assertThat(directoryOf(first)).doesNotExist();
-        assertThat(directoryOf(second)).exists();
+        assertProjectCollected(first);
+        assertProjectPresent(second);
     }
 
     @Test
@@ -278,8 +319,8 @@ class GeneratedProjectRetentionTest {
 
         GeneratedProject firstNew = service.generateSpringBootProject(first);
 
-        assertThat(directoryOf(firstOld)).doesNotExist();
-        assertThat(directoryOf(firstNew)).exists();
+        assertProjectCollected(firstOld);
+        assertProjectPresent(firstNew);
         assertThat(directoryOf(secondOnly)).as("a different model's project is not this model's business").exists();
     }
 
@@ -321,15 +362,15 @@ class GeneratedProjectRetentionTest {
 
         WorkbenchServiceImpl restarted = restart(List.of(modelId));
 
-        assertThat(directoryOf(first)).doesNotExist();
-        assertThat(directoryOf(second)).exists();
+        assertProjectCollected(first);
+        assertProjectPresent(second);
         assertThat(restarted.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).detail())
                 .isEqualTo(second.projectId());
         // the restored mapping is real, not just present: regenerating after the restart supersedes
         // the generation the restart identified as current
         GeneratedProject third = restarted.generateSpringBootProject(modelId);
-        assertThat(directoryOf(second)).doesNotExist();
-        assertThat(directoryOf(third)).exists();
+        assertProjectCollected(second);
+        assertProjectPresent(third);
     }
 
     // Collect projects that were superseded while running once the application restarts.
@@ -345,8 +386,8 @@ class GeneratedProjectRetentionTest {
 
         restart(List.of(modelId));
 
-        assertThat(directoryOf(first)).doesNotExist();
-        assertThat(directoryOf(second)).exists();
+        assertProjectCollected(first);
+        assertProjectPresent(second);
     }
 
     // Verify startup cleanup preserves projects if their ports are still actively listening.
@@ -375,8 +416,8 @@ class GeneratedProjectRetentionTest {
         // Verify next restart collects the superseded generation once the port is free.
         waitUntilFree(leakedPort);
         restart(List.of(modelId));
-        assertThat(directoryOf(first)).doesNotExist();
-        assertThat(directoryOf(second)).exists();
+        assertProjectCollected(first);
+        assertProjectPresent(second);
     }
 
     @Test
@@ -402,8 +443,8 @@ class GeneratedProjectRetentionTest {
 
         // 2. Through stopGeneratedProject(), prove stopping it resolves modelId and triggers collection
         assertThat(restarted.stopGeneratedProject(first.projectId())).isTrue();
-        assertThat(directoryOf(first)).as("stopping superseded project after restart collects it").doesNotExist();
-        assertThat(directoryOf(second)).as("current generation remains intact").exists();
+        assertProjectCollected(first);
+        assertProjectPresent(second);
         assertThat(restarted.getWorkflowState(modelId).stages().get(WorkflowStage.LAUNCH).status())
                 .isEqualTo(StageStatus.STOPPED);
     }

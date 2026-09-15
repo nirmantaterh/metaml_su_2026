@@ -92,6 +92,49 @@ class RedCollarLockstepDeterministicHoldTest {
         // (saveModel -> generate-project, no authored twin) uses in production.
         GeneratedProject project = generator.generate(manufBpmnXml, List.of());
 
+        // Introduce an ambiguous second provider in the target platform fixture that also provides
+        // "qualityPassed". StandaloneCapabilityResolver auto-binds only when compatible matches == 1;
+        // with 2 compatible providers available, resolution is genuinely ambiguous, triggering the
+        // generic CAPABILITY RESOLUTION REQUIRED fail-closed hold without setting any binding variable.
+        Path altExecutorPath = project.directory()
+                .resolve("src/main/java/com/tp/TargetPlatform/capability/AlternativeQualityCheckExecutor.java");
+        Files.writeString(altExecutorPath, """
+                package com.tp.TargetPlatform.capability;
+
+                import java.util.LinkedHashMap;
+                import java.util.Map;
+                import java.util.Set;
+                import org.springframework.stereotype.Component;
+                import com.metaml.workbench.automation.AutomationResult;
+                import com.metaml.workbench.automation.ComponentExecutor;
+                import com.metaml.workbench.capability.runtime.CapabilityExecutionContext;
+
+                @Component("alternativeQualityCheckExecutor")
+                public class AlternativeQualityCheckExecutor implements ComponentExecutor {
+                    @Override
+                    public String getHandledAgentType() {
+                        return "alternative-quality-check";
+                    }
+
+                    @Override
+                    public Set<String> getHandledAgentNames() {
+                        return Set.of("alternative-quality-check-agent-01");
+                    }
+
+                    @Override
+                    public Set<String> providedOutputNames() {
+                        return Set.of("qualityPassed");
+                    }
+
+                    @Override
+                    public AutomationResult execute(CapabilityExecutionContext execution, String activityId, String agentName) {
+                        Map<String, Object> outputs = new LinkedHashMap<>();
+                        outputs.put("qualityPassed", true);
+                        return new AutomationResult("Alternative quality check passed", outputs);
+                    }
+                }
+                """);
+
         SpringBootProjectLauncher launcher = new SpringBootProjectLauncher();
         try {
             LaunchedProject launched;
@@ -120,7 +163,10 @@ class RedCollarLockstepDeterministicHoldTest {
             // Deterministic wait: not a fixed sleep, a bounded poll on the real Camunda incident this
             // missing binding must produce (same fail-closed mechanism proven in the sync test class).
             awaitLogContaining(project.directory(),
-                    "no retries remaining, task now has an incident: Activity '" + CHECKING_ACTIVITY_ID + "'",
+                    "activityId=" + CHECKING_ACTIVITY_ID,
+                    Duration.ofSeconds(90));
+            awaitLogContaining(project.directory(),
+                    "retriesRemaining=0 incident=true",
                     Duration.ofSeconds(90));
 
             // ---- THE HOLD: repeated sampling over a real time window, not a single snapshot ----

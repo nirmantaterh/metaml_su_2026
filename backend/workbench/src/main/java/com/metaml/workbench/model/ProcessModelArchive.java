@@ -6,6 +6,8 @@ import lombok.Setter;
 import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import org.hibernate.annotations.CreationTimestamp;
 
 @Entity
@@ -38,6 +40,11 @@ public class ProcessModelArchive {
 
     @Column(length = 255)
     private String twinBpmnFilePath;
+
+    @ElementCollection
+    @CollectionTable(name = "process_model_activity_mappings", joinColumns = @JoinColumn(name = "archive_id"))
+    @OrderColumn(name = "mapping_order")
+    private List<ProxyTwinActivityMapping> proxyTwinActivityMappings = new ArrayList<>();
 
     @CreationTimestamp
     private LocalDateTime createdAt;

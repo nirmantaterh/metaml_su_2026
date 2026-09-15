@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import javax.xml.XMLConstants;
@@ -49,6 +50,13 @@ public class TargetPlatformSourceGenerator {
     }
 
     public Result generate(String bpmnXml, boolean twin, Set<String> syncActivityIdsFromProxy) {
+        return generate(bpmnXml, twin, syncActivityIdsFromProxy, Map.of());
+    }
+
+    // Explicit authored-model correspondence supplies a side-specific activity -> shared signal map.
+    // No mapping is inferred from BPMN identity, name, sequence, or topology.
+    public Result generate(String bpmnXml, boolean twin, Set<String> syncActivityIdsFromProxy,
+            Map<String, String> mappedActivitySignals) {
         try {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             factory.setNamespaceAware(true);
@@ -103,7 +111,11 @@ public class TargetPlatformSourceGenerator {
             // Apply bidirectional lockstep synchronization: insert signal catch events so both proxy and twin wait at the same signals after each activity. SignalBroadcaster's existing REQUEST/RESPONSE protocol handles the rest (see its own comment).
             Set<String> syncSignalNames = new LinkedHashSet<>();
             Set<String> syncActivityIds = new LinkedHashSet<>();
-            if (!twin && !proxyServiceTaskIds.isEmpty()) {
+            if (!mappedActivitySignals.isEmpty()) {
+                syncSignalNames = twin
+                        ? insertTwinSyncSignalsBefore(document, mappedActivitySignals)
+                        : insertProxySyncSignals(document, mappedActivitySignals);
+            } else if (!twin && !proxyServiceTaskIds.isEmpty()) {
                 syncSignalNames = insertProxySyncSignals(document, proxyServiceTaskIds);
                 // Only report IDs where signals were actually created (requires outgoing flows)
                 for (String sn : syncSignalNames) {
@@ -139,6 +151,14 @@ public class TargetPlatformSourceGenerator {
     // serviceTask. The sync_<activityId> name matches the one inserted into the twin BPMN, giving
     // SignalBroadcaster's REQUEST/RESPONSE rendezvous two subscription points to pair.
     private Set<String> insertProxySyncSignals(Document document, List<String> activityIds) {
+        java.util.LinkedHashMap<String, String> signals = new java.util.LinkedHashMap<>();
+        for (String activityId : activityIds) {
+            signals.put(activityId, SYNC_SIGNAL_PREFIX + activityId);
+        }
+        return insertProxySyncSignals(document, signals);
+    }
+
+    private Set<String> insertProxySyncSignals(Document document, Map<String, String> activitySignals) {
         Set<String> signalNames = new LinkedHashSet<>();
         Element definitions = document.getDocumentElement();
         String bpmnNs = definitions.getNamespaceURI();
@@ -148,8 +168,9 @@ public class TargetPlatformSourceGenerator {
         if (processes.getLength() == 0) return signalNames;
         Element process = (Element) processes.item(0);
 
-        for (String activityId : activityIds) {
-            String signalName = SYNC_SIGNAL_PREFIX + activityId;
+        for (Map.Entry<String, String> entry : activitySignals.entrySet()) {
+            String activityId = entry.getKey();
+            String signalName = entry.getValue();
             ensureSignalNameAvailable(document, bpmnNs, signalName, activityId);
             String catchEventId = uniqueId(document, "sync_evt_" + activityId);
             String newFlowId = uniqueId(document, "sync_flow_" + activityId);
@@ -192,7 +213,7 @@ public class TargetPlatformSourceGenerator {
             removeChildElementsByLocalName(serviceTask, "outgoing");
             Element newOutgoing = document.createElementNS(bpmnNs, qname(prefix, "outgoing"));
             newOutgoing.setTextContent(newFlowId);
-            serviceTask.appendChild(newOutgoing);
+            insertOutgoingInSchemaOrder(serviceTask, newOutgoing);
 
             // Create the bridge sequence flow: serviceTask → catch event
             Element bridgeFlow = document.createElementNS(bpmnNs, qname(prefix, "sequenceFlow"));
@@ -291,8 +312,16 @@ public class TargetPlatformSourceGenerator {
     // only part of the Proxy, and a Proxy signal with no Twin subscriber is a case SignalBroadcaster
     // already handles (partnerNotComing -> plain delivery) rather than a generation failure.
     private Set<String> insertTwinSyncSignalsBefore(Document document, Set<String> activityIds) {
+        java.util.LinkedHashMap<String, String> signals = new java.util.LinkedHashMap<>();
+        for (String activityId : activityIds) {
+            signals.put(activityId, SYNC_SIGNAL_PREFIX + activityId);
+        }
+        return insertTwinSyncSignalsBefore(document, signals);
+    }
+
+    private Set<String> insertTwinSyncSignalsBefore(Document document, Map<String, String> activitySignals) {
         Set<String> signalNames = new LinkedHashSet<>();
-        if (activityIds.isEmpty()) {
+        if (activitySignals.isEmpty()) {
             return signalNames;
         }
         Element definitions = document.getDocumentElement();
@@ -303,7 +332,8 @@ public class TargetPlatformSourceGenerator {
         if (processes.getLength() == 0) return signalNames;
         Element process = (Element) processes.item(0);
 
-        for (String activityId : activityIds) {
+        for (Map.Entry<String, String> entry : activitySignals.entrySet()) {
+            String activityId = entry.getKey();
             Element activity = findElementById(document, activityId);
             if (activity == null) continue;
             // Incoming flows are what the catch event is spliced into; with none there is nothing to
@@ -312,7 +342,7 @@ public class TargetPlatformSourceGenerator {
             List<Element> incomingFlows = findFlowsByTargetRef(document, bpmnNs, activityId);
             if (incomingFlows.isEmpty()) continue;
 
-            String signalName = SYNC_SIGNAL_PREFIX + activityId;
+            String signalName = entry.getValue();
             ensureSignalNameAvailable(document, bpmnNs, signalName, activityId);
             String catchEventId = uniqueId(document, "sync_evt_" + activityId);
             String bridgeFlowId = uniqueId(document, "sync_flow_" + activityId);
@@ -377,6 +407,23 @@ public class TargetPlatformSourceGenerator {
             }
         }
         activity.appendChild(incoming);
+    }
+
+    // tFlowNode's outgoing references must precede the activity-specific content (data mappings,
+    // loop characteristics, and so on). Appending works for a minimal task but produces invalid
+    // BPMN for a task that already has such content.
+    private static void insertOutgoingInSchemaOrder(Element activity, Element outgoing) {
+        NodeList children = activity.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            if (children.item(i) instanceof Element el
+                    && !"extensionElements".equals(el.getLocalName())
+                    && !"incoming".equals(el.getLocalName())
+                    && !"outgoing".equals(el.getLocalName())) {
+                activity.insertBefore(outgoing, el);
+                return;
+            }
+        }
+        activity.appendChild(outgoing);
     }
 
     private static List<Element> findFlowsByTargetRef(Document document, String bpmnNs, String targetRef) {

@@ -136,9 +136,9 @@ class ModelDeletionTest {
                 modelFileStore, processModelArchiveStore, delegateClassGenerator, generator, launcher, tracker);
     }
 
-    private String saveModel(String modelId) {
-        service.saveProcessModel(modelId, modelId, loanApprovalBpmn(), null);
-        return modelId;
+    private String saveModel(String name) {
+        ProcessModel model = service.saveProcessModel(null, name, loanApprovalBpmn(), null);
+        return model.getId();
     }
 
     private Path directoryOf(GeneratedProject project) {
@@ -303,23 +303,25 @@ class ModelDeletionTest {
 
     @Test
     void aTwinSurvivesTheDeletionOfTheModelItCameFrom() {
+        String modelId = saveModel("m1");
+        ProcessModel savedModel = service.getProcessModel(modelId);
+
         TwinProcess twin = new TwinProcess();
         twin.setId("twin-1");
-        twin.setModelId("m1");
+        twin.setModelId(modelId);
         twin.setProcessDefinitionId("definition-1");
         twin.setTwinProcessDefinitionId("definition-1-twin");
         twin.setOriginalProcessId("original-instance-1");
         twin.setTwinProcessId("twin-instance-1");
         twin.setTenantId("acme");
-        service = newService(newTracker(), List.of(), List.of(twin));
+        service = newService(newTracker(), List.of(savedModel), List.of(twin));
         service.restoreState();
-        String modelId = saveModel("m1");
 
         service.deleteProcessModel(modelId);
 
         TwinProcess survivor = service.findTwinProcess("twin-1");
         assertThat(survivor).as("model -> twin is provenance, not ownership").isNotNull();
-        assertThat(survivor.getModelId()).isEqualTo("m1");
+        assertThat(survivor.getModelId()).isEqualTo(modelId);
         assertThat(survivor.getTwinProcessId()).isEqualTo("twin-instance-1");
         assertThat(survivor.getTenantId()).as("tenant ownership is untouched").isEqualTo("acme");
     }
@@ -359,9 +361,9 @@ class ModelDeletionTest {
         service.generateSpringBootProject(modelId);
         service.deleteProcessModel(modelId);
 
-        assertThatThrownBy(() -> service.saveProcessModel("m1", "m1 again", loanApprovalBpmn(), null))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("already been used");
+        assertThatThrownBy(() -> service.saveProcessModel(modelId, "m1 again", loanApprovalBpmn(), null))
+                .isInstanceOf(NoSuchElementException.class)
+                .hasMessageContaining("Process model not found: " + modelId);
     }
 
     @Test
@@ -373,20 +375,20 @@ class ModelDeletionTest {
         restarted.restoreState();
 
         assertThat(restarted.listProcessModels()).as("a deleted model must not come back").isEmpty();
-        assertThatThrownBy(() -> restarted.saveProcessModel("m1", "m1 again", loanApprovalBpmn(), null))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("already been used");
+        assertThatThrownBy(() -> restarted.saveProcessModel(modelId, "m1 again", loanApprovalBpmn(), null))
+                .isInstanceOf(NoSuchElementException.class)
+                .hasMessageContaining("Process model not found: " + modelId);
     }
 
     @Test
     void adifferentNewModelIdStillWorksNormallyAfterADeletion() {
         service.deleteProcessModel(saveModel("m1"));
 
-        ProcessModel fresh = service.saveProcessModel("m2", "m2", loanApprovalBpmn(), null);
+        ProcessModel fresh = service.saveProcessModel(null, "m2", loanApprovalBpmn(), null);
 
-        assertThat(fresh.getId()).isEqualTo("m2");
-        assertThat(bpmnFileOf("m2")).exists();
-        GeneratedProject project = service.generateSpringBootProject("m2");
+        assertThat(fresh.getId()).isNotBlank();
+        assertThat(bpmnFileOf(fresh.getId())).exists();
+        GeneratedProject project = service.generateSpringBootProject(fresh.getId());
         assertThat(directoryOf(project)).exists();
     }
 
@@ -400,7 +402,7 @@ class ModelDeletionTest {
         assertThat(service.listProcessModels()).extracting(ProcessModel::getId).containsExactly(fresh.getId());
     }
 
-    // Model IDs whose first save failed validation can be retried.
+    // Model creation whose first save failed validation can be retried.
     @Test
     void anIdWhoseFirstSaveFailedValidationCanStillBeRetried() {
         // Mocks missing process definition to assert doSaveProcessModel rejects non-executable models.
@@ -408,16 +410,14 @@ class ModelDeletionTest {
                 .thenReturn(null)
                 .thenReturn(executableDefinition());
 
-        assertThatThrownBy(() -> service.saveProcessModel("m1", "m1", loanApprovalBpmn(), null))
+        assertThatThrownBy(() -> service.saveProcessModel(null, "m1", loanApprovalBpmn(), null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("isExecutable");
-        assertThat(service.getWorkflowState("m1").stages().get(WorkflowStage.MODEL).status())
-                .isEqualTo(StageStatus.FAILED);
 
-        ProcessModel retried = service.saveProcessModel("m1", "m1", loanApprovalBpmn(), null);
+        ProcessModel retried = service.saveProcessModel(null, "m1", loanApprovalBpmn(), null);
 
-        assertThat(retried.getId()).isEqualTo("m1");
-        assertThat(bpmnFileOf("m1")).exists();
+        assertThat(retried.getId()).isNotBlank();
+        assertThat(bpmnFileOf(retried.getId())).exists();
     }
 
     private static ProcessDefinition executableDefinition() {
@@ -433,7 +433,8 @@ class ModelDeletionTest {
 
         GeneratedProject second = service.generateSpringBootProject(modelId);
 
-        assertThat(directoryOf(first)).doesNotExist();
+        assertThat(generator.scanExisting()).extracting(GeneratedProject::projectId)
+                .containsExactly(second.projectId());
         assertThat(directoryOf(second)).exists();
     }
 

@@ -61,6 +61,8 @@ import com.metaml.workbench.model.AgentVariables;
 import com.metaml.workbench.model.BusinessKeys;
 import com.metaml.workbench.model.GovernanceDecision;
 import com.metaml.workbench.model.ProcessModel;
+import com.metaml.workbench.model.ProxyTwinActivityMapping;
+import com.metaml.workbench.generation.ProxyTwinActivityMappingValidator;
 import com.metaml.workbench.model.TwinAdvance;
 import com.metaml.workbench.model.TwinActivityExecutionState;
 import com.metaml.workbench.model.TwinProcess;
@@ -238,6 +240,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 continue;
             }
             cleanupSupersededProjects(model.getId(), state);
+            promoteCurrentGeneration(model.getId());
         }
     }
 
@@ -426,14 +429,26 @@ public class WorkbenchServiceImpl implements WorkbenchService {
     @Override
     public ProcessModel saveProcessModelWithAuthoredTwin(String id, String name, String bpmnXml,
             String twinBpmnXml, String tenantId, Long projectId) {
+        return saveProcessModelWithAuthoredTwin(id, name, bpmnXml, twinBpmnXml, List.of(), tenantId, projectId);
+    }
+
+    @Override
+    public ProcessModel saveProcessModelWithAuthoredTwin(String id, String name, String bpmnXml,
+            String twinBpmnXml, List<ProxyTwinActivityMapping> mappings, String tenantId, Long projectId) {
         if (twinBpmnXml == null || twinBpmnXml.isBlank()) {
             throw new IllegalArgumentException("Authored twin bpmnXml must not be blank");
         }
-        return doSaveProcessModelEntry(id, name, bpmnXml, twinBpmnXml, tenantId, projectId);
+        ProxyTwinActivityMappingValidator.validate(bpmnXml, twinBpmnXml, mappings);
+        return doSaveProcessModelEntry(id, name, bpmnXml, twinBpmnXml, mappings, tenantId, projectId);
     }
 
     private ProcessModel doSaveProcessModelEntry(String id, String name, String bpmnXml, String twinBpmnXml,
             String tenantId, Long projectId) {
+        return doSaveProcessModelEntry(id, name, bpmnXml, twinBpmnXml, List.of(), tenantId, projectId);
+    }
+
+    private ProcessModel doSaveProcessModelEntry(String id, String name, String bpmnXml, String twinBpmnXml,
+            List<ProxyTwinActivityMapping> mappings, String tenantId, Long projectId) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("Process model name must not be blank");
         }
@@ -446,14 +461,10 @@ public class WorkbenchServiceImpl implements WorkbenchService {
                 throw new IllegalArgumentException("Process model id may only contain letters, digits, "
                         + "'-' and '_': " + id);
             }
-            // Prevent overwriting existing active model definition.
-            if (processModels.containsKey(id)) {
-                throw new IllegalArgumentException("Process model already exists: " + id);
-            }
-            // Reject reuse of retired model IDs to preserve history.
-            if (isRetiredModelId(id)) {
-                throw new IllegalArgumentException("Process model id '" + id + "' has already been used and "
-                        + "cannot be reused - its workflow history is kept after deletion");
+            // A supplied ID is an update request. Creation intentionally has no caller-supplied ID,
+            // so a stale or invented ID can never create a second logical model.
+            if (!processModels.containsKey(id)) {
+                throw new NoSuchElementException("Process model not found: " + id);
             }
             modelId = id;
         } else {
@@ -462,7 +473,7 @@ public class WorkbenchServiceImpl implements WorkbenchService {
 
         workflowStateTracker.record(modelId, WorkflowStage.MODEL, StageStatus.IN_PROGRESS, null);
         try {
-            return doSaveProcessModel(modelId, name, bpmnXml, twinBpmnXml, tenantId, projectId);
+            return doSaveProcessModel(modelId, name, bpmnXml, twinBpmnXml, mappings, tenantId, projectId);
         } catch (RuntimeException e) {
             workflowStateTracker.record(modelId, WorkflowStage.MODEL, StageStatus.FAILED, e.getMessage(),
                     new StageError(e.getClass().getSimpleName(), "SAVE_MODEL", null, null, null, null, null));
@@ -472,6 +483,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
 
     private ProcessModel doSaveProcessModel(String modelId, String name, String bpmnXml, String twinBpmnXml,
             String tenantId, Long projectId) {
+        return doSaveProcessModel(modelId, name, bpmnXml, twinBpmnXml, List.of(), tenantId, projectId);
+    }
+
+    private ProcessModel doSaveProcessModel(String modelId, String name, String bpmnXml, String twinBpmnXml,
+            List<ProxyTwinActivityMapping> mappings, String tenantId, Long projectId) {
         Deployment deployment;
         try {
             deployment = repositoryService.createDeployment()
@@ -509,14 +525,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             }
         }
 
-        ProcessModel model = new ProcessModel(modelId, name, bpmnXml, twinBpmnXml, Instant.now(),
+        ProcessModel model = new ProcessModel(modelId, name, bpmnXml, twinBpmnXml, mappings, Instant.now(),
                 definition.getId(), tenantId);
-        // Concurrent save guard: putIfAbsent ensures earlier winner's definition is retained.
-        ProcessModel existing = processModels.putIfAbsent(modelId, model);
-        if (existing != null) {
-            discardDeployment(deployment.getId());
-            throw new IllegalArgumentException("Process model already exists: " + modelId);
-        }
+        // A new save creates the ID once; an existing ID replaces its current in-memory definition.
+        // Archive persistence below performs the matching one-row upsert and preserves project ownership.
+        ProcessModel existing = processModels.put(modelId, model);
         Path bpmnFilePath;
         Path twinBpmnFilePath = null;
         try {
@@ -527,7 +540,11 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             }
         } catch (RuntimeException e) {
             // Roll back in-memory state and deployment if file persistence fails.
-            processModels.remove(modelId, model);
+            if (existing == null) {
+                processModels.remove(modelId, model);
+            } else {
+                processModels.replace(modelId, model, existing);
+            }
             discardDeployment(deployment.getId());
             throw e;
         }
@@ -610,16 +627,6 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             throw new NoSuchElementException("Process model not found: " + id);
         }
         return model;
-    }
-
-    // Identifies IDs previously associated with completed models to prevent re-registration.
-    private boolean isRetiredModelId(String modelId) {
-        for (StageEvent event : workflowStateTracker.stateFor(modelId).history()) {
-            if (event.stage() == WorkflowStage.MODEL && event.status() == StageStatus.COMPLETED) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private Object modelLockFor(String modelId) {
@@ -717,11 +724,13 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             if (model.hasAuthoredTwin()) {
                 // Authored twin BPMN is packaged directly into the generated target platform.
                 project = springBootProjectGenerator.generateWithAuthoredTwin(model.getBpmnXml(),
-                        model.getAuthoredTwinBpmnXml(), model.getName());
+                        model.getAuthoredTwinBpmnXml(), model.getProxyTwinActivityMappings(),
+                        projectDisplayNameFor(modelId), model.getName());
             } else {
                 List<GeneratedDelegate> delegates = delegateClassGenerator.generate(model.getBpmnXml(),
                         SpringBootProjectGenerator.DELEGATE_PACKAGE);
-                project = springBootProjectGenerator.generate(model.getBpmnXml(), delegates, model.getName());
+                project = springBootProjectGenerator.generate(model.getBpmnXml(), delegates,
+                        projectDisplayNameFor(modelId), model.getName());
             }
             generatedProjects.put(project.projectId(), project);
             modelIdByProjectId.put(project.projectId(), modelId);
@@ -730,6 +739,8 @@ public class WorkbenchServiceImpl implements WorkbenchService {
             logger.info("Generated Target Harness Platform {} for model {}", project.projectId(), modelId);
             // Clean up earlier generations once new generation completes successfully.
             cleanupSupersededProjects(modelId);
+            promoteCurrentGeneration(modelId);
+            project = generatedProjects.get(project.projectId());
             return project;
         } catch (RuntimeException e) {
             workflowStateTracker.record(modelId, WorkflowStage.GENERATE, StageStatus.FAILED, e.getMessage(),
@@ -831,8 +842,27 @@ public class WorkbenchServiceImpl implements WorkbenchService {
         // Clean up superseded projects once running process terminates.
         if (modelId != null) {
             cleanupSupersededProjects(modelId);
+            promoteCurrentGeneration(modelId);
         }
         return wasRunning;
+    }
+
+    private String projectDisplayNameFor(String modelId) {
+        return processModelArchiveStore.findProjectDisplayName(modelId).orElse("Project");
+    }
+
+    private void promoteCurrentGeneration(String modelId) {
+        String currentProjectId = currentProjectIdOf(workflowStateTracker.stateFor(modelId));
+        if (currentProjectId == null) {
+            return;
+        }
+        springBootProjectLauncher.runIfIdle(currentProjectId, () -> {
+            GeneratedProject current = generatedProjects.get(currentProjectId);
+            if (current != null) {
+                generatedProjects.replace(currentProjectId,
+                        springBootProjectGenerator.promoteToCanonicalPath(current));
+            }
+        });
     }
 
     @Override

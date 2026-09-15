@@ -20,9 +20,23 @@ Core properties are defined in `src/main/resources/application.properties`:
 
 ## Build & Run
 
-To build and run the application locally:
+The generated Target Platform can run independently of the MetaML Workbench. The Maven Wrapper
+scripts are included in every generated project; their first use downloads Maven if needed.
+
+### Windows
+
+```powershell
+.\mvnw.cmd clean compile
+.\mvnw.cmd spring-boot:run
+```
+
+### macOS and Linux
 
 ```bash
 ./mvnw clean compile
 ./mvnw spring-boot:run
 ```
+
+The application runs in the foreground. Press `Ctrl+C` in that terminal to stop a separately
+launched Target Platform. When launched from **Transmute -> Launch**, use that page's **Stop**
+control; it stops the Workbench-managed process and its child process tree.

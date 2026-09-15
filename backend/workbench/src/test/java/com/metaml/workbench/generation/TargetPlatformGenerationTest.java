@@ -90,6 +90,24 @@ class TargetPlatformGenerationTest {
         assertThat(tpRoot.resolve("twin/events")).isEmptyDirectory();
     }
 
+    @Test
+    void workbenchLabelsNameProxyAndTwinResourcesWithoutChangingTheirTechnicalKeys() throws IOException {
+        String proxyBpmn = bpmn("technical_proxy_key", "");
+        String twinBpmn = bpmn("technical_twin_key", "");
+
+        GeneratedProject project = generator().generateWithAuthoredTwin(proxyBpmn, twinBpmn,
+                "TestProj", "ProcessSample");
+        Path processes = project.directory().resolve("src/main/resources/processes");
+
+        assertThat(project.directory()).endsWith(Path.of("TestProj", "ProcessSample"));
+        Path proxy = processes.resolve("ProcessSample.bpmn");
+        Path twin = processes.resolve("ProcessSample-twin.bpmn");
+        assertThat(proxy).exists();
+        assertThat(twin).exists();
+        assertThat(Files.readString(proxy)).contains("id=\"technical_proxy_key\"");
+        assertThat(Files.readString(twin)).contains("id=\"technical_twin_key\"");
+    }
+
     // Verifies that authored twins reusing proxy activity IDs produce distinct delegate bean names,
     // avoiding ConflictingBeanDefinitionException at Spring context startup.
     @Test

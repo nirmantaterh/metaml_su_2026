@@ -49,6 +49,16 @@ class RedCollarTargetPlatformGenerationTest {
         assertThat(project.directory()).exists();
         assertThat(project.processKey()).isEqualTo("RedCollar.Manuf");
 
+        // A generated Target Platform must remain launchable outside the Workbench.  The template
+        // README directs users to Maven Wrapper commands, so every copied project needs both
+        // platform launchers and their wrapper configuration.
+        assertThat(project.directory().resolve("mvnw")).isRegularFile();
+        assertThat(project.directory().resolve("mvnw.cmd")).isRegularFile();
+        assertThat(project.directory().resolve(".mvn/wrapper/maven-wrapper.properties")).isRegularFile();
+        assertThat(Files.readString(project.directory().resolve("README.md")))
+                .contains("mvnw.cmd spring-boot:run")
+                .contains("Ctrl+C");
+
         Path tpRoot = project.directory().resolve("src/main/java/com/tp/TargetPlatform");
 
         // 1. Verify Core Coordination & Messaging

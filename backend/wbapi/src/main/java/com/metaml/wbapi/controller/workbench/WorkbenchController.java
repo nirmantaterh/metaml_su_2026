@@ -68,6 +68,8 @@ public class WorkbenchController {
             return ResponseEntity.ok(new ApiResponse(FeedbackMessage.SUCCESS, model));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(BAD_REQUEST).body(new ApiResponse(e.getMessage(), null));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.status(NOT_FOUND).body(new ApiResponse(e.getMessage(), null));
         } catch (Exception e) {
             return ResponseEntity.status(INTERNAL_SERVER_ERROR).body(new ApiResponse(e.getMessage(), null));
         }
@@ -81,10 +83,13 @@ public class WorkbenchController {
                 throw new IllegalArgumentException("A project must be selected before saving a process model");
             }
             ProcessModel model = workbenchService.saveProcessModelWithAuthoredTwin(request.getId(), request.getName(),
-                    request.getBpmnXml(), request.getTwinBpmnXml(), request.getTenantId(), request.getProjectId());
+                    request.getBpmnXml(), request.getTwinBpmnXml(), request.getProxyTwinActivityMappings(),
+                    request.getTenantId(), request.getProjectId());
             return ResponseEntity.ok(new ApiResponse(FeedbackMessage.SUCCESS, model));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(BAD_REQUEST).body(new ApiResponse(e.getMessage(), null));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.status(NOT_FOUND).body(new ApiResponse(e.getMessage(), null));
         } catch (Exception e) {
             return ResponseEntity.status(INTERNAL_SERVER_ERROR).body(new ApiResponse(e.getMessage(), null));
         }

@@ -23,6 +23,7 @@ import org.junit.jupiter.api.io.TempDir;
 import com.metaml.workbench.bpmn.TwinModelGenerator;
 import com.metaml.workbench.codegen.DelegateClassGenerator;
 import com.metaml.workbench.codegen.ExternalTaskWorkerGenerator;
+import com.metaml.workbench.model.ProxyTwinActivityMapping;
 
 /**
  * End-to-end synchronization tests for RedCollar target platform proxy and twin executions.
@@ -81,7 +82,8 @@ class RedCollarTargetPlatformSyncEndToEndTest {
         SpringBootProjectGenerator generator = new SpringBootProjectGenerator(REAL_TEMPLATE.toString(),
                 outputDir.toString(), new TwinModelGenerator(), new DelegateClassGenerator(),
                 new ExternalTaskWorkerGenerator());
-        GeneratedProject project = generator.generateWithAuthoredTwin(manufBpmnXml, twinBpmnXml);
+        GeneratedProject project = generator.generateWithAuthoredTwin(manufBpmnXml, twinBpmnXml,
+                firstAuthoredMapping(), null, null);
 
         Path tpRoot = project.directory().resolve("src/main/java/com/tp/TargetPlatform");
         assertThat(tpRoot.resolve("messaging/RabbitMqConfig.java")).exists();
@@ -164,6 +166,27 @@ class RedCollarTargetPlatformSyncEndToEndTest {
         } finally {
             launcher.stop(project.projectId());
         }
+    }
+
+    private static List<ProxyTwinActivityMapping> firstAuthoredMapping() {
+        ProxyTwinActivityMapping mapping = new ProxyTwinActivityMapping();
+        mapping.setProxyActivityId("_E12DB58F-C11B-42BF-BA46-88B171B228EC");
+        mapping.setTwinActivityId("_379CDD3F-5F9F-4B1E-B8D5-734D7D5994EB");
+        mapping.setSynchronizationKey("initialization");
+        return List.of(mapping);
+    }
+
+    private static List<ProxyTwinActivityMapping> incidentTestMappings() {
+        return List.of(
+                new ProxyTwinActivityMapping("_E12DB58F-C11B-42BF-BA46-88B171B228EC",
+                        "_379CDD3F-5F9F-4B1E-B8D5-734D7D5994EB", "initialization"),
+                new ProxyTwinActivityMapping("_0FC5B3EE-E55C-405A-A755-65504ED71E08",
+                        "_A2C4B0C6-1E9D-4B3A-9022-4CECD2909943", "pressing"),
+                new ProxyTwinActivityMapping("_9BDC6C05-C6E9-4CE8-B6DE-886693BF4DE7",
+                        "_3F0912D2-6F88-4809-B54A-2DCAF4B7F939", "packaging"),
+                new ProxyTwinActivityMapping("_3E1A9952-83B6-4C80-AB67-3BAEDA810FFE",
+                        "_7F7942AA-09FC-4424-BB95-42F59FDD9B8C", "shipping")
+        );
     }
 
     // Verifies synchronization when no authored twin BPMN is supplied: generates a target platform
@@ -270,7 +293,8 @@ class RedCollarTargetPlatformSyncEndToEndTest {
         SpringBootProjectGenerator generator = new SpringBootProjectGenerator(REAL_TEMPLATE.toString(),
                 outputDir.toString(), new TwinModelGenerator(), new DelegateClassGenerator(),
                 new ExternalTaskWorkerGenerator());
-        GeneratedProject project = generator.generateWithAuthoredTwin(manufBpmnXml, twinBpmnXml);
+        GeneratedProject project = generator.generateWithAuthoredTwin(manufBpmnXml, twinBpmnXml,
+                firstAuthoredMapping(), null, null);
 
         SpringBootProjectLauncher launcher = new SpringBootProjectLauncher();
         try {
@@ -370,7 +394,8 @@ class RedCollarTargetPlatformSyncEndToEndTest {
         SpringBootProjectGenerator generator = new SpringBootProjectGenerator(REAL_TEMPLATE.toString(),
                 outputDir.toString(), new TwinModelGenerator(), new DelegateClassGenerator(),
                 new ExternalTaskWorkerGenerator());
-        GeneratedProject project = generator.generateWithAuthoredTwin(manufBpmnXml, twinBpmnXml);
+        GeneratedProject project = generator.generateWithAuthoredTwin(manufBpmnXml, twinBpmnXml,
+                incidentTestMappings(), null, null);
 
         SpringBootProjectLauncher launcher = new SpringBootProjectLauncher();
         try {
@@ -488,7 +513,8 @@ class RedCollarTargetPlatformSyncEndToEndTest {
         SpringBootProjectGenerator generator = new SpringBootProjectGenerator(REAL_TEMPLATE.toString(),
                 outputDir.toString(), new TwinModelGenerator(), new DelegateClassGenerator(),
                 new ExternalTaskWorkerGenerator());
-        GeneratedProject project = generator.generateWithAuthoredTwin(manufBpmnXml, twinBpmnXml);
+        GeneratedProject project = generator.generateWithAuthoredTwin(manufBpmnXml, twinBpmnXml,
+                firstAuthoredMapping(), null, null);
 
         SpringBootProjectLauncher launcher = new SpringBootProjectLauncher();
         try {
@@ -554,7 +580,8 @@ class RedCollarTargetPlatformSyncEndToEndTest {
         SpringBootProjectGenerator generator = new SpringBootProjectGenerator(REAL_TEMPLATE.toString(),
                 outputDir.toString(), new TwinModelGenerator(), new DelegateClassGenerator(),
                 new ExternalTaskWorkerGenerator());
-        GeneratedProject project = generator.generateWithAuthoredTwin(manufBpmnXml, twinBpmnXml);
+        GeneratedProject project = generator.generateWithAuthoredTwin(manufBpmnXml, twinBpmnXml,
+                firstAuthoredMapping(), null, null);
 
         // Verify configuration directly from the generated RabbitMqConfig source:
         Path configFile = project.directory()
@@ -582,7 +609,7 @@ class RedCollarTargetPlatformSyncEndToEndTest {
         assertThat(dlqTasksMatch.find()).as("must find the generated task DLQ name").isTrue();
         String dlqTasksQueueName = dlqTasksMatch.group(1);
 
-        SpringBootProjectLauncher launcher = new SpringBootProjectLauncher();
+        SpringBootProjectLauncher launcher = new SpringBootProjectLauncher(Duration.ofMinutes(8));
         try {
             LaunchedProject launched;
             try {

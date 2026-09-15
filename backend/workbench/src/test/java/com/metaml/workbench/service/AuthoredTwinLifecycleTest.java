@@ -110,13 +110,13 @@ class AuthoredTwinLifecycleTest {
 
     @Test
     void savingWithAnAuthoredTwinPersistsBothBpmnsAndMarksTheModelAccordingly() {
-        ProcessModel model = service.saveProcessModelWithAuthoredTwin("acme-1", "Acme", acmeManufBpmn(),
+        ProcessModel model = service.saveProcessModelWithAuthoredTwin(null, "Acme", acmeManufBpmn(),
                 acmeTwinBpmn(), null);
 
         assertThat(model.hasAuthoredTwin()).isTrue();
         assertThat(model.getAuthoredTwinBpmnXml()).isEqualTo(acmeTwinBpmn());
-        assertThat(modelsDir.resolve("acme-1.bpmn")).exists();
-        assertThat(modelsDir.resolve("acme-1.twin.bpmn")).exists();
+        assertThat(modelsDir.resolve(model.getId() + ".bpmn")).exists();
+        assertThat(modelsDir.resolve(model.getId() + ".twin.bpmn")).exists();
     }
 
     // Twin XML is validated structurally without direct engine deployment.
@@ -136,7 +136,7 @@ class AuthoredTwinLifecycleTest {
                 """;
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.saveProcessModelWithAuthoredTwin(
-                        "acme-two-proc", "Acme", acmeManufBpmn(), twinWithTwoExecutableProcesses, null))
+                        null, "Acme", acmeManufBpmn(), twinWithTwoExecutableProcesses, null))
                 .as("structural validation must still reject a twin XML that could never actually deploy")
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("exactly one executable");
@@ -145,19 +145,20 @@ class AuthoredTwinLifecycleTest {
     @Test
     void savingWithAnInvalidAuthoredTwinBpmnFailsCleanlyWithoutLeavingAHalfSavedModel() {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.saveProcessModelWithAuthoredTwin(
-                        "acme-bad", "Acme Bad", acmeManufBpmn(), "<not-bpmn/>", null))
+                        null, "Acme Bad", acmeManufBpmn(), "<not-bpmn/>", null))
                 .isInstanceOf(IllegalArgumentException.class);
 
-        assertThat(modelsDir.resolve("acme-bad.bpmn")).doesNotExist();
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.getProcessModel("acme-bad"))
-                .isInstanceOf(java.util.NoSuchElementException.class);
+        if (Files.exists(modelsDir)) {
+            assertThat(modelsDir).isEmptyDirectory();
+        }
+        assertThat(service.listProcessModels()).isEmpty();
     }
 
     @Test
     void generateRoutesAnAuthoredTwinModelThroughTheAuthoredTwinGenerationModeUsingTheSameLifecycleStages() {
-        service.saveProcessModelWithAuthoredTwin("acme-2", "Acme", acmeManufBpmn(), acmeTwinBpmn(), null);
+        ProcessModel model = service.saveProcessModelWithAuthoredTwin(null, "Acme", acmeManufBpmn(), acmeTwinBpmn(), null);
 
-        GeneratedProject project = service.generateSpringBootProject("acme-2");
+        GeneratedProject project = service.generateSpringBootProject(model.getId());
 
         // Two-BPMN-mode-only artifacts prove generateWithAuthoredTwin ran, not the single-BPMN
         // generate() + TwinModelGenerator-derived path.
@@ -166,19 +167,19 @@ class AuthoredTwinLifecycleTest {
                 .exists();
         assertThat(project.directory().resolve(basePackagePath + "/worker/ExternalTaskPoller.java")).exists();
         assertThat(project.directory().resolve(basePackagePath + "/worker/SchedulingConfig.java")).exists();
-        assertThat(project.directory().resolve("src/main/resources/processes/AcmeManuf.bpmn")).exists();
-        assertThat(project.directory().resolve("src/main/resources/processes/AcmeManufTwin.bpmn")).exists();
+        assertThat(project.directory().resolve("src/main/resources/processes/Acme.bpmn")).exists();
+        assertThat(project.directory().resolve("src/main/resources/processes/Acme-twin.bpmn")).exists();
 
         // Same lifecycle bookkeeping the single-BPMN path uses - not a parallel state model.
-        WorkflowState state = service.getWorkflowState("acme-2");
+        WorkflowState state = service.getWorkflowState(model.getId());
         assertThat(state.stages().get(WorkflowStage.GENERATE).status()).isEqualTo(StageStatus.COMPLETED);
         assertThat(state.stages().get(WorkflowStage.GENERATE).detail()).isEqualTo(project.projectId());
     }
 
     @Test
     void generatedAuthoredTwinProjectIsRediscoverableAfterASimulatedRestart() {
-        service.saveProcessModelWithAuthoredTwin("acme-3", "Acme", acmeManufBpmn(), acmeTwinBpmn(), null);
-        GeneratedProject project = service.generateSpringBootProject("acme-3");
+        ProcessModel model = service.saveProcessModelWithAuthoredTwin(null, "Acme", acmeManufBpmn(), acmeTwinBpmn(), null);
+        GeneratedProject project = service.generateSpringBootProject(model.getId());
 
         // Simulated restart: a FRESH generator instance pointed at the same output directory, with
         // no in-memory registry carried over - exactly what scanExisting() exists to rebuild from.
@@ -195,18 +196,18 @@ class AuthoredTwinLifecycleTest {
 
     @Test
     void deletingAnAuthoredTwinModelRemovesBothBpmnFilesAndTheGeneratedProject() {
-        service.saveProcessModelWithAuthoredTwin("acme-4", "Acme", acmeManufBpmn(), acmeTwinBpmn(), null);
-        GeneratedProject project = service.generateSpringBootProject("acme-4");
+        ProcessModel model = service.saveProcessModelWithAuthoredTwin(null, "Acme", acmeManufBpmn(), acmeTwinBpmn(), null);
+        GeneratedProject project = service.generateSpringBootProject(model.getId());
         // Folder name is a slug of the model's display name now, not the bare projectId (see
         // SpringBootProjectGenerator.resolveProjectDirectory) - project.directory() is the actual
         // source of truth for where it landed.
         Path projectDir = project.directory();
         assertThat(projectDir).exists();
 
-        assertThat(service.deleteProcessModel("acme-4")).isTrue();
+        assertThat(service.deleteProcessModel(model.getId())).isTrue();
 
-        assertThat(modelsDir.resolve("acme-4.bpmn")).doesNotExist();
-        assertThat(modelsDir.resolve("acme-4.twin.bpmn")).doesNotExist();
+        assertThat(modelsDir.resolve(model.getId() + ".bpmn")).doesNotExist();
+        assertThat(modelsDir.resolve(model.getId() + ".twin.bpmn")).doesNotExist();
         assertThat(projectDir).doesNotExist();
     }
 

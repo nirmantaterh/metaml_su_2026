@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 
 import ModelPage from "./ModelPage";
 import { listProjects } from "../../services/workbench/ProjectService";
@@ -78,9 +78,19 @@ let backendWorkflowState;
 
 const button = (name) => screen.getByRole("button", { name });
 
-const renderPage = () => render(
-    <MemoryRouter initialEntries={[{ pathname: "/wb/model", state: { projectId: "7" } }]}>
-        <ModelPage />
+const NewModelNavigation = () => {
+    const navigate = useNavigate();
+    return <button onClick={() => navigate("/wb/model/new", { state: { projectId: "7" } })}>New model</button>;
+};
+
+const renderPage = (entry = { pathname: "/wb/model", state: { projectId: "7" } }) => render(
+    <MemoryRouter initialEntries={[entry]}>
+        <NewModelNavigation />
+        <Routes>
+            <Route path="/wb/model" element={<ModelPage />} />
+            <Route path="/wb/model/new" element={<ModelPage />} />
+            <Route path="/wb/model/:id" element={<ModelPage />} />
+        </Routes>
     </MemoryRouter>
 );
 
@@ -111,12 +121,56 @@ describe("ModelPage - save", () => {
             // tenantId is always sent, "" normalized to null - see handleSave's own comment on why
             // the persisted Project id is also required now that Save truly attaches the model to a project.
             expect(saveModel).toHaveBeenCalledWith({
+                id: null,
                 name: "New Process",
                 bpmnXml: mockModelXml,
                 tenantId: null,
                 projectId: 7,
             });
             expect(await screen.findByText(/Saved model "New Process" \(id m-1\)/)).toBeInTheDocument();
+        });
+
+        test("retains the created model ID for subsequent saves in the same editor session", async () => {
+            saveModel
+                .mockResolvedValueOnce({ id: "saved-model-1", name: "New Process" })
+                .mockResolvedValueOnce({ id: "saved-model-1", name: "New Process" })
+                .mockResolvedValueOnce({ id: "saved-model-1", name: "New Process" });
+
+            renderPage();
+
+            await saveTheModel();
+            userEvent.click(button("Save"));
+            await waitFor(() => expect(saveModel).toHaveBeenCalledTimes(2));
+            userEvent.click(button("Save"));
+            await waitFor(() => expect(saveModel).toHaveBeenCalledTimes(3));
+
+            expect(saveModel).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: null }));
+            expect(saveModel).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: "saved-model-1" }));
+            expect(saveModel).toHaveBeenNthCalledWith(3, expect.objectContaining({ id: "saved-model-1" }));
+        });
+
+        test("saves a reopened model using its existing ID", async () => {
+            getModel.mockResolvedValue({ id: "existing-model-1", name: "Existing Process", bpmnXml: mockModelXml });
+
+            renderPage({ pathname: "/wb/model/existing-model-1", state: { projectId: "7" } });
+            await screen.findByText(/Loaded "Existing Process"/);
+
+            await saveTheModel();
+
+            expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ id: "existing-model-1" }));
+        });
+
+        test("starting a new model does not reuse the prior saved model ID", async () => {
+            saveModel.mockResolvedValueOnce({ id: "saved-model-1", name: "New Process" });
+
+            renderPage();
+            await saveTheModel();
+
+            userEvent.click(button("New model"));
+            userEvent.click(button("Save"));
+            await waitFor(() => expect(saveModel).toHaveBeenCalledTimes(2));
+
+            expect(saveModel).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: null }));
         });
 
         test("disables Save while the request is in flight, re-enables it after", async () => {

@@ -20,9 +20,9 @@ class SpringBootProjectLauncherMavenInstallTest {
     @TempDir
     Path projectDir;
 
-    private static void invokeRunMavenInstall(Path dir) throws Throwable {
+    private static void invokeRunMavenPackage(Path dir) throws Throwable {
         try {
-            Method method = SpringBootProjectLauncher.class.getDeclaredMethod("runMavenInstall", Path.class);
+            Method method = SpringBootProjectLauncher.class.getDeclaredMethod("runMavenPackage", Path.class);
             method.setAccessible(true);
             method.invoke(new SpringBootProjectLauncher(), dir);
         } catch (InvocationTargetException e) {
@@ -36,14 +36,14 @@ class SpringBootProjectLauncherMavenInstallTest {
         // network-independent, unlike a real compile/install.
         writePom("<project>not valid xml");
 
-        assertThatThrownBy(() -> invokeRunMavenInstall(projectDir))
+        assertThatThrownBy(() -> invokeRunMavenPackage(projectDir))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("mvn clean install -DskipTests")
+                .hasMessageContaining("mvn clean package -DskipTests")
                 .hasMessageContaining("build.log");
         assertThat(projectDir.resolve("build.log")).exists();
     }
 
-    // Tagged slow like other Maven build suites - running 'mvn clean install' requires
+    // Tagged slow like other Maven build suites - running 'mvn clean package' requires
     // local/remote plugin resolution.
     @Tag("slow")
     @Test
@@ -58,7 +58,7 @@ class SpringBootProjectLauncherMavenInstallTest {
                 </project>
                 """);
 
-        invokeRunMavenInstall(projectDir);
+        invokeRunMavenPackage(projectDir);
 
         assertThat(projectDir.resolve("build.log")).exists();
         assertThat(Files.readString(projectDir.resolve("build.log"))).contains("BUILD SUCCESS");

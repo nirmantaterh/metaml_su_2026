@@ -14,6 +14,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
@@ -145,9 +147,8 @@ class TaskListenerTargetPlatformEndToEndTest {
                     HttpResponse.BodyHandlers.ofString());
             assertThat(twinStart.statusCode()).as("twin start failed: %s", twinStart.body()).isEqualTo(200);
 
-            // The "create" event fires the instant Camunda reaches the user task - no task
-            // completion call needed - so both beans' log markers confirm that Camunda
-            // invoked the generated TaskListener (not just that it compiled).
+            // The Proxy's "create" event fires the instant Camunda reaches its user task, so its
+            // marker confirms Camunda invoked the generated listener rather than merely compiling it.
             String proxyLog = awaitLogContaining(project.directory(),
                     "PROXY (TASK LISTENER) INVOKED", Duration.ofSeconds(30));
             assertThat(proxyLog)
@@ -155,6 +156,19 @@ class TaskListenerTargetPlatformEndToEndTest {
                     // the generic runtime context the Target Platform's own log has to carry
                     .contains("processInstanceId=")
                     .contains("activityId=ApproveOrder");
+
+            // The Proxy listener fires when Camunda creates the human task, but lockstep deliberately
+            // holds the Twin at sync_ApproveOrder until that real task completes. Drive the same Portal
+            // API used by the generated application rather than bypassing synchronization or invoking
+            // either listener directly.
+            String proxyTaskId = taskIdForBusinessKey(http, launched.port(), businessKey);
+            HttpResponse<String> completed = http.send(
+                    HttpRequest.newBuilder(URI.create("http://localhost:" + launched.port()
+                            + "/api/portal/tasks/" + proxyTaskId + "/complete"))
+                            .POST(HttpRequest.BodyPublishers.noBody()).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(completed.statusCode()).as("proxy task completion failed: %s", completed.body())
+                    .isEqualTo(200);
 
             // start, not create: the Twin activity is a serviceTask now, so the listener fires on the
             // execution lifecycle rather than on a task that no longer exists.
@@ -176,6 +190,21 @@ class TaskListenerTargetPlatformEndToEndTest {
         } finally {
             launcher.stop(project.projectId());
         }
+    }
+
+    private static String taskIdForBusinessKey(HttpClient http, int port, String businessKey)
+            throws IOException, InterruptedException {
+        HttpResponse<String> tasks = http.send(
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/portal/tasks"))
+                        .GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(tasks.statusCode()).as("portal task lookup failed: %s", tasks.body()).isEqualTo(200);
+        Pattern taskForRun = Pattern.compile("\\\"id\\\":\\\"([^\\\"]+)\\\"[^}]*\\\"businessKey\\\":\\\""
+                + Pattern.quote(businessKey) + "\\\"");
+        Matcher match = taskForRun.matcher(tasks.body());
+        assertThat(match.find()).as("no open Proxy task found for business key %s in %s", businessKey,
+                tasks.body()).isTrue();
+        return match.group(1);
     }
 
     private static String awaitLogContaining(Path projectDir, String fragment, Duration timeout)
