@@ -25,8 +25,8 @@ is still future work.
 |---|---|---|
 | JDK 24 | `java -version` | `wbapi`, `workbench`, `nodemanager` target Java 24; generated Target Platforms target 17. A JRE without `javac` fails at generation time. |
 | Node.js + npm | `node -v` | For the React frontend (CRA, React 19, `bpmn-js` 18). |
-| Maven on `PATH` | `mvn -v` | Only needed for the **Launch** button — `SpringBootProjectLauncher` shells out to `mvn clean install` then `mvn spring-boot:run`, and the generated project ships no wrapper. The repo's own build uses `backend/mvnw`. |
-| RabbitMQ | `docker start metaml-rabbitmq` | Only for the Proxy↔Twin synchronization demo (§ *Demo 5*). |
+| Maven on `PATH` | `mvn -v` | Only needed for the **Launch** button — `SpringBootProjectLauncher` shells out to `mvn clean install` then `mvn spring-boot:run`. The repo's own build uses `backend/mvnw`. Generated Target Platforms ship their own Maven Wrapper (`mvnw` / `mvnw.cmd`) and do **not** require Maven on `PATH`. |
+| RabbitMQ | `docker start metaml-rabbitmq` | Required by the Proxy↔Twin synchronization demo (§ *Demo 5*) **and** by any generated Target Platform run standalone (port 5672). |
 
 ---
 
@@ -123,6 +123,48 @@ Workbench is not part of the Workbench.
 | GREY `#9aa5ad` | Not started |
 
 RED covers both "governance said no" and "something broke"; the banner text disambiguates.
+
+---
+
+## Running a generated Target Platform
+
+Once the Workbench generates a Target Platform (Transmute → Generate), the output lands in the
+`generated-target-platforms/` directory **outside** this repo. Each generated project is fully
+self-contained and can be built and run without the Workbench.
+
+**Prerequisites (Target Platform only)**
+- Java 17 or newer
+- RabbitMQ running on `localhost:5672` — start with `docker start metaml-rabbitmq`
+
+**Build and run — Windows**
+
+```powershell
+cd <path-to-generated-project>
+.\mvnw.cmd clean compile
+.\mvnw.cmd spring-boot:run
+```
+
+**Build and run — macOS / Linux**
+
+```bash
+cd <path-to-generated-project>
+./mvnw clean compile
+./mvnw spring-boot:run
+```
+
+The Maven Wrapper (`mvnw` / `mvnw.cmd`) is included in every generated project and downloads
+Maven automatically on first use — no system-wide Maven installation is required.
+
+**After startup, open:**
+
+| URL | Description | Credentials |
+|---|---|---|
+| <http://localhost:8080/> | MetaML Target Platform portal | — |
+| <http://localhost:8080/camunda> | Camunda Tasklist / Cockpit | `demo` / `demo` |
+
+Press `Ctrl+C` in the terminal to stop a standalone Target Platform. The Workbench backend
+on port 8082 and the generated Target Platform on port 8080 are separate JVM processes and can
+run simultaneously.
 
 ---
 
