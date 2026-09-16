@@ -1,248 +1,38 @@
 # MetaML Workbench
 
-A React + BPMN modeling tool on a Spring Boot + Camunda 7.22.0 backend. You draw or import a
-business process, the Workbench generates a complete standalone Spring Boot + Camunda application
-from it and runs that application as its own JVM, and it can run a **Twin** of the process whose
-activities are automated by pluggable agents under a governance layer.
-
-```
-Model (BPMN)  →  Generate (Java delegates + Target Platform)  →  Launch (real child JVM)
-     ↓
-   Twin (shadow process instance)
-     ↓
-Connect / Evolve / Bridge  →  Governance (ALLOW / DENY / REQUIRE_APPROVAL)  →  real side effect
-```
-
-This is one working slice of the larger multi-semester MetaML platform, not the whole platform.
-See [PLATFORM_CONTEXT.md](PLATFORM_CONTEXT.md) for what this team owns, what predates it, and what
-is still future work.
+MetaML Workbench is a model-driven development platform for authoring BPMN 2.0 process models, generating process-specific Spring Boot Target Platforms, and managing synchronized Proxy/Twin process execution.
 
 ---
 
-## Prerequisites
+> [!IMPORTANT]
+> **Current Verified Implementation**
+>
+> The `master` branch contains an older repository state.
+>
+> The current verified MetaML implementation is maintained on the **`handoff/metaml-pre-astra`** branch.
 
-| Requirement | Check | Notes |
-|---|---|---|
-| JDK 24 | `java -version` | `wbapi`, `workbench`, `nodemanager` target Java 24; generated Target Platforms target 17. A JRE without `javac` fails at generation time. |
-| Node.js + npm | `node -v` | For the React frontend (CRA, React 19, `bpmn-js` 18). |
-| Maven on `PATH` | `mvn -v` | Only needed for the **Launch** button — `SpringBootProjectLauncher` shells out to `mvn clean install` then `mvn spring-boot:run`, and the generated project ships no wrapper. The repo's own build uses `backend/mvnw`. |
-| RabbitMQ | `docker start metaml-rabbitmq` | Only for the Proxy↔Twin synchronization demo (§ *Demo 5*). |
+## Accessing the Current Implementation
 
----
+For the latest code, setup instructions, Target Platform workflow, and documentation:
 
-## Running it
+### View on GitHub
 
-Three processes, in this order.
+- [Current MetaML implementation](https://github.com/nirmantaterh/metaml_su_2026/tree/handoff/metaml-pre-astra)
+- [Current README and setup guide](https://github.com/nirmantaterh/metaml_su_2026/blob/handoff/metaml-pre-astra/README.md)
 
-**macOS / Linux**
+### Switch Locally
+
+If you have cloned the repository:
 
 ```bash
-# 1. backend API + Camunda (http://localhost:8082)
-cd backend
-./mvnw -pl wbapi spring-boot:run
-
-# 2. node manager / agent catalogue (http://localhost:8083) — needed for Evolve
-cd backend
-./mvnw -pl nodemanager spring-boot:run
-
-# 3. frontend (http://localhost:3000)
-npm start --prefix frontend
+git fetch origin
+git switch handoff/metaml-pre-astra
 ```
 
-**Windows (PowerShell)**
-
-```powershell
-# 1. backend API + Camunda (http://localhost:8082)
-cd backend
-.\run-wbapi.cmd
-
-# 2. node manager / agent catalogue (http://localhost:8083) — needed for Evolve
-cd backend
-.\mvnw.cmd -pl nodemanager spring-boot:run
-
-# 3. frontend (http://localhost:3000)
-cd frontend
-npm start
-```
-
-[backend/run-wbapi.cmd](backend/run-wbapi.cmd) is the recommended way in on Windows: it `cd`s to its
-own directory, installs `workbench` into the local repo, then runs `wbapi` alone. Running the
-equivalent by hand is fine too —
-
-```powershell
-cd backend
-.\mvnw.cmd -pl workbench install -DskipTests
-.\mvnw.cmd -pl wbapi spring-boot:run
-```
-
-— but two Windows-specific traps are worth knowing, both confirmed empirically and both explained in
-the script's own comments:
-
-- **Keep the `.\` prefix.** With `NoDefaultCurrentDirectoryInExePath=1` set, a bare `mvnw.cmd`
-  fails with *"not recognized as an internal or external command"* even when the file is right there
-  and the working directory is correct.
-- **Don't add `-am` to the `spring-boot:run` invocation.** Maven runs the same goal against every
-  module `-am` pulls in, including `workbench` — a library with no main class — which fails with
-  *"Unable to find a suitable main class"* before `wbapi` is ever reached. Install `workbench`
-  first, then run `wbapi` with no `-am`.
-
-Then open <http://localhost:3000>.
-
-If you changed anything under `backend/workbench/`, install it first:
+For older Git versions:
 
 ```bash
-cd backend && ./mvnw -pl workbench install -DskipTests          # macOS / Linux
-```
-```powershell
-cd backend; .\mvnw.cmd -pl workbench install -DskipTests        # Windows
+git checkout handoff/metaml-pre-astra
 ```
 
-The backend binds to `127.0.0.1` deliberately: port 8082 also serves the Camunda webapp
-(cockpit/admin/tasklist) with the default `demo`/`demo` account, and Spring Security is `permitAll`.
-
-**Data** lives in `backend/wbapi/data/` (gitignored): models, workflow history, approvals, tenant
-policies, and the Camunda H2 file. Delete that folder for a clean slate. Generated Target Platforms
-are written to `generated-target-platforms/`, a **sibling** of this repo — generated by the
-Workbench is not part of the Workbench.
-
-### Menu map
-
-| Menu | Items |
-|---|---|
-| **Transmute** | Create Project · Edit Existing Project |
-| **Evolve** | Twin Workflow · Deployed Applications |
-| **Governance** | Policies · Approvals |
-
-### Status colours
-
-| Colour | Meaning |
-|---|---|
-| GREEN `#2f7d5c` | Stage completed / action allowed and executed |
-| AMBER `#a06a00` | In progress, or blocked pending a human decision |
-| RED `#c0392b` | Failed **or** denied — nothing executed |
-| GREY `#9aa5ad` | Not started |
-
-RED covers both "governance said no" and "something broke"; the banner text disambiguates.
-
----
-
-## Demos
-
-Fixtures live in [demo/](demo/) and [examples/](examples/). Click-by-click transcripts for all five
-demos — each executed by hand against a running system — are in
-[TEAM_DEMO_GUIDE.md](TEAM_DEMO_GUIDE.md); the regression script is
-[demo/DEMO_PROTOCOL.md](demo/DEMO_PROTOCOL.md).
-
-| Fixture | Demonstrates |
-|---|---|
-| [demo/wire-transfer-review.bpmn](demo/wire-transfer-review.bpmn) | **Demo 1** — the Model → Save → Generate → Launch → Stop lifecycle, surviving reload and backend restart |
-| [demo/settlement-collision.bpmn](demo/settlement-collision.bpmn) | **Demo 2** — element-aware error recovery: two delegate expressions sanitising to one Java class name, RED banner → **Go to error** selects the losing element → rename → GREEN |
-| [demo/wire-transfer-review-BROKEN.bpmn](demo/wire-transfer-review-BROKEN.bpmn) | **Demo 3** — a global (`isExecutable="false"`) failure: no element blamed, no **Go to error** offered. The contrast that makes Demo 2 credible |
-| [demo/wire-transfer-review-twin.bpmn](demo/wire-transfer-review-twin.bpmn) | **Demo 4** — tenant → policy → draft → rule → activate, then Deploy twin → Connect → Evolve → approval queue |
-| [demo/Manuf-camunda.bpmn](demo/Manuf-camunda.bpmn) + [demo/Twin-camunda.bpmn](demo/Twin-camunda.bpmn) | **Demo 5** — Proxy↔Twin lockstep synchronization over RabbitMQ inside a launched Target Platform. Full walkthrough: [demo/REDCOLLAR_ACCEPTANCE.md](demo/REDCOLLAR_ACCEPTANCE.md) |
-
-Two things worth knowing before you present any of these:
-
-- **Opening a BPMN file loads it and does nothing else.** It does not save, deploy, generate,
-  launch, create a twin, or assign a tenant. A successful import means only that `bpmn-js` could
-  read the XML — Camunda validation happens at **Save**.
-- **Save never overwrites.** Every Save mints a new model id, by design, because twins already
-  launched still point at the old definition.
-
-For Demo 5, start the Proxy and the Twin back-to-back with the same `businessKey`. A Proxy-only run
-completes normally without exercising cross-process synchronization. Its verification commands are written as bash `curl`; on Windows there is no
-`watch`, so poll with `Invoke-RestMethod` plus `Start-Sleep -Seconds 1` in a loop instead.
-
----
-
-## Repository layout
-
-```
-backend/wbapi/        Spring Boot app (:8082) — REST controllers, Camunda webapp
-backend/workbench/    all domain logic — service, codegen, generation, governance, workflow, store
-backend/nodemanager/  agent catalogue stub (:8083)
-backend/RedCollarTP/  the Target Platform template that generated projects are built from
-frontend/src/pages/workbench/    ModelPage, EvolvePage, DeployedAppsPage, Governance*
-generated-target-platforms/      completed, standalone generated Target Platform applications (redcollar-manufacturing, liveverify-wiretransfer)
-demo/                 fixtures + DEMO_PROTOCOL.md (regression script) + REDCOLLAR_ACCEPTANCE.md
-examples/             citibank-wire-transfer.bpmn, grad-admission-review.bpmn
-docs/architecture/    ARCHITECTURE.md, DIAGRAMS.md, EVOLUTION_TIMELINE.md, 15 ADRs
-PROJECT_STATUS.md     current project status — read this first when picking the repo up cold
-PLATFORM_CONTEXT.md   scope and ownership: what this team built vs. what MetaML is
-```
-
----
-
-## Tests
-
-```bash
-cd backend && ./mvnw test          # macOS / Linux
-```
-```powershell
-cd backend; .\mvnw.cmd test        # Windows
-```
-
-Last measured 2026-08-24: **299 tests, 1 failure** — 216 `workbench`, 77 `wbapi`, 6 `nodemanager`.
-The `workbench` count excludes 17 additional `@Tag("slow")` tests (real Maven builds and JVM
-launches). The single failure, `SpringBootProjectLauncherMavenInstallTest`, is environment-dependent
-(no system-wide `mvn` on that machine) and unrelated to product code.
-
-The frontend has no automated tests beyond the CRA baseline.
-
----
-
-## Known limitations
-
-These are deliberate or accepted, and documented rather than hidden:
-
-1. **No authentication anywhere.** `tenantId` is caller-supplied and never verified — the UI says
-   so. Tenant scoping catches mistakes, not impersonation.
-2. **Save never overwrites** — every Save creates a new model id.
-3. **Running child JVMs are not re-adopted after a backend restart.** They keep running and hold
-   their port, invisible to the Workbench. Don't restart the backend mid-demo.
-4. **The Approvals page doesn't inherit the tenant** from the "Go to Approvals" link — re-select it,
-   or the queue looks empty.
-5. **A failed Save shows no details panel.** The failed save returns no model id, so the UI has
-   nothing to fetch; the red banner is the whole surface for that failure.
-6. **A generated app's `launch.log` is not surfaced in the UI** — a launch failure names the path
-   but doesn't inline the content.
-7. **`bpmn-js` import warnings are discarded** — a file that parses but only partially resolves
-   imports "successfully" and renders incompletely.
-8. **Platform quota is runtime-only** and resets to configured defaults on restart. Tenant policy,
-   by contrast, is durable.
-9. **Generated-project directories are never deleted** — unbounded disk growth, no cleanup
-   mechanism.
-
-## System Characteristics and Scope
-
-- **Error Reporting:** Delegate class name collisions and write failures carry element IDs; broader structural errors are validated via Camunda engine diagnostics.
-- **Tenant Context:** Governance rules operate with explicit tenant contexts.
-- **Model Versioning:** Saving a model allocates a distinct version identifier rather than mutating active executions in-place.
-- **Persistence Model:** State and event history are preserved through Camunda runtime persistence and dedicated workflow event stores.
-
----
-
-## VS Code Plugin
-
-A separate repository, `metaml-vscode-plugin` (sibling of this one, not a subdirectory), adds a VS
-Code extension on top of the REST API above: Target Platform discovery/lifecycle, Twin/Twin-activity
-discovery, and AI-driven Twin evolution — natural-language intent → local Ollama recommendation →
-this Workbench's own authoritative Node Manager catalog → human confirmation → governance → binding
-→ plugin-triggered bridge → real `ComponentExecutor` execution → real output, readable back through
-the plugin. It introduces no new runtime; the additions on this side are three REST endpoints on
-`wbapi` — `POST /api/v1/wb/transmute/bridge/{twinId}/{activityId}`,
-`GET /api/v1/wb/transmute/twin/{id}/activity/{activityId}/execution` and
-`POST /api/v1/wb/transmute/integration-claim` — plus an optional `activityInstanceId` on the existing
-evolve request, which targets one runtime instance of a parallel or multi-instance activity. See that repository's own
-README.md for setup and the exact plugin-side workflow. A twin must currently be launched from
-**this** Workbench's frontend (Evolve → Twin Workflow) before the plugin can discover it — the
-plugin does not itself create twins.
-
----
-
-## Further reading
-
-- [PLATFORM_CONTEXT.md](PLATFORM_CONTEXT.md) — architecture, component boundaries, and platform capabilities
-- [TEAM_DEMO_GUIDE.md](TEAM_DEMO_GUIDE.md) — click-by-click developer walkthrough
-- [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) and the
-  [ADRs](docs/architecture/adr/) — architecture decisions and synchronization design
+Please use the root `README.md` on `handoff/metaml-pre-astra` for the current architecture, prerequisites, setup instructions, and workflows.
