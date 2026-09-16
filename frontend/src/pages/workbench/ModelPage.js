@@ -310,8 +310,8 @@ const ModelPage = () => {
             setStatus({
                 type: "ok",
                 text: (twinBpmnXml
-                    ? `Saved Main + Twin "${saved.name || modelName}" (id ${saved.id ?? "?"}).`
-                    : `Saved model "${saved.name || modelName}" (id ${saved.id ?? "?"}).`)
+                    ? `Saved Main + Twin "${saved.name || modelName}".`
+                    : `Saved model "${saved.name || modelName}".`)
                     + (hadGeneration ? " The previous generation is now out of date - press Generate again." : ""),
             });
             setCurrentModelId(saved.id);

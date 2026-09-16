@@ -67,6 +67,29 @@ describe("GenerateProjectListPage", () => {
         expect(screen.getByRole("button", { name: "Generate" })).toBeInTheDocument();
     });
 
+    // When an existing model is modified and re-saved, its pipeline restarts: GENERATE stage resets to PENDING
+    // and its previous generation becomes stale. The Generate page must reflect Not Generated and offer Generate.
+    test("a process re-saved after generation displays Not Generated with a Generate button", async () => {
+        listModelSummaries.mockResolvedValue([
+            { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
+        ]);
+        getWorkflowState.mockResolvedValue({
+            currentStage: "GENERATE",
+            stages: {
+                MODEL: { status: "COMPLETED" },
+                GENERATE: { status: "PENDING", detail: null },
+            },
+        });
+
+        renderPage();
+        await screen.findByText("Wire Transfer Review");
+
+        expect(screen.getByText("Not Generated")).toBeInTheDocument();
+        expect(screen.queryByText("Generated")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Generate" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
+    });
+
     test("a row flips to Generated right after generating it here", async () => {
         listModelSummaries.mockResolvedValue([
             { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },

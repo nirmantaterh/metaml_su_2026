@@ -144,7 +144,8 @@ describe("ModelPage - save", () => {
                 tenantId: null,
                 projectId: 7,
             });
-            expect(await screen.findByText(/Saved model "New Process" \(id m-1\)/)).toBeInTheDocument();
+            expect(await screen.findByText(/Saved model "New Process"/)).toBeInTheDocument();
+            expect(screen.queryByText(/id m-1/)).not.toBeInTheDocument();
         });
 
         test("retains the created model ID for subsequent saves in the same editor session", async () => {
@@ -279,7 +280,7 @@ describe("ModelPage - save", () => {
             renderPage();
             await saveTheModel();
 
-            const message = await screen.findByText(/Saved model "New Process" \(id m-1\)/);
+            const message = await screen.findByText(/Saved model "New Process"/);
             const messageRow = message.closest(".bpmn-toolbar-row");
             const saveButtonRow = button("Save").closest(".bpmn-toolbar-row");
             expect(messageRow).not.toBe(saveButtonRow);
@@ -298,7 +299,8 @@ describe("ModelPage - save", () => {
             expect(readLastOpenedModel()).toEqual({ id: "m-1", projectId: "7" });
             // the URL change must not reload the model the editor already holds
             expect(getModel).not.toHaveBeenCalled();
-            expect(screen.getByText(/Saved model "New Process" \(id m-1\)/)).toBeInTheDocument();
+            expect(screen.getByText(/Saved model "New Process"/)).toBeInTheDocument();
+            expect(screen.queryByText(/id m-1/)).not.toBeInTheDocument();
         });
 
         test("/wb/model with a remembered model redirects into that model's editor", async () => {
@@ -407,6 +409,15 @@ describe("ModelPage - save", () => {
             await saveTheModel();
 
             await waitFor(() => expect(screen.getByRole("button", { name: /View details/ })).toBeEnabled());
+        });
+
+        test("save confirmation message does not expose internal model UUID to the user", async () => {
+            renderPage();
+            await saveTheModel();
+
+            expect(await screen.findByText('Saved model "New Process".')).toBeInTheDocument();
+            expect(screen.queryByText(/id m-1/)).not.toBeInTheDocument();
+            expect(screen.queryByText(/id \?/)).not.toBeInTheDocument();
         });
     });
 });

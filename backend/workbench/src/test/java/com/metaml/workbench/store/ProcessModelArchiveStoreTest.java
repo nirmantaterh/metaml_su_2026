@@ -183,4 +183,36 @@ class ProcessModelArchiveStoreTest {
                 .hasMessageContaining("cannot be moved by save");
         assertThat(existing.getProject()).isSameAs(owner);
     }
+
+    @Test
+    void findAllUsesDedicatedFetchMethodAndPreservesProxyTwinActivityMappings() {
+        ProcessModelArchive archive = archive("model-mapped", "Mapped", LocalDateTime.of(2026, 1, 1, 0, 0), null);
+        List<ProxyTwinActivityMapping> mappings = List.of(
+                new ProxyTwinActivityMapping("proxy-a", "twin-a", "sync-a"));
+        archive.setProxyTwinActivityMappings(mappings);
+        when(archiveRepository.findAllWithProxyTwinActivityMappings()).thenReturn(List.of(archive));
+
+        List<ProcessModel> models = store().findAll();
+
+        assertThat(models).hasSize(1);
+        assertThat(models.get(0).getId()).isEqualTo("model-mapped");
+        assertThat(models.get(0).getProxyTwinActivityMappings()).containsExactlyElementsOf(mappings);
+        verify(archiveRepository).findAllWithProxyTwinActivityMappings();
+    }
+
+    @Test
+    void findByModelIdUsesDedicatedFetchMethodAndPreservesProxyTwinActivityMappings() {
+        ProcessModelArchive archive = archive("model-mapped", "Mapped", LocalDateTime.of(2026, 1, 1, 0, 0), null);
+        List<ProxyTwinActivityMapping> mappings = List.of(
+                new ProxyTwinActivityMapping("proxy-a", "twin-a", "sync-a"));
+        archive.setProxyTwinActivityMappings(mappings);
+        when(archiveRepository.findWithProxyTwinActivityMappingsByModelId("model-mapped")).thenReturn(Optional.of(archive));
+
+        Optional<ProcessModel> modelOpt = store().findByModelId("model-mapped");
+
+        assertThat(modelOpt).isPresent();
+        assertThat(modelOpt.get().getId()).isEqualTo("model-mapped");
+        assertThat(modelOpt.get().getProxyTwinActivityMappings()).containsExactlyElementsOf(mappings);
+        verify(archiveRepository).findWithProxyTwinActivityMappingsByModelId("model-mapped");
+    }
 }

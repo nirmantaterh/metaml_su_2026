@@ -28,9 +28,21 @@ import com.metaml.workbench.codegen.TargetPlatformSourceGenerator;
 import com.metaml.workbench.codegen.TargetPlatformTwinMirrorGenerator;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -163,17 +175,15 @@ public class SpringBootProjectGenerator {
         writeProjectMetadata(projectDir, projectId, processKey, displayName, projectDisplayName,
                 processResourceBase(projectDisplayName, displayName, processKey));
         String projectSlug = projectDir.getFileName().toString();
-        String appClassName = toJavaClassName(projectSlug);
-        rewritePomArtifactId(projectDir, projectSlug);
-        rewriteApplicationClassName(projectDir, basePackage, appClassName);
+        String effectiveDisplayName = (displayName != null && !displayName.isBlank())
+                ? displayName
+                : (processKey != null && !processKey.isBlank() ? processKey : "Target Platform");
+        finalizeProjectIdentity(projectDir, projectSlug, effectiveDisplayName, basePackage);
 
         logger.info(
                 "Generated Target Harness Platform {} for process key '{}' with {} manufacturing activity "
                         + "endpoint(s), package {}, at {}",
                 projectId, processKey, activities.size(), basePackage, projectDir.toAbsolutePath());
-        String effectiveDisplayName = (displayName != null && !displayName.isBlank())
-                ? displayName
-                : (processKey != null && !processKey.isBlank() ? processKey : "Target Platform");
         return new GeneratedProject(projectId, projectDir, processKey, effectiveDisplayName);
     }
 
@@ -282,9 +292,10 @@ public class SpringBootProjectGenerator {
         writeProjectMetadata(projectDir, projectId, manufProcessKey, displayName, projectDisplayName,
                 proxyResourceBase);
         String projectSlug = projectDir.getFileName().toString();
-        String appClassName = toJavaClassName(projectSlug);
-        rewritePomArtifactId(projectDir, projectSlug);
-        rewriteApplicationClassName(projectDir, basePackage, appClassName);
+        String effectiveDisplayName = (displayName != null && !displayName.isBlank())
+                ? displayName
+                : (manufProcessKey != null && !manufProcessKey.isBlank() ? manufProcessKey : "Target Platform");
+        finalizeProjectIdentity(projectDir, projectSlug, effectiveDisplayName, basePackage);
 
         logger.info("Generated Target Harness Platform {} with authored Twin for process keys '{}' + '{}', "
                 + "{} manufacturing workers, {} twin workers, {} total signals, {} Main<->Twin communication "
@@ -293,9 +304,6 @@ public class SpringBootProjectGenerator {
                 allSignals.size(), twinTopics.size(), twinTopics.size(), twinTopics.size(), twinTopics.size() * 2,
                 basePackage, projectDir.toAbsolutePath());
 
-        String effectiveDisplayName = (displayName != null && !displayName.isBlank())
-                ? displayName
-                : (manufProcessKey != null && !manufProcessKey.isBlank() ? manufProcessKey : "Target Platform");
         return new GeneratedProject(projectId, projectDir, manufProcessKey, effectiveDisplayName);
     }
 
@@ -370,15 +378,13 @@ public class SpringBootProjectGenerator {
 
         writeProjectMetadata(projectDir, projectId, proxyKey, displayName, projectDisplayName, proxyResourceBase);
         String projectSlug = projectDir.getFileName().toString();
-        String appClassName = toJavaClassName(projectSlug);
-        rewritePomArtifactId(projectDir, projectSlug);
-        rewriteApplicationClassName(projectDir, TARGET_PLATFORM_BASE_PACKAGE_LITERAL, appClassName);
-        logger.info("Generated TargetPlatform {} at {} with {} proxy and {} twin source bean(s), {} shared "
-                        + "sync signal(s) of {} total", projectId, projectDir.toAbsolutePath(), proxy.sources().size(),
-                twin.sources().size(), sharedSignals.size(), allSignals.size());
         String effectiveDisplayName = (displayName != null && !displayName.isBlank())
                 ? displayName
                 : (proxyKey != null && !proxyKey.isBlank() ? proxyKey : "Target Platform");
+        finalizeProjectIdentity(projectDir, projectSlug, effectiveDisplayName, TARGET_PLATFORM_BASE_PACKAGE_LITERAL);
+        logger.info("Generated TargetPlatform {} at {} with {} proxy and {} twin source bean(s), {} shared "
+                        + "sync signal(s) of {} total", projectId, projectDir.toAbsolutePath(), proxy.sources().size(),
+                twin.sources().size(), sharedSignals.size(), allSignals.size());
         return new GeneratedProject(projectId, projectDir, proxyKey, effectiveDisplayName);
     }
 
@@ -655,18 +661,132 @@ public class SpringBootProjectGenerator {
         return valid.toString();
     }
 
-    private void rewritePomArtifactId(Path projectDir, String artifactId) {
+    private void finalizeProjectIdentity(Path projectDir, String projectSlug, String effectiveDisplayName, String basePackage) {
+        String cleanSlug = projectSlug.replaceAll("--running-[0-9a-fA-F]+", "");
+        String appClassName = toJavaClassName(cleanSlug);
+        String artifactId = slugify(cleanSlug);
+        if (artifactId.isEmpty()) {
+            artifactId = "target-platform";
+        }
+        rewritePomIdentity(projectDir, artifactId, effectiveDisplayName);
+        rewriteApplicationClassName(projectDir, basePackage, appClassName);
+        rewriteReadme(projectDir, effectiveDisplayName);
+    }
+
+    private void rewritePomIdentity(Path projectDir, String artifactId, String displayName) {
         Path pom = projectDir.resolve("pom.xml");
         if (!Files.exists(pom)) {
             return;
         }
         try {
-            String content = Files.readString(pom, StandardCharsets.UTF_8);
-            String updated = content.replaceAll("<artifactId>(camundademo|TargetPlatform|red-collar-tp)</artifactId>",
-                    "<artifactId>" + artifactId + "</artifactId>");
-            Files.writeString(pom, updated, StandardCharsets.UTF_8);
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(false);
+            try {
+                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", false);
+                factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+                factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            } catch (Exception ignored) {
+            }
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            Document doc = builder.parse(pom.toFile());
+            Element root = doc.getDocumentElement();
+            if (root == null || !"project".equals(root.getNodeName())) {
+                return;
+            }
+
+            NodeList children = root.getChildNodes();
+            Element artifactIdElem = null;
+            Element nameElem = null;
+            Element descElem = null;
+            for (int i = 0; i < children.getLength(); i++) {
+                Node node = children.item(i);
+                if (node.getNodeType() == Node.ELEMENT_NODE) {
+                    String tagName = node.getNodeName();
+                    if ("artifactId".equals(tagName)) {
+                        artifactIdElem = (Element) node;
+                    } else if ("name".equals(tagName)) {
+                        nameElem = (Element) node;
+                    } else if ("description".equals(tagName)) {
+                        descElem = (Element) node;
+                    }
+                }
+            }
+
+            if (artifactIdElem != null) {
+                artifactIdElem.setTextContent(artifactId);
+            }
+
+            String effectiveName = (displayName != null && !displayName.isBlank()) ? displayName : artifactId;
+            if (nameElem != null) {
+                nameElem.setTextContent(effectiveName);
+            } else if (artifactIdElem != null) {
+                Element newName = doc.createElement("name");
+                newName.setTextContent(effectiveName);
+                root.insertBefore(newName, artifactIdElem.getNextSibling());
+                nameElem = newName;
+            }
+
+            String effectiveDesc = "Target Platform - " + effectiveName;
+            if (descElem != null) {
+                descElem.setTextContent(effectiveDesc);
+            } else {
+                Element newDesc = doc.createElement("description");
+                newDesc.setTextContent(effectiveDesc);
+                Node anchor = (nameElem != null ? nameElem : artifactIdElem);
+                if (anchor != null) {
+                    root.insertBefore(newDesc, anchor.getNextSibling());
+                } else {
+                    root.appendChild(newDesc);
+                }
+            }
+
+            TransformerFactory tf = TransformerFactory.newInstance();
+            Transformer transformer = tf.newTransformer();
+            transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
+            transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            transformer.transform(new DOMSource(doc), new StreamResult(baos));
+            Files.write(pom, baos.toByteArray());
+        } catch (Exception e) {
+            logger.warn("Could not structurally rewrite pom.xml identity in {}: {}", projectDir, e.toString());
+        }
+    }
+
+    private void rewriteReadme(Path projectDir, String effectiveDisplayName) {
+        Path readme = projectDir.resolve("README.md");
+        if (!Files.exists(readme)) {
+            return;
+        }
+        try {
+            String content = Files.readString(readme, StandardCharsets.UTF_8);
+            String title = (effectiveDisplayName != null && !effectiveDisplayName.isBlank()
+                    && !"Target Platform".equalsIgnoreCase(effectiveDisplayName.trim()))
+                    ? "# Target Platform (" + effectiveDisplayName.trim() + ")"
+                    : "# Target Platform";
+
+            if (content.startsWith("# ")) {
+                int firstNewline = content.indexOf('\n');
+                if (firstNewline != -1) {
+                    content = title + content.substring(firstNewline);
+                } else {
+                    content = title;
+                }
+            } else {
+                content = title + "\n\n" + content;
+            }
+
+            content = content.replace("â€”", " - ")
+                    .replace("\u2014", " - ")
+                    .replace("RedCollarTP", effectiveDisplayName != null ? effectiveDisplayName : "TargetPlatform")
+                    .replace("RedCollar", effectiveDisplayName != null ? effectiveDisplayName : "TargetPlatform")
+                    .replace(
+                            "The platform is completely standalone. It does not depend on the Workbench running, and only requires Java 17 and an optional RabbitMQ instance.",
+                            "The generated Target Platform is independently runnable from the Workbench once required MetaML runtime artifacts are available locally.");
+
+            Files.writeString(readme, content, StandardCharsets.UTF_8);
         } catch (IOException e) {
-            logger.warn("Could not rewrite pom.xml artifactId in {}: {}", projectDir, e.toString());
+            logger.warn("Could not rewrite README.md in {}: {}", projectDir, e.toString());
         }
     }
 
@@ -860,6 +980,7 @@ public class SpringBootProjectGenerator {
             throw new UncheckedIOException("Could not promote generated project " + project.projectId()
                     + " to " + canonical.toAbsolutePath(), e);
         }
+        rewritePomIdentity(canonical, slugify(canonical.getFileName().toString()), project.displayName());
         return new GeneratedProject(project.projectId(), canonical, project.processKey(), project.displayName());
     }
 

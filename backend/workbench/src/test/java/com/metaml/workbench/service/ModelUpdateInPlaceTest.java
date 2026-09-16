@@ -220,6 +220,54 @@ class ModelUpdateInPlaceTest {
                 .hasMessageContaining("Process model not found: unknown-id");
     }
 
+    @Test
+    void fullLifecycleModelSaveGenerateResaveRegenerateContract() {
+        // 1. Save new model -> Not Generated
+        ProcessModel model = service.saveProcessModel(null, "Process A", loanApprovalBpmn("Process A"), null, 7L);
+        String modelId = model.getId();
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).status())
+                .as("freshly saved model must be Not Generated (PENDING)").isEqualTo(StageStatus.PENDING);
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).detail())
+                .isNull();
+
+        // 2. Generate model -> Generated
+        com.metaml.workbench.generation.GeneratedProject gen1 = service.generateSpringBootProject(modelId);
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).status())
+                .as("generated model must be Generated (COMPLETED)").isEqualTo(StageStatus.COMPLETED);
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).detail())
+                .isEqualTo(gen1.projectId());
+
+        // 3. Reload/query again -> Generated remains
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).status())
+                .as("querying again without edits preserves Generated state").isEqualTo(StageStatus.COMPLETED);
+
+        // 4. Modify BPMN XML and save SAME model ID -> status becomes Not Generated / stale
+        service.saveProcessModel(modelId, "Process A (modified)", loanApprovalBpmn("Process A (modified)"), null, 7L);
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).status())
+                .as("saving modifications invalidates previous generation back to PENDING").isEqualTo(StageStatus.PENDING);
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).detail())
+                .as("detail is cleared so pickers report ungenerated").isNull();
+
+        // 5. Reload/query Generate state -> still Not Generated / stale
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).status())
+                .as("reloading state still shows Not Generated").isEqualTo(StageStatus.PENDING);
+
+        // 6. Regenerate -> Generated
+        com.metaml.workbench.generation.GeneratedProject gen2 = service.generateSpringBootProject(modelId);
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).status())
+                .as("regenerated model becomes Generated again").isEqualTo(StageStatus.COMPLETED);
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).detail())
+                .isEqualTo(gen2.projectId());
+        assertThat(gen2.projectId()).isNotEqualTo(gen1.projectId());
+
+        // 7. Save again without creating duplicate logical model -> same model ID
+        ProcessModel savedAgain = service.saveProcessModel(modelId, "Process A (final)", loanApprovalBpmn("Process A (final)"), null, 7L);
+        assertThat(savedAgain.getId()).isEqualTo(modelId);
+        assertThat(service.listProcessModels()).extracting(ProcessModel::getId).containsExactly(modelId);
+        assertThat(service.getWorkflowState(modelId).stages().get(WorkflowStage.GENERATE).status())
+                .isEqualTo(StageStatus.PENDING);
+    }
+
     private static void write(Path path, String content) throws IOException {
         Files.createDirectories(path.getParent());
         Files.writeString(path, content, StandardCharsets.UTF_8);

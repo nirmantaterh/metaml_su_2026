@@ -12,10 +12,10 @@
     </parent>
 
     <groupId>com.tp</groupId>
-    <artifactId>RedCollarTP</artifactId>
+    <artifactId>target-platform</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>RedCollarTP</name>
-    <description>TargetPlatform - Camunda BPMN proxy/twin process engine</description>
+    <name>Target Platform</name>
+    <description>Target Platform - Camunda BPMN proxy/twin process engine</description>
 
     <properties>
         <java.version>17</java.version>

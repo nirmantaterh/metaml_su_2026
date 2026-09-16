@@ -80,8 +80,10 @@ public class ProcessModelArchiveStore {
         return archiveRepository.save(archive);
     }
 
+    @Transactional(readOnly = true)
     public Optional<ProcessModel> findByModelId(String modelId) {
-        return archiveRepository.findByModelId(modelId).map(ProcessModelArchiveStore::toProcessModel);
+        return archiveRepository.findWithProxyTwinActivityMappingsByModelId(modelId)
+                .map(ProcessModelArchiveStore::toProcessModel);
     }
 
     // ProcessModel deliberately has no Project field. Generation needs only the user-facing project
@@ -95,8 +97,9 @@ public class ProcessModelArchiveStore {
                         : project.getDisplayName());
     }
 
+    @Transactional(readOnly = true)
     public List<ProcessModel> findAll() {
-        return archiveRepository.findAll().stream()
+        return archiveRepository.findAllWithProxyTwinActivityMappings().stream()
                 .map(ProcessModelArchiveStore::toProcessModel)
                 .toList();
     }

@@ -3,8 +3,11 @@ package com.metaml.wbapi;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +20,7 @@ import com.metaml.workbench.dto.ProjectDto;
 import com.metaml.workbench.model.ProcessModel;
 import com.metaml.workbench.model.ProcessModelArchive;
 import com.metaml.workbench.model.Project;
+import com.metaml.workbench.model.ProxyTwinActivityMapping;
 import com.metaml.workbench.repository.ProcessModelArchiveRepository;
 import com.metaml.workbench.repository.ProjectRepository;
 import com.metaml.workbench.service.ProjectService;
@@ -166,6 +170,76 @@ class ProjectProcessModelArchivePersistenceIntegrationTest {
         assertThat(projectRepository.findById(project.getId())).isEmpty();
         assertThatThrownBy(() -> workbenchService.getProcessModel(model.getId()))
                 .isInstanceOf(NoSuchElementException.class);
+    }
+
+    @Test
+    void persistedArchiveWithProxyTwinActivityMappingsLoadsAndConvertsWithoutLazyInitializationException() {
+        Project project = createProject("Activity Mapping Project", null);
+        List<ProxyTwinActivityMapping> mappings = List.of(
+                new ProxyTwinActivityMapping("proxy-act-1", "twin-act-1", "order-1"),
+                new ProxyTwinActivityMapping("proxy-act-2", "twin-act-2", "order-2"));
+        ProcessModel modelWithMappings = new ProcessModel("mapped-model-1", "Mapped Model", SIMPLE_BPMN,
+                "<twinXml/>", mappings, Instant.now(), "def-mapped", "tenant-1");
+        archiveStore.save(modelWithMappings, Path.of("mapped.bpmn"), Path.of("mapped.twin.bpmn"), project.getId());
+
+        // 1. archiveStore.findAll() converts without LazyInitializationException
+        List<ProcessModel> allModels = archiveStore.findAll();
+        Optional<ProcessModel> rehydratedOpt = allModels.stream()
+                .filter(m -> m.getId().equals("mapped-model-1"))
+                .findFirst();
+        assertThat(rehydratedOpt).isPresent();
+        ProcessModel rehydrated = rehydratedOpt.get();
+        assertThat(rehydrated.getProxyTwinActivityMappings()).hasSize(2);
+        assertThat(rehydrated.getProxyTwinActivityMappings())
+                .extracting(ProxyTwinActivityMapping::getProxyActivityId)
+                .containsExactly("proxy-act-1", "proxy-act-2");
+        assertThat(rehydrated.getProxyTwinActivityMappings())
+                .extracting(ProxyTwinActivityMapping::getTwinActivityId)
+                .containsExactly("twin-act-1", "twin-act-2");
+        assertThat(rehydrated.getProxyTwinActivityMappings())
+                .extracting(ProxyTwinActivityMapping::getSynchronizationKey)
+                .containsExactly("order-1", "order-2");
+
+        // 2. archiveStore.findByModelId() also loads full aggregate with mappings intact
+        Optional<ProcessModel> singleLoadedOpt = archiveStore.findByModelId("mapped-model-1");
+        assertThat(singleLoadedOpt).isPresent();
+        assertThat(singleLoadedOpt.get().getProxyTwinActivityMappings()).hasSize(2);
+        assertThat(singleLoadedOpt.get().getProxyTwinActivityMappings())
+                .extracting(ProxyTwinActivityMapping::getProxyActivityId)
+                .containsExactly("proxy-act-1", "proxy-act-2");
+
+        // 3. summary/listing queries remain lightweight and do not require mappings
+        List<ProcessModelSummaryDto> summaries = archiveStore.findAllSummaries();
+        assertThat(summaries).extracting(ProcessModelSummaryDto::getId).contains("mapped-model-1");
+    }
+
+    @Test
+    void restoringStateWithBothMappedAndUnmappedArchivesSucceeds() {
+        Project project = createProject("Mixed Recovery Project", null);
+
+        // Unmapped model
+        ProcessModel unmapped = workbenchService.saveProcessModel(null, "Plain Process", SIMPLE_BPMN, null,
+                project.getId());
+
+        // Mapped model
+        List<ProxyTwinActivityMapping> mappings = List.of(
+                new ProxyTwinActivityMapping("p-1", "t-1", "k-1"));
+        ProcessModel mapped = new ProcessModel("mixed-mapped-1", "Mixed Process", SIMPLE_BPMN,
+                "<twin/>", mappings, Instant.now(), "def-mixed", null);
+        archiveStore.save(mapped, Path.of("mixed.bpmn"), Path.of("mixed.twin.bpmn"), project.getId());
+
+        // Simulate restoreState rehydration via store
+        List<ProcessModel> restored = archiveStore.findAll();
+        assertThat(restored).extracting(ProcessModel::getId).contains(unmapped.getId(), "mixed-mapped-1");
+
+        ProcessModel restoredUnmapped = restored.stream().filter(m -> m.getId().equals(unmapped.getId()))
+                .findFirst().orElseThrow();
+        assertThat(restoredUnmapped.getProxyTwinActivityMappings()).isEmpty();
+
+        ProcessModel restoredMapped = restored.stream().filter(m -> m.getId().equals("mixed-mapped-1"))
+                .findFirst().orElseThrow();
+        assertThat(restoredMapped.getProxyTwinActivityMappings()).hasSize(1);
+        assertThat(restoredMapped.getProxyTwinActivityMappings().get(0).getProxyActivityId()).isEqualTo("p-1");
     }
 
     private Project createProject(String displayName, String description) {

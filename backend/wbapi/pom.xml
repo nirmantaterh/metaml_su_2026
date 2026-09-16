@@ -135,12 +135,18 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 				<configuration>
+					<workingDirectory>${project.basedir}</workingDirectory>
 					<excludes>
 						<exclude>
 							<groupId>org.projectlombok</groupId>
 							<artifactId>lombok</artifactId>
 						</exclude>
 					</excludes>
+					<additionalClasspathElements>
+						<additionalClasspathElement>${project.basedir}/../workbench/target/classes</additionalClasspathElement>
+						<additionalClasspathElement>${project.basedir}/../capability-core/target/classes</additionalClasspathElement>
+						<additionalClasspathElement>${project.basedir}/../providers/target/classes</additionalClasspathElement>
+					</additionalClasspathElements>
 				</configuration>
 			</plugin>
 			<plugin>
@@ -178,6 +184,17 @@
 						</configuration>
 					</execution>
 				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<additionalClasspathElements>
+						<additionalClasspathElement>${project.basedir}/../workbench/target/classes</additionalClasspathElement>
+						<additionalClasspathElement>${project.basedir}/../capability-core/target/classes</additionalClasspathElement>
+						<additionalClasspathElement>${project.basedir}/../providers/target/classes</additionalClasspathElement>
+					</additionalClasspathElements>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>
