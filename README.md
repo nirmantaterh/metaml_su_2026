@@ -1,38 +1,17 @@
 # MetaML Workbench
 
-MetaML Workbench is a model-driven development platform for authoring BPMN 2.0 process models, generating process-specific Spring Boot Target Platforms, and managing synchronized Proxy/Twin process execution.
+MetaML Workbench is a BPMN-based development environment for modeling business processes, generating Spring Boot Target Platforms, and supporting Proxy/Twin process execution with governance and runtime integration.
 
----
+## Current Implementation
 
-> [!IMPORTANT]
-> **Current Verified Implementation**
->
-> The `master` branch contains an older repository state.
->
-> The current verified MetaML implementation is maintained on the **`handoff/metaml-pre-astra`** branch.
+The latest verified implementation is maintained on the [`handoff/metaml-pre-astra`](https://github.com/nirmantaterh/metaml_su_2026/tree/handoff/metaml-pre-astra) branch.
 
-## Accessing the Current Implementation
+**[View the current MetaML implementation →](https://github.com/nirmantaterh/metaml_su_2026/tree/handoff/metaml-pre-astra)**
 
-For the latest code, setup instructions, Target Platform workflow, and documentation:
+For setup instructions, architecture, Target Platform generation, Launch/Stop workflow, testing, and development documentation, see the:
 
-### View on GitHub
+**[Current README and Setup Guide →](https://github.com/nirmantaterh/metaml_su_2026/blob/handoff/metaml-pre-astra/README.md)**
 
-- [Current MetaML implementation](https://github.com/nirmantaterh/metaml_su_2026/tree/handoff/metaml-pre-astra)
-- [Current README and setup guide](https://github.com/nirmantaterh/metaml_su_2026/blob/handoff/metaml-pre-astra/README.md)
+## Repository Status
 
-### Switch Locally
-
-If you have cloned the repository:
-
-```bash
-git fetch origin
-git switch handoff/metaml-pre-astra
-```
-
-For older Git versions:
-
-```bash
-git checkout handoff/metaml-pre-astra
-```
-
-Please use the root `README.md` on `handoff/metaml-pre-astra` for the current architecture, prerequisites, setup instructions, and workflows.
+`master` is retained as the repository's default branch. The verified handoff implementation and current documentation are maintained on `handoff/metaml-pre-astra`.
