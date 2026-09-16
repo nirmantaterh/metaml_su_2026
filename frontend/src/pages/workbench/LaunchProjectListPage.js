@@ -91,7 +91,6 @@ const LaunchProjectListPage = () => {
             pairWarning: null,
             launchedBaseUrl: null,
             pairResult: null,
-            hasOpened: false,
             isRunning: false,
         });
 
@@ -154,25 +153,30 @@ const LaunchProjectListPage = () => {
                     ") - this generated platform may not support pairing.",
             });
         }
-
-        openCockpitUrl(`${baseUrl}camunda/app/cockpit/engine/`);
     };
 
     const handleOpen = (row) => {
         const rs = rowState[row.id] || {};
+        const port = rs.port || row.initialRunningEntry?.port;
         const baseUrl =
             rs.launchedBaseUrl ||
-            (row.initialRunningEntry?.port
-                ? `${window.location.protocol}//${window.location.hostname}:${row.initialRunningEntry.port}/`
+            (port
+                ? `${window.location.protocol}//${window.location.hostname}:${port}/`
                 : null);
         if (baseUrl) {
             openCockpitUrl(`${baseUrl}camunda/app/cockpit/engine/`);
         }
-        patchRow(row.id, { hasOpened: true });
     };
 
-    const targetPlatformUrlFor = (row) =>
-        rowState[row.id]?.targetPlatformUrl || row.initialRunningEntry?.targetPlatformUrl || null;
+    const targetPlatformUrlFor = (row) => {
+        const rs = rowState[row.id] || {};
+        const explicit = rs.targetPlatformUrl || row.initialRunningEntry?.targetPlatformUrl;
+        if (explicit) {
+            return explicit;
+        }
+        const port = rs.port || row.initialRunningEntry?.port;
+        return port ? `http://127.0.0.1:${port}/` : null;
+    };
 
     const handleOpenTargetPlatform = (row) => {
         const targetPlatformUrl = targetPlatformUrlFor(row);
@@ -196,7 +200,6 @@ const LaunchProjectListPage = () => {
                 phase: null,
                 isRunning: false,
                 stopping: false,
-                hasOpened: false,
                 launchedBaseUrl: null,
                 port: null,
                 pairResult: null,
@@ -306,27 +309,28 @@ const LaunchProjectListPage = () => {
                                                         {launchLabel}
                                                     </Button>
                                                 )}
-                                                {isGenerated && isRunning && !rs.hasOpened && !busy && (
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline-primary"
-                                                        onClick={() => handleOpen(row)}
-                                                    >
-                                                        Open
-                                                    </Button>
-                                                )}
-                                                {isGenerated && isRunning && rs.hasOpened && !busy && (
-                                                    <div className="d-inline-flex gap-2">
+                                                {isGenerated && isRunning && !busy && (
+                                                    <div className="d-inline-flex align-items-center gap-2">
                                                         <Button
                                                             size="sm"
                                                             variant="outline-primary"
+                                                            style={{ paddingTop: "2px", paddingBottom: "2px", fontSize: "0.8125rem" }}
+                                                            onClick={() => handleOpenTargetPlatform(row)}
+                                                        >
+                                                            Open Platform
+                                                        </Button>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline-primary"
+                                                            style={{ paddingTop: "2px", paddingBottom: "2px", fontSize: "0.8125rem" }}
                                                             onClick={() => handleOpen(row)}
                                                         >
-                                                            Open
+                                                            Open Cockpit
                                                         </Button>
                                                         <Button
                                                             size="sm"
                                                             variant="outline-danger"
+                                                            style={{ paddingTop: "2px", paddingBottom: "2px", fontSize: "0.8125rem" }}
                                                             disabled={rs.stopping}
                                                             onClick={() => handleStop(row)}
                                                         >
@@ -357,52 +361,31 @@ const LaunchProjectListPage = () => {
                                                 {rs.error && <div className="text-danger small mb-2">{rs.error}</div>}
                                                 {isRunning && isExpanded && (
                                                     <div className="bg-light p-3 rounded my-1 border">
-                                                        <div className="d-flex justify-content-between align-items-start flex-wrap gap-3">
-                                                            <div>
-                                                                <div className="d-flex align-items-center gap-2 small mb-1">
-                                                                    <span className="text-muted" style={{ minWidth: "110px" }}>Proxy + Twin:</span>
-                                                                    <span className="fw-medium text-success">Started</span>
-                                                                </div>
-                                                                <div className="d-flex align-items-center gap-2 small mb-1">
-                                                                    <span className="text-muted" style={{ minWidth: "110px" }}>Process:</span>
-                                                                    <span className="fw-medium">{rs.processKey || row.name || "Untitled"}</span>
-                                                                </div>
-                                                                <div className="d-flex align-items-center gap-2 small mb-1">
-                                                                    <span className="text-muted" style={{ minWidth: "110px" }}>Engine Port:</span>
-                                                                    <span className="font-monospace">{rs.port || row.initialRunningEntry?.port || "-"}</span>
-                                                                </div>
-                                                                {targetPlatformUrl && (
-                                                                    <div className="d-flex align-items-center gap-2 small mb-1">
-                                                                        <span className="text-muted" style={{ minWidth: "110px" }}>Target Platform:</span>
-                                                                        <span className="font-monospace text-break">{targetPlatformUrl}</span>
-                                                                    </div>
-                                                                )}
-                                                                {rs.pairResult?.businessKey && (
-                                                                    <div className="d-flex align-items-center gap-2 small">
-                                                                        <span className="text-muted" style={{ minWidth: "110px" }}>Business Key:</span>
-                                                                        <span className="font-monospace text-primary">{rs.pairResult.businessKey}</span>
-                                                                    </div>
-                                                                )}
+                                                        <div>
+                                                            <div className="d-flex align-items-center gap-2 small mb-1">
+                                                                <span className="text-muted" style={{ minWidth: "110px" }}>Proxy + Twin:</span>
+                                                                <span className="fw-medium text-success">Started</span>
                                                             </div>
-                                                            <div>
-                                                                <Button
-                                                                    size="sm"
-                                                                    variant="outline-primary"
-                                                                    onClick={() => handleOpen(row)}
-                                                                >
-                                                                    Open Cockpit ↗
-                                                                </Button>
-                                                                {targetPlatformUrl && (
-                                                                    <Button
-                                                                        size="sm"
-                                                                        variant="outline-primary"
-                                                                        className="ms-2"
-                                                                        onClick={() => handleOpenTargetPlatform(row)}
-                                                                    >
-                                                                        Go to Target Platform ↗
-                                                                    </Button>
-                                                                )}
+                                                            <div className="d-flex align-items-center gap-2 small mb-1">
+                                                                <span className="text-muted" style={{ minWidth: "110px" }}>Process:</span>
+                                                                <span className="fw-medium">{rs.processKey || row.name || "Untitled"}</span>
                                                             </div>
+                                                            <div className="d-flex align-items-center gap-2 small mb-1">
+                                                                <span className="text-muted" style={{ minWidth: "110px" }}>Engine Port:</span>
+                                                                <span className="font-monospace">{rs.port || row.initialRunningEntry?.port || "-"}</span>
+                                                            </div>
+                                                            {targetPlatformUrl && (
+                                                                <div className="d-flex align-items-center gap-2 small mb-1">
+                                                                    <span className="text-muted" style={{ minWidth: "110px" }}>Target Platform:</span>
+                                                                    <span className="font-monospace text-break">{targetPlatformUrl}</span>
+                                                                </div>
+                                                            )}
+                                                            {rs.pairResult?.businessKey && (
+                                                                <div className="d-flex align-items-center gap-2 small">
+                                                                    <span className="text-muted" style={{ minWidth: "110px" }}>Business Key:</span>
+                                                                    <span className="font-monospace text-primary">{rs.pairResult.businessKey}</span>
+                                                                </div>
+                                                            )}
                                                         </div>
                                                         {rs.pairWarning && (
                                                             <div className="text-warning small mt-2">{rs.pairWarning}</div>

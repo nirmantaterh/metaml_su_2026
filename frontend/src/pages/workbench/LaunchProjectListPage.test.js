@@ -55,10 +55,12 @@ describe("LaunchProjectListPage", () => {
         expect(screen.getByText("Generated / Stopped")).toBeInTheDocument();
         expect(screen.getByText("—")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Launch" })).toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: "Go to Target Platform ↗" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Open Platform" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Open Cockpit" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
     });
 
-    test("Launch starts platform, auto-opens Cockpit, sets Running status with Open button, revealing Stop after Open click", async () => {
+    test("Launch starts platform, does NOT auto-open Cockpit or Target Platform, and visibly exposes controls when Running", async () => {
         listModelSummaries.mockResolvedValue([
             { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
         ]);
@@ -83,34 +85,164 @@ describe("LaunchProjectListPage", () => {
 
         await waitFor(() => expect(launchProject).toHaveBeenCalledWith({ projectId: "gp-1" }));
         await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
-        expect(openCockpitUrl).toHaveBeenCalledWith("http://localhost:8091/camunda/app/cockpit/engine/");
 
-        // Running status visible
+        // CRITICAL: Launch must NOT auto-open Cockpit or navigate anywhere
+        expect(openCockpitUrl).not.toHaveBeenCalled();
+
+        // Status updates to Running
         expect(screen.getByText("Running")).toBeInTheDocument();
+
+        // Running state visibly exposes the three explicit actions directly in the row
+        expect(screen.getByRole("button", { name: "Open Platform" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Open Cockpit" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Launch" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
 
         // Runtime details are collapsed by default
         expect(screen.queryByText("8091")).not.toBeInTheDocument();
         expect(screen.queryByText("Started")).not.toBeInTheDocument();
 
-        // Expanding details reveals engine and Target Platform endpoints.
+        // Expanding details reveals engine and Target Platform endpoints without duplicate buttons
         const expandBtn = screen.getByRole("button", { name: "Expand details" });
         userEvent.click(expandBtn);
         expect(screen.getByText("8091")).toBeInTheDocument();
         expect(screen.getByText("Started")).toBeInTheDocument();
         expect(screen.getByText("https://tp.acme.internal/metaml")).toBeInTheDocument();
-        const targetPlatformButton = screen.getByRole("button", { name: "Go to Target Platform ↗" });
-        userEvent.click(targetPlatformButton);
+
+        // Verify no duplicate buttons in expanded panel
+        expect(screen.getAllByRole("button", { name: "Open Platform" })).toHaveLength(1);
+        expect(screen.getAllByRole("button", { name: "Open Cockpit" })).toHaveLength(1);
+        expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
+    });
+
+    test("Open Platform uses configured targetPlatformUrl and opens only after explicit click", async () => {
+        listModelSummaries.mockResolvedValue([
+            { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
+        ]);
+        getWorkflowState.mockResolvedValue({ stages: { GENERATE: { status: "COMPLETED", detail: "gp-1" } } });
+        launchProject.mockResolvedValue({
+            port: 8091,
+            processKey: "wireTransferReview",
+            targetPlatformUrl: "https://tp.acme.internal/metaml",
+        });
+        global.fetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+        render(<LaunchProjectListPage />);
+        await screen.findByText("Wire Transfer Review");
+
+        userEvent.click(button("Launch"));
+        await screen.findByRole("button", { name: "Open Platform" });
+
+        expect(openCockpitUrl).not.toHaveBeenCalled();
+
+        // Explicit click opens Target Platform URL
+        userEvent.click(screen.getByRole("button", { name: "Open Platform" }));
+        expect(openCockpitUrl).toHaveBeenCalledTimes(1);
         expect(openCockpitUrl).toHaveBeenCalledWith("https://tp.acme.internal/metaml");
+    });
 
-        // Initially shows Open button, Stop is NOT shown yet
-        const openBtn = screen.getByRole("button", { name: "Open" });
-        expect(openBtn).toBeInTheDocument();
+    test("Open Platform falls back to runtime port root URL when targetPlatformUrl is not provided", async () => {
+        listModelSummaries.mockResolvedValue([
+            { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
+        ]);
+        getWorkflowState.mockResolvedValue({ stages: { GENERATE: { status: "COMPLETED", detail: "gp-1" } } });
+        launchProject.mockResolvedValue({
+            port: 8095,
+            processKey: "wireTransferReview",
+        });
+        global.fetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+        render(<LaunchProjectListPage />);
+        await screen.findByText("Wire Transfer Review");
+
+        userEvent.click(button("Launch"));
+        const openPlatformBtn = await screen.findByRole("button", { name: "Open Platform" });
+
+        expect(openCockpitUrl).not.toHaveBeenCalled();
+
+        userEvent.click(openPlatformBtn);
+        expect(openCockpitUrl).toHaveBeenCalledTimes(1);
+        expect(openCockpitUrl).toHaveBeenCalledWith("http://127.0.0.1:8095/");
+    });
+
+    test("Open Cockpit opens Camunda URL only after explicit click", async () => {
+        listModelSummaries.mockResolvedValue([
+            { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
+        ]);
+        getWorkflowState.mockResolvedValue({ stages: { GENERATE: { status: "COMPLETED", detail: "gp-1" } } });
+        launchProject.mockResolvedValue({
+            port: 8091,
+            processKey: "wireTransferReview",
+        });
+        global.fetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+        render(<LaunchProjectListPage />);
+        await screen.findByText("Wire Transfer Review");
+
+        userEvent.click(button("Launch"));
+        const openCockpitBtn = await screen.findByRole("button", { name: "Open Cockpit" });
+
+        expect(openCockpitUrl).not.toHaveBeenCalled();
+
+        userEvent.click(openCockpitBtn);
+        expect(openCockpitUrl).toHaveBeenCalledTimes(1);
+        expect(openCockpitUrl).toHaveBeenCalledWith("http://localhost:8091/camunda/app/cockpit/engine/");
+    });
+
+    test("clicking Stop calls stopProject, stops platform runtime, and returns to Generated / Stopped state with Launch button", async () => {
+        listModelSummaries.mockResolvedValue([
+            { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
+        ]);
+        getWorkflowState.mockResolvedValue({ stages: { GENERATE: { status: "COMPLETED", detail: "gp-1" } } });
+        launchProject.mockResolvedValue({ port: 8091, processKey: "wireTransferReview" });
+        stopProject.mockResolvedValue({ success: true });
+        global.fetch.mockResolvedValue({ ok: false, status: 404 });
+
+        render(<LaunchProjectListPage />);
+        await screen.findByText("Wire Transfer Review");
+
+        userEvent.click(button("Launch"));
+        await waitFor(() => expect(launchProject).toHaveBeenCalledWith({ projectId: "gp-1" }));
+
+        // Stop is visibly available immediately when Running (no clicking Open first!)
+        const stopBtn = await screen.findByRole("button", { name: "Stop" });
+        expect(stopBtn).toBeInTheDocument();
+
+        userEvent.click(stopBtn);
+
+        await waitFor(() => expect(stopProject).toHaveBeenCalledWith({ projectId: "gp-1" }));
+        expect(await screen.findByText("Generated / Stopped")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Launch" })).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Open Platform" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Open Cockpit" })).not.toBeInTheDocument();
+    });
 
-        // Clicking Open re-opens Cockpit and reveals Stop button
-        userEvent.click(openBtn);
-        expect(openCockpitUrl).toHaveBeenCalledTimes(3);
-        expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    test("an app still running from a version that has since been re-saved shows Running with visible Stop button and can be stopped", async () => {
+        listModelSummaries.mockResolvedValue([
+            { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
+        ]);
+        getWorkflowState.mockResolvedValue({ stages: { GENERATE: { status: "PENDING" } } });
+        listRunningProjects.mockResolvedValue([
+            { projectId: "gp-stale", modelId: "m-1", port: 8091, processKey: "wireTransferReview" },
+        ]);
+        stopProject.mockResolvedValue({ success: true });
+
+        render(<LaunchProjectListPage />);
+        await screen.findByText("Wire Transfer Review");
+
+        expect(screen.getByText("Running")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Launch" })).not.toBeInTheDocument();
+
+        // Stop is immediately visible and clickable
+        const stopBtn = screen.getByRole("button", { name: "Stop" });
+        expect(stopBtn).toBeInTheDocument();
+        userEvent.click(stopBtn);
+
+        await waitFor(() => expect(stopProject).toHaveBeenCalledWith({ projectId: "gp-stale" }));
+        expect(await screen.findByText("Not Generated")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Launch" })).not.toBeInTheDocument();
     });
 
     test("clicking expand/collapse toggles details independently for each process", async () => {
@@ -145,58 +277,6 @@ describe("LaunchProjectListPage", () => {
         const collapseBtn = screen.getByRole("button", { name: "Collapse details" });
         userEvent.click(collapseBtn);
         expect(screen.queryByText("8091")).not.toBeInTheDocument();
-    });
-
-    test("clicking Stop calls stopProject, stops platform runtime, and returns to Generated / Stopped state with Launch button", async () => {
-        listModelSummaries.mockResolvedValue([
-            { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
-        ]);
-        getWorkflowState.mockResolvedValue({ stages: { GENERATE: { status: "COMPLETED", detail: "gp-1" } } });
-        launchProject.mockResolvedValue({ port: 8091, processKey: "wireTransferReview" });
-        stopProject.mockResolvedValue({ success: true });
-        global.fetch.mockResolvedValue({ ok: false, status: 404 });
-
-        render(<LaunchProjectListPage />);
-        await screen.findByText("Wire Transfer Review");
-
-        userEvent.click(button("Launch"));
-        await waitFor(() => expect(launchProject).toHaveBeenCalledWith({ projectId: "gp-1" }));
-
-        // Click Open to expose Stop
-        const openBtn = await screen.findByRole("button", { name: "Open" });
-        userEvent.click(openBtn);
-
-        const stopBtn = screen.getByRole("button", { name: "Stop" });
-        userEvent.click(stopBtn);
-
-        await waitFor(() => expect(stopProject).toHaveBeenCalledWith({ projectId: "gp-1" }));
-        expect(await screen.findByText("Generated / Stopped")).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "Launch" })).toBeInTheDocument();
-    });
-
-    // Saving the model again resets its pipeline (GENERATE back to PENDING on the backend), but an app launched from the previous version can still be up - it must stay visible and stoppable, while Launch stays off until the model is regenerated.
-    test("an app still running from a version that has since been re-saved shows Running and can be stopped", async () => {
-        listModelSummaries.mockResolvedValue([
-            { id: "m-1", name: "Wire Transfer Review", projectId: 5, projectDisplayName: "RedCollar Suits" },
-        ]);
-        getWorkflowState.mockResolvedValue({ stages: { GENERATE: { status: "PENDING" } } });
-        listRunningProjects.mockResolvedValue([
-            { projectId: "gp-stale", modelId: "m-1", port: 8091, processKey: "wireTransferReview" },
-        ]);
-        stopProject.mockResolvedValue({ success: true });
-
-        render(<LaunchProjectListPage />);
-        await screen.findByText("Wire Transfer Review");
-
-        expect(screen.getByText("Running")).toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: "Launch" })).not.toBeInTheDocument();
-
-        userEvent.click(await screen.findByRole("button", { name: "Open" }));
-        userEvent.click(screen.getByRole("button", { name: "Stop" }));
-
-        await waitFor(() => expect(stopProject).toHaveBeenCalledWith({ projectId: "gp-stale" }));
-        expect(await screen.findByText("Not Generated")).toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: "Launch" })).not.toBeInTheDocument();
     });
 
     test("a launch failure never attempts to pair", async () => {
