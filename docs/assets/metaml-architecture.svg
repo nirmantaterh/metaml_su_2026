@@ -1,0 +1,271 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 580" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradients -->
+    <linearGradient id="arch-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#090d16"/>
+    </linearGradient>
+
+    <!-- Component Box Gradients -->
+    <linearGradient id="box-ui" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1e1b4b" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="box-api" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="box-tp" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0c2d48" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="box-mq" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2c1a0e" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="box-twin" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#064e3b" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0.95"/>
+    </linearGradient>
+
+    <!-- Header / Border Gradients -->
+    <linearGradient id="purple-bar" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#8b5cf6"/><stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="blue-bar" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0284c7"/><stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <linearGradient id="indigo-bar" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+    <linearGradient id="orange-bar" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f97316"/><stop offset="100%" stop-color="#fb923c"/>
+    </linearGradient>
+    <linearGradient id="green-bar" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#10b981"/><stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+
+    <filter id="glow-subtle" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="2" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+
+    <pattern id="arch-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#1e293b" stroke-width="0.5" stroke-opacity="0.5"/>
+    </pattern>
+
+    <!-- Arrow Marker Definitions -->
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#a855f7" />
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#38bdf8" />
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#fb923c" />
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#34d399" />
+    </marker>
+    <marker id="arrow-slate" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#64748b" />
+    </marker>
+  </defs>
+
+  <style>
+    .mono { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; }
+    .sans { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    .card-title { font-size: 13px; font-weight: 700; letter-spacing: 0.5px; fill: #f8fafc; }
+    .card-subtitle { font-size: 10px; font-weight: 600; letter-spacing: 0.5px; }
+    .item-title { font-size: 11px; font-weight: 600; fill: #e2e8f0; }
+    .item-desc { font-size: 10px; fill: #94a3b8; }
+    .badge-text { font-size: 9px; font-weight: 700; letter-spacing: 0.5px; }
+    .flow-label { font-size: 9.5px; font-weight: 600; fill: #94a3b8; }
+  </style>
+
+  <!-- Canvas Container -->
+  <rect width="1160" height="580" rx="14" fill="url(#arch-bg)" stroke="#1e293b" stroke-width="1.2"/>
+  <rect width="1160" height="580" rx="14" fill="url(#arch-grid)"/>
+
+  <!-- Top Title / Architecture Header -->
+  <g transform="translate(32, 28)">
+    <rect x="0" y="0" width="160" height="22" rx="11" fill="#1e1b4b" stroke="#8b5cf6" stroke-width="0.8"/>
+    <circle cx="11" cy="11" r="3.5" fill="#a855f7"/>
+    <text x="22" y="15" class="mono badge-text" fill="#c084fc">SYSTEM TOPOLOGY</text>
+
+    <text x="176" y="16" class="sans" font-size="14" font-weight="700" fill="#f8fafc">MetaML Architectural &amp; Runtime Model</text>
+    <text x="520" y="16" class="mono" font-size="10.5" fill="#64748b">Spring Boot 4.1 • JDK 24 • Camunda 7.24 • RabbitMQ AMQP</text>
+  </g>
+
+  <!-- ========================================== -->
+  <!-- 1. FRONTEND / CLIENT TIER (Top)            -->
+  <!-- ========================================== -->
+  <g transform="translate(32, 66)">
+    <rect width="1096" height="88" rx="10" fill="url(#box-ui)" stroke="#4338ca" stroke-width="1"/>
+    <rect width="1096" height="3" rx="1.5" fill="url(#purple-bar)"/>
+
+    <!-- Header Badge -->
+    <rect x="18" y="12" width="110" height="18" rx="9" fill="#2e1065" stroke="#8b5cf6" stroke-width="0.7"/>
+    <text x="73" y="24" class="mono badge-text" fill="#c084fc" text-anchor="middle">CLIENT TIER</text>
+    <text x="140" y="26" class="sans card-title">MetaML Web Frontend</text>
+    <text x="300" y="25" class="mono card-subtitle" fill="#818cf8">React 18 • Port 3000 • bpmn-js Canvas</text>
+
+    <!-- Sub-modules -->
+    <g transform="translate(18, 40)">
+      <rect width="250" height="36" rx="6" fill="#090d16" stroke="#312e81" stroke-width="0.8"/>
+      <text x="12" y="16" class="mono item-title" fill="#e0e7ff">BPMN 2.0 Modeler</text>
+      <text x="12" y="28" class="sans item-desc">Visual authoring, XML import/export</text>
+    </g>
+
+    <g transform="translate(284, 40)">
+      <rect width="260" height="36" rx="6" fill="#090d16" stroke="#312e81" stroke-width="0.8"/>
+      <text x="12" y="16" class="mono item-title" fill="#e0e7ff">Transmute Studio</text>
+      <text x="12" y="28" class="sans item-desc">Model • Generate • Launch lifecycle</text>
+    </g>
+
+    <g transform="translate(560, 40)">
+      <rect width="255" height="36" rx="6" fill="#090d16" stroke="#312e81" stroke-width="0.8"/>
+      <text x="12" y="16" class="mono item-title" fill="#e0e7ff">Target Supervision</text>
+      <text x="12" y="28" class="sans item-desc">Health probes, ports, Camunda links</text>
+    </g>
+
+    <g transform="translate(831, 40)">
+      <rect width="247" height="36" rx="6" fill="#090d16" stroke="#312e81" stroke-width="0.8"/>
+      <text x="12" y="16" class="mono item-title" fill="#e0e7ff">Evolve / Agent Catalog</text>
+      <text x="12" y="28" class="sans item-desc">Pluggable capabilities &amp; AI tools</text>
+    </g>
+  </g>
+
+  <!-- FLOW: UI -> Backend (REST API) -->
+  <path d="M 280 154 L 280 196" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#arrow-purple)"/>
+  <rect x="200" y="166" width="160" height="18" rx="4" fill="#090d16" stroke="#334155" stroke-width="0.7"/>
+  <text x="280" y="178" class="mono flow-label" text-anchor="middle" fill="#c084fc">REST API / HTTP :8082</text>
+
+  <!-- ========================================== -->
+  <!-- 2. WORKBENCH CORE SERVICES (Middle Left)   -->
+  <!-- ========================================== -->
+  <g transform="translate(32, 204)">
+    <rect width="490" height="210" rx="10" fill="url(#box-api)" stroke="#334155" stroke-width="1"/>
+    <rect width="490" height="3" rx="1.5" fill="url(#indigo-bar)"/>
+
+    <rect x="18" y="14" width="130" height="18" rx="9" fill="#1e1b4b" stroke="#6366f1" stroke-width="0.7"/>
+    <text x="83" y="26" class="mono badge-text" fill="#a5b4fc" text-anchor="middle">CONTROL PLANE</text>
+    <text x="160" y="28" class="sans card-title">MetaML Workbench Services</text>
+
+    <!-- Service Modules -->
+    <g transform="translate(18, 44)">
+      <rect width="454" height="42" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="0.8"/>
+      <text x="12" y="18" class="mono item-title" fill="#c7d2fe">wbapi (Spring Boot Service • Port 8082)</text>
+      <text x="12" y="32" class="sans item-desc">Project repository, BPMN persistence, validation, generation endpoints</text>
+    </g>
+
+    <g transform="translate(18, 94)">
+      <rect width="454" height="48" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="0.8"/>
+      <text x="12" y="18" class="mono item-title" fill="#c7d2fe">workbench (Generation &amp; Process Manager)</text>
+      <text x="12" y="32" class="sans item-desc">SpringBootProjectGenerator • Identity specialization • ProcessLauncher</text>
+      <text x="12" y="44" class="sans item-desc" fill="#64748b">Clones RedCollarTP template • Scaffolds custom pom.xml / properties</text>
+    </g>
+
+    <g transform="translate(18, 150)">
+      <rect width="454" height="44" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="0.8"/>
+      <text x="12" y="18" class="mono item-title" fill="#c7d2fe">nodemanager (Capability Catalog • Port 8083)</text>
+      <text x="12" y="32" class="sans item-desc">Dynamic agent discovery, capability registration, schema provider</text>
+    </g>
+  </g>
+
+  <!-- FLOW: Workbench -> Target Platform (Codegen & Child JVM Launch) -->
+  <path d="M 522 280 L 638 280" stroke="#38bdf8" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#arrow-blue)"/>
+  <rect x="532" y="258" width="96" height="18" rx="4" fill="#090d16" stroke="#334155" stroke-width="0.7"/>
+  <text x="580" y="270" class="mono flow-label" text-anchor="middle" fill="#38bdf8">1. Codegen</text>
+
+  <path d="M 522 340 L 638 340" stroke="#10b981" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#arrow-green)"/>
+  <rect x="532" y="318" width="96" height="18" rx="4" fill="#090d16" stroke="#334155" stroke-width="0.7"/>
+  <text x="580" y="330" class="mono flow-label" text-anchor="middle" fill="#34d399">2. Supervise</text>
+
+  <!-- ========================================== -->
+  <!-- 3. TARGET PLATFORM EXECUTION (Middle Right)-->
+  <!-- ========================================== -->
+  <g transform="translate(646, 204)">
+    <rect width="482" height="210" rx="10" fill="url(#box-tp)" stroke="#0369a1" stroke-width="1"/>
+    <rect width="482" height="3" rx="1.5" fill="url(#blue-bar)"/>
+
+    <rect x="18" y="14" width="144" height="18" rx="9" fill="#082f49" stroke="#0284c7" stroke-width="0.7"/>
+    <text x="90" y="26" class="mono badge-text" fill="#7dd3fc" text-anchor="middle">TARGET PLATFORM</text>
+    <text x="174" y="28" class="sans card-title">Generated Spring Boot Application</text>
+
+    <!-- Sub-boxes -->
+    <g transform="translate(18, 44)">
+      <rect width="446" height="42" rx="6" fill="#090d16" stroke="#0c4a6e" stroke-width="0.8"/>
+      <text x="12" y="18" class="mono item-title" fill="#bae6fd">Camunda 7.24.0 Process Engine</text>
+      <text x="12" y="32" class="sans item-desc">BPMN 2.0 runtime • Cockpit UI • History Service • REST API</text>
+    </g>
+
+    <g transform="translate(18, 94)">
+      <rect width="446" height="44" rx="6" fill="#090d16" stroke="#0c4a6e" stroke-width="0.8"/>
+      <text x="12" y="18" class="mono item-title" fill="#bae6fd">MetaML Pluggable Capability Layer</text>
+      <text x="12" y="32" class="sans item-desc">capability-core • reference-providers • Agent delegates &amp; bindings</text>
+    </g>
+
+    <g transform="translate(18, 146)">
+      <rect width="446" height="48" rx="6" fill="#090d16" stroke="#0c4a6e" stroke-width="0.8"/>
+      <text x="12" y="18" class="mono item-title" fill="#bae6fd">Supervised Runtime Profile</text>
+      <text x="12" y="32" class="sans item-desc">Spring Boot 4.1.0 • Java 24 bytecode • Bundled Maven Wrapper</text>
+      <text x="12" y="44" class="sans item-desc" fill="#38bdf8">Supervised Child JVM on dynamic port (e.g., :8080, :8084)</text>
+    </g>
+  </g>
+
+  <!-- FLOW: Target Platform -> RabbitMQ -->
+  <path d="M 887 414 L 887 448" stroke="#f97316" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#arrow-orange)"/>
+  <rect x="800" y="420" width="174" height="18" rx="4" fill="#090d16" stroke="#334155" stroke-width="0.7"/>
+  <text x="887" y="432" class="mono flow-label" text-anchor="middle" fill="#fb923c">AMQP Events (Port 5672)</text>
+
+  <!-- ========================================== -->
+  <!-- 4. SYNCHRONIZATION & TWIN RUNTIME (Bottom) -->
+  <!-- ========================================== -->
+  <g transform="translate(32, 456)">
+    <!-- RabbitMQ Message Broker -->
+    <g transform="translate(0, 0)">
+      <rect width="440" height="98" rx="10" fill="url(#box-mq)" stroke="#c2410c" stroke-width="1"/>
+      <rect width="440" height="3" rx="1.5" fill="url(#orange-bar)"/>
+
+      <rect x="18" y="12" width="130" height="18" rx="9" fill="#431407" stroke="#ea580c" stroke-width="0.7"/>
+      <text x="83" y="24" class="mono badge-text" fill="#fdba74" text-anchor="middle">EVENT BROKER</text>
+      <text x="160" y="26" class="sans card-title">RabbitMQ AMQP Broker</text>
+      <text x="18" y="48" class="mono" font-size="10.5" fill="#fed7aa">Port 5672 (AMQP) • Port 15672 (Management Console)</text>
+      <text x="18" y="66" class="sans item-desc">Topic exchange event routing • Durable task-execution queues</text>
+      <text x="18" y="80" class="sans item-desc">Correlated execution telemetry for Proxy-Twin synchronization</text>
+    </g>
+
+    <!-- Bi-directional Sync Indicator -->
+    <g transform="translate(448, 38)">
+      <path d="M 8 12 L 48 12" stroke="#fb923c" stroke-width="2" marker-end="url(#arrow-orange)"/>
+      <path d="M 48 24 L 8 24" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-green)"/>
+      <text x="28" y="6" class="mono badge-text" fill="#cbd5e1" text-anchor="middle">LOCKSTEP</text>
+    </g>
+
+    <!-- Proxy ⇄ Twin Correlated Runtime -->
+    <g transform="translate(512, 0)">
+      <rect width="584" height="98" rx="10" fill="url(#box-twin)" stroke="#059669" stroke-width="1"/>
+      <rect width="584" height="3" rx="1.5" fill="url(#green-bar)"/>
+
+      <rect x="18" y="12" width="140" height="18" rx="9" fill="#064e3b" stroke="#059669" stroke-width="0.7"/>
+      <text x="88" y="24" class="mono badge-text" fill="#6ee7b7" text-anchor="middle">SYNCHRONIZATION</text>
+      <text x="170" y="26" class="sans card-title">Proxy ⇄ Digital Twin Runtime</text>
+
+      <!-- Twin / Proxy details -->
+      <g transform="translate(18, 38)">
+        <rect width="260" height="46" rx="5" fill="#090d16" stroke="#047857" stroke-width="0.8"/>
+        <text x="10" y="16" class="mono item-title" fill="#a7f3d0">Proxy Process Instance</text>
+        <text x="10" y="28" class="sans item-desc">Executes real business logic &amp; APIs</text>
+        <text x="10" y="39" class="sans item-desc" fill="#6ee7b7">Emits AMQP state change events</text>
+      </g>
+
+      <g transform="translate(292, 38)">
+        <rect width="274" height="46" rx="5" fill="#090d16" stroke="#047857" stroke-width="0.8"/>
+        <text x="10" y="16" class="mono item-title" fill="#a7f3d0">Digital Twin Instance</text>
+        <text x="10" y="28" class="sans item-desc">Shadow replica for simulation &amp; drift audit</text>
+        <text x="10" y="39" class="sans item-desc" fill="#6ee7b7">Correlated via Business Key &amp; correlationId</text>
+      </g>
+    </g>
+  </g>
+</svg>
