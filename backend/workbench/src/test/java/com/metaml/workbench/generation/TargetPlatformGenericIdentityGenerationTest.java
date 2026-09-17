@@ -110,12 +110,12 @@ class TargetPlatformGenericIdentityGenerationTest {
         assertThat(readmeContent).doesNotContain("RedCollar");
         assertThat(readmeContent).doesNotContain("RedCollarTP");
         // Zero corrupted dashes
-        assertThat(readmeContent).doesNotContain("â€”");
+        assertThat(readmeContent).doesNotContain("\u00e2\u20ac\u201c");
         assertThat(readmeContent).doesNotContain("\u2014");
         // Correct generic process title
         assertThat(readmeContent).startsWith("# Target Platform (Solar Grid Control Process)");
         // Accurate standalone contract wording
-        assertThat(readmeContent).contains("The generated Target Platform is independently runnable from the Workbench once required MetaML runtime artifacts are available locally.");
+        assertThat(readmeContent).contains("The generated Target Platform can run independently of the MetaML Workbench.");
 
         // 5. pom.xml textual verification
         Path pomFile = projectDir.resolve("pom.xml");
@@ -175,24 +175,56 @@ class TargetPlatformGenericIdentityGenerationTest {
         // Parent coordinates intact and unmodified by structural rewrite
         assertThat(parentGroupId).isEqualTo("org.springframework.boot");
         assertThat(parentArtifactId).isEqualTo("spring-boot-starter-parent");
-        assertThat(parentVersion).isEqualTo("3.1.12");
+        assertThat(parentVersion).isEqualTo("4.1.0");
 
-        // Stack contract baseline: Spring Boot 3.1.12, Java 17, Camunda 7.20.0
-        assertThat(pomContent).contains("<java.version>17</java.version>");
-        assertThat(pomContent).contains("<camunda.version>7.20.0</camunda.version>");
-        assertThat(pomContent).contains("<version>3.1.12</version>");
+        // Stack contract baseline: Spring Boot 4.1.0, Java 24, Camunda 7.24.0
+        assertThat(pomContent).contains("<java.version>24</java.version>");
+        assertThat(pomContent).contains("<camunda.version>7.24.0</camunda.version>");
+        assertThat(pomContent).contains("<version>4.1.0</version>");
 
-        // Key dependencies intact
-        assertThat(pomContent).contains("<artifactId>spring-boot-starter-amqp</artifactId>");
+        // ---- Joanna's authoritative dependency contract ----
+        // Camunda starters
+        assertThat(pomContent).contains("<artifactId>camunda-bpm-spring-boot-starter</artifactId>");
         assertThat(pomContent).contains("<artifactId>camunda-bpm-spring-boot-starter-webapp</artifactId>");
-        assertThat(pomContent).contains("<artifactId>h2</artifactId>");
+
+        // Spring Boot compile-scope starters
+        assertThat(pomContent).contains("<artifactId>spring-boot-starter-actuator</artifactId>");
+        assertThat(pomContent).contains("<artifactId>spring-boot-h2console</artifactId>");
+        assertThat(pomContent).contains("<artifactId>spring-boot-starter-amqp</artifactId>");
+        assertThat(pomContent).contains("<artifactId>spring-boot-starter-data-jpa</artifactId>");
+        assertThat(pomContent).contains("<artifactId>spring-boot-starter-micrometer-metrics</artifactId>");
+        assertThat(pomContent).contains("<artifactId>spring-boot-starter-restclient</artifactId>");
+        assertThat(pomContent).contains("<artifactId>spring-boot-starter-security</artifactId>");
+        assertThat(pomContent).contains("<artifactId>spring-boot-starter-webmvc</artifactId>");
+        assertThat(pomContent).contains("<artifactId>spring-rabbit-stream</artifactId>");
+        assertThat(pomContent).contains("<artifactId>lombok</artifactId>");
+
+        // Legacy spring-boot-starter-web removed (superseded by webmvc)
+        assertThat(pomContent).doesNotContain("<artifactId>spring-boot-starter-web</artifactId>");
+
+        // ---- MetaML-specific dependencies preserved ----
         assertThat(pomContent).contains("<artifactId>capability-core</artifactId>");
         assertThat(pomContent).contains("<artifactId>reference-providers</artifactId>");
+
+        // ---- Build plugins contract ----
+        assertThat(pomContent).contains("<artifactId>asciidoctor-maven-plugin</artifactId>");
+        assertThat(pomContent).contains("<artifactId>spring-boot-maven-plugin</artifactId>");
+        assertThat(pomContent).contains("<artifactId>maven-compiler-plugin</artifactId>");
 
         // 7. application.properties verification
         Path appProperties = projectDir.resolve("src/main/resources/application.properties");
         assertThat(appProperties).isRegularFile();
         String props = Files.readString(appProperties, StandardCharsets.UTF_8);
+
+        // Joanna's baseline configuration properties
+        assertThat(props).contains("spring.application.name=TargetPlatform");
+        assertThat(props).contains("management.endpoints.web.exposure.include=*");
+        assertThat(props).contains("spring.jpa.hibernate.ddl-auto=update");
+        assertThat(props).contains("camunda.bpm.webapp.enabled=true");
+        assertThat(props).contains("camunda.bpm.deployment-resource-pattern=classpath*:/processes/*.bpmn");
+        assertThat(props).contains("camunda.bpm.admin-user.id=admin");
+
+        // MetaML-specific runtime properties preserved
         assertThat(props).contains("spring.rabbitmq.host=localhost");
         assertThat(props).contains("spring.rabbitmq.port=5672");
         assertThat(props).contains("metaml.messaging.enabled=true");

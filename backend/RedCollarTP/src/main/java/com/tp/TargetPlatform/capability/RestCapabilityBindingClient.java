@@ -55,10 +55,7 @@ import com.metaml.workbench.capability.runtime.CapabilityBindingResolver;
 // own comment for why. Fully generic: reads only camunda:type="external" off whatever BPMN this
 // application happens to bundle, no RedCollar semantics anywhere.
 //
-// Uses RestTemplate rather than camundademo's RestClient: RedCollarTP pins Spring Boot 3.1.12
-// (Spring Framework 6.0), one minor version before RestClient existed (introduced in Framework 6.1 /
-// Boot 3.2). Bumping RedCollarTP's own Spring Boot version was out of scope for this closure task -
-// RestTemplate is the same HTTP call over the identical wire contract, just an older client API.
+// Uses RestTemplate for HTTP calls over the capability binding wire contract.
 @Component
 @ConditionalOnProperty("metaml.capability.workbench-url")
 public class RestCapabilityBindingClient implements CapabilityBindingResolver {
@@ -100,7 +97,7 @@ public class RestCapabilityBindingClient implements CapabilityBindingResolver {
             return List.of();
         }
         try {
-            String uri = UriComponentsBuilder.fromHttpUrl(workbenchUrl).path(BINDINGS_PATH)
+            String uri = UriComponentsBuilder.fromUriString(workbenchUrl).path(BINDINGS_PATH)
                     .queryParam("processKey", processKey)
                     .queryParam("activityIds", String.join(",", activityIds)).toUriString();
             ApiResponseDto response = restTemplate.getForObject(uri, ApiResponseDto.class);

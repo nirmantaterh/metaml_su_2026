@@ -14,6 +14,6 @@ This directory contains standalone, fully completed Spring Boot + Camunda 7 Targ
 
 ## Architecture Distinction
 
-- **Template Scaffold:** [`backend/RedCollarTP/`](../backend/RedCollarTP/) provides the base Spring Boot 3.1.12 + Camunda 7.20.0 + AMQP Maven structure.
+- **Template Scaffold:** [`backend/RedCollarTP/`](../backend/RedCollarTP/) provides the base Spring Boot 4.1.0 + Camunda 7.24.0 + AMQP Maven structure.
 - **Generator Engine:** [`backend/workbench/src/main/java/com/metaml/workbench/generation/`](../backend/workbench/src/main/java/com/metaml/workbench/generation/) transforms BPMN process models into complete, runnable Target Platforms.
 - **Generated Applications:** The subdirectories above represent finished, self-contained applications ready for independent compilation and execution.
