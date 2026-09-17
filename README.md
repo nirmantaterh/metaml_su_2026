@@ -1,73 +1,84 @@
-# MetaML Workbench
+# MetaML
 
 <p align="center">
-  <img src="docs/assets/metaml-hero.svg" alt="MetaML Workbench — Model-driven BPMN workbench for generating and running synchronized Spring Boot/Camunda Proxy-Twin platforms" width="100%">
+  <img src="docs/assets/metaml-hero.svg" alt="MetaML — Model-Driven Infrastructure for Executable, Synchronized Process Systems" width="100%">
 </p>
 
 <p align="center">
   <a href="https://adoptium.net/"><img src="https://img.shields.io/badge/Java-24-ED8B00?style=flat-square&logo=openjdk&logoColor=white" alt="Java 24"></a>
-  <a href="https://spring.io/projects/spring-boot"><img src="https://img.shields.io/badge/Spring%20Boot-4.1.0-6DB33F?style=flat-square&logo=springboot&logoColor=white" alt="Spring Boot 4.1.0"></a>
-  <a href="https://camunda.com/"><img src="https://img.shields.io/badge/Camunda-7.24.0-FC4E02?style=flat-square&logo=camunda&logoColor=white" alt="Camunda 7.24.0"></a>
+  <a href="https://spring.io/projects/spring-boot"><img src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?style=flat-square&logo=springboot&logoColor=white" alt="Spring Boot 4.1"></a>
+  <a href="https://camunda.com/"><img src="https://img.shields.io/badge/Camunda-7.24-FC4E02?style=flat-square&logo=camunda&logoColor=white" alt="Camunda 7.24"></a>
   <a href="https://www.rabbitmq.com/"><img src="https://img.shields.io/badge/RabbitMQ-AMQP%205672-FF6600?style=flat-square&logo=rabbitmq&logoColor=white" alt="RabbitMQ AMQP"></a>
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 18"></a>
   <a href="https://www.omg.org/spec/BPMN/2.0/"><img src="https://img.shields.io/badge/BPMN-2.0-8b5cf6?style=flat-square" alt="BPMN 2.0"></a>
   <a href="https://maven.apache.org/"><img src="https://img.shields.io/badge/Maven-3.9-C71A36?style=flat-square&logo=apachemaven&logoColor=white" alt="Maven 3.9"></a>
 </p>
 
-> **Design a process once. Generate an executable platform around it. Keep its Proxy and Twin synchronized at runtime.**
+> **Model-driven infrastructure for executable, synchronized process systems.**
 >
-> MetaML Workbench is a model-driven development platform and runtime supervisor for authoring BPMN 2.0 process models and compiling them into dedicated, standalone Spring Boot microservices. Each generated Target Platform integrates Camunda 7 workflow orchestration, pluggable capability bindings, and real-time AMQP event synchronization between outward-facing Proxy delegates and operational Digital Twins.
+> Model processes, generate executable Target Platforms, and coordinate Proxy/Twin execution through event-driven runtime infrastructure. The MetaML authoring environment (MetaML Workbench) provides visual BPMN 2.0 modeling, process persistence, project generation, and runtime management. Each generated Target Platform runs independently of the Workbench at runtime as a dedicated Spring Boot microservice containing the Proxy/Twin process runtime, capability execution, and external RabbitMQ integration.
 
 ---
 
 ## Runtime Flow at a Glance
 
 <p align="center">
-  <img src="docs/assets/metaml-flow.gif" alt="MetaML Runtime Lifecycle and Event Flow Demonstration" width="100%">
+  <img src="docs/assets/metaml-flow.gif" alt="MetaML Process Lifecycle and Event Flow Demonstration" width="100%">
 </p>
 
 The platform transitions seamlessly from visual workflow specification to isolated microservice execution and event-driven lockstep synchronization:
 
-1. **BPMN 2.0 Authoring**: Design or import executable business workflows via the React modeling canvas.
-2. **Platform Scaffolding**: Transform process definitions into an isolated Spring Boot Target Platform with customized identity and ports.
-3. **Managed Execution**: Launch the generated application as a supervised child JVM with automated health probing.
-4. **Proxy & Capability Delegation**: Execute outward-facing service tasks via decoupled capability bindings and pluggable AI agents.
-5. **AMQP Event Synchronization**: Emit transactional state changes to RabbitMQ topic exchanges to drive correlated Digital Twins in lockstep.
+1. **Phase 1: Model on Canvas**: Author, inspect, or import executable business workflows (demonstrated with the canonical RedCollar garment manufacturing process) on the React BPMN 2.0 canvas with gateways, service tasks, and element properties.
+2. **Phase 2: Save & Generate**: Persist validated process definitions to the catalog, then compile and scaffold a dedicated Spring Boot microservice project pre-configured with Camunda, specialized Maven dependencies, and AMQP messaging.
+3. **Phase 3: Launch Runtime**: Build and start the generated microservice as a supervised child JVM process, binding an automatically allocated dynamic port with automated health probes.
+4. **Phase 4: Standalone Portal**: Connect directly to the Target Platform's standalone web interface and embedded Camunda Cockpit, running independently of the Workbench at runtime.
+5. **Phase 5: Capability Execution**: Dispatch pluggable execution components (services, tools, or automated tasks such as `order-approval` and `quality-check`) via the `CapabilityDispatcher`.
+6. **Phase 6: RabbitMQ Lockstep**: RabbitMQ provides external asynchronous AMQP transport for task and response handoff messages, coordinating the Proxy business process and Digital Twin shadow replica in lockstep.
 
 ---
 
 ## From Model to Running Platform
 
 <p align="center">
-  <img src="docs/assets/metaml-lifecycle.svg" alt="MetaML 5-Stage Lifecycle: Model, Generate, Launch, Execute, Synchronize" width="100%">
+  <img src="docs/assets/metaml-lifecycle.svg" alt="MetaML 5-Stage Lifecycle: Model, Save, Generate, Launch, Run" width="100%">
 </p>
 
-| Stage | Subsystem | Description |
-| :--- | :--- | :--- |
-| **1. Model** | `frontend` / `bpmn-js` | Author or import standard BPMN 2.0 XML workflows with visual canvas, component palette, and token simulation. |
-| **2. Generate** | `workbench` / `wbapi` | Clone the production Target Platform template, specialize Maven coordinates, configure AMQP topology, and inject process definitions. |
-| **3. Launch** | `workbench` / Child JVM | Build and launch the scaffolded platform on an assigned dynamic port with background health check supervision. |
-| **4. Execute** | `capability-core` / `providers` | Proxy service tasks delegate business logic to external REST endpoints, local providers, or pluggable AI agents. |
-| **5. Synchronize** | `RabbitMQ` / `RedCollarTP` | Correlated event bus maintains runtime state lockstep between the outward Proxy and the shadow Digital Twin. |
+| Stage | Scope | Description | Runtime / Storage |
+| :--- | :--- | :--- | :--- |
+| **1. Model** | `MetaML` / Canvas | Visual workflow authoring and configuration on canvas with BPMN 2.0 elements, sequence flows, and properties. | Input: `.bpmn` XML / UI |
+| **2. Save** | `MetaML` / Catalog | Validate executable BPMN structure and persist process definitions and versioned metadata to the catalog archive. | Storage: H2 Database (`/api/v1/projects`) |
+| **3. Generate** | `MetaML` / Engine | Scaffold an isolated Spring Boot microservice project pre-configured with Camunda 7.24, Maven wrapper, and AMQP bindings. | Output: Standalone Project Directory |
+| **4. Launch** | `MetaML` / Supervisor | Build and start the generated application as a supervised child JVM process on an assigned dynamic port with live health probes. | Runtime: Child JVM Process / Dynamic Port |
+| **5. Run** | `Target Platform` / Runtime | Execute correlated Proxy and Twin workflows in lockstep inside the embedded Camunda engine via external RabbitMQ transport. | Transport: RabbitMQ AMQP (`:5672`) |
 
 ---
 
 ## Architecture Overview
 
 <p align="center">
-  <img src="docs/assets/metaml-architecture.svg" alt="MetaML System Topology and Architecture Diagram" width="100%">
+  <img src="docs/assets/metaml-architecture.svg" alt="MetaML System Architecture Diagram" width="100%">
 </p>
 
 ### System Topology
 
-- **Client Tier (`frontend/`)**: React 18 single-page application (port 3000) providing the BPMN modeler canvas (`bpmn-js`), Transmute Studio (Model, Generate, Launch), and the Evolve agent catalog.
-- **Control Plane (`backend/`)**:
-  - **`wbapi` (Port 8082)**: Spring Boot REST API orchestrating project persistence, BPMN model versioning, validation, and generation endpoints.
-  - **`workbench`**: Core generation engine (`SpringBootProjectGenerator`) providing identity specialization, template instantiation, and child JVM process management (`ProcessLauncher`).
-  - **`nodemanager` (Port 8083)**: Dynamic agent discovery and capability catalog stub for extensible runtime tools.
-- **Generated Target Platform (`generated-target-platforms/`)**: Standalone Spring Boot 4.1.0 / Java 24 application hosting an embedded Camunda 7.24.0 process engine, bundled Maven Wrapper, and independent HTTP port.
-- **AMQP Event Broker (`RabbitMQ`)**: RabbitMQ message broker (AMQP port 5672, management port 15672) delivering topic exchange routing for Proxy-to-Twin state propagation.
-- **Proxy ⇄ Digital Twin Runtime**: Outward-facing Proxy process instances execute real business operations and emit state events; correlated Digital Twin instances mirror execution in shadow lockstep.
+- **MetaML Workbench (Host / Control Plane)**:
+  - **UI & Modeler Canvas (Port 3000)**: React 18 single-page application providing the visual BPMN 2.0 modeling canvas (`bpmn-js`), Transmute Studio (Model, Generate, Launch), and the agent catalog.
+  - **`wbapi` Control Plane (Port 8082)**: Spring Boot REST API orchestrating project persistence, BPMN model versioning, validation, and generation endpoints backed by an embedded H2 database.
+  - **`SpringBootProjectGenerator` (`workbench`)**: Core generation engine performing identity specialization, template instantiation (`RedCollarTP`), Maven dependency wiring, and configuration generation.
+  - **`ProcessLauncher` (`workbench`)**: Child JVM process supervisor managing application startup, dynamic port allocation, health probing, and termination.
+  - **Catalog Subsystem (`nodemanager` Port 8083)**: Dynamic agent discovery and capability catalog stub for authoring-time tool discovery (not a Target Platform runtime component).
+
+- **Generated Target Platform (Standalone Microservice :PORT)**:
+  Runs independently of the Workbench at runtime after generation and compilation:
+  - **Process Runtime**: Embedded Camunda 7.24 Engine executing both Proxy and Digital Twin process instances within the **same** engine.
+  - **Correlated Workflows**: Proxy (primary outward-facing business workflow) ⇄ Digital Twin (automated shadow replica) correlated by `businessKey`.
+  - **Capability Execution**: `CapabilityDispatcher` executing pluggable tasks (e.g., `OrderApproval`, `QualityCheck`, reference providers).
+  - **Runtime Messaging**: Internal `SignalBroadcaster` (`@Scheduled` 1s coordinator), `PairRegistry` (maintains correlated `businessKey` mappings), and Task/Response queue publishers and listeners implementing the synchronization contract.
+  - **Management Portal**: Standalone Web UI and Camunda Cockpit running on the microservice's dynamic port.
+
+- **External RabbitMQ Broker (AMQP Port 5672, Mgmt 15672)**:
+  - **Topic Exchange & Correlation Queues**: Routes task requests (`sync.<signal>`) and response messages (`sync.responses.<signal>`).
+  - **Transport Role**: RabbitMQ provides external asynchronous AMQP transport for task and response handoff messages. Application logic inside the Target Platform (`PairRegistry`, `SignalBroadcaster`, Camunda signal events, and listeners) implements the synchronization contract.
 
 ---
 
@@ -81,67 +92,78 @@ The platform transitions seamlessly from visual workflow specification to isolat
     </td>
     <td width="50%" valign="top">
       <h3>Real Runtime Execution</h3>
-      <p>Decouple process orchestration from implementation details. The <code>capability-core</code> and <code>reference-providers</code> modules supply structured input/output contracts, invocation contexts, and pluggable service task bindings.</p>
+      <p>Decouple process orchestration from implementation details. The <code>capability-core</code> and <code>reference-providers</code> modules supply structured input/output contracts, invocation contexts, and pluggable service task bindings dispatched by <code>CapabilityDispatcher</code>.</p>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
       <h3>Proxy / Twin Synchronization</h3>
-      <p>Execute parallel Proxy and Twin workflows correlated by <code>businessKey</code> and <code>correlationId</code>. Real-time AMQP messaging over RabbitMQ guarantees state lockstep, enabling non-intrusive runtime auditing and shadow simulation.</p>
+      <p>Execute correlated Proxy and Twin workflows inside the same embedded Camunda engine, linked by <code>businessKey</code>. Asynchronous AMQP transport via external RabbitMQ paired with internal signal broadcasting maintains lockstep execution across correlated Proxy and Twin instances within a single engine.</p>
     </td>
     <td width="50%" valign="top">
-      <h3>Extensible AI &amp; Agent Architecture</h3>
-      <p>Incorporate intelligent autonomous agents directly into process task flows. The Node Manager service provides dynamic capability discovery, tool catalog exposure, and runtime schema evaluation for evolving platforms.</p>
+      <h3>Extensible Capabilities &amp; Agents</h3>
+      <p>Incorporate intelligent services, tools, and autonomous agents directly into process task flows. The Node Manager service provides an authoring-time agent catalog stub for dynamic tool discovery and schema exposure.</p>
     </td>
   </tr>
 </table>
 
 ---
 
-## Product Screenshots
+## RedCollar: From Model to Runtime
 
-<table>
-  <tr>
-    <td width="50%" align="center">
-      <img src="docs/assets/screenshots/modeler.png" alt="BPMN 2.0 Modeler Canvas" width="100%"><br>
-      <b>BPMN 2.0 Modeler</b><br>
-      <sub>Visual process modeling, XML import/export, and interactive canvas authoring.</sub>
-    </td>
-    <td width="50%" align="center">
-      <img src="docs/assets/screenshots/generate.png" alt="Target Platform Generation Screen" width="100%"><br>
-      <b>Target Platform Scaffolding</b><br>
-      <sub>One-click transformation of process definitions into complete Spring Boot applications.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" align="center">
-      <img src="docs/assets/screenshots/launch.png" alt="Target Platform Launch Dashboard" width="100%"><br>
-      <b>Process Supervision Dashboard</b><br>
-      <sub>Supervise child JVM lifecycles, health status, and direct Camunda Cockpit links.</sub>
-    </td>
-    <td width="50%" align="center">
-      <img src="docs/assets/screenshots/evolve.png" alt="Evolve and Agent Catalog" width="100%"><br>
-      <b>Capabilities &amp; Agent Catalog</b><br>
-      <sub>Dynamic capability discovery, agent bindings, and runtime schema governance.</sub>
-    </td>
-  </tr>
-</table>
+### 1. Model
+
+Author and configure the canonical RedCollar garment manufacturing process on the MetaML canvas.
+
+<p align="center">
+  <img src="docs/assets/screenshots/redcollar-model.png" alt="MetaML BPMN Modeler — Canonical RedCollar Manufacturing Process" width="100%">
+</p>
+
+<p align="center">↓</p>
+
+### 2. Generate
+
+Compile the validated RedCollar process model into an isolated, standalone Spring Boot Target Platform project.
+
+<p align="center">
+  <img src="docs/assets/screenshots/redcollar-generate.png" alt="MetaML Transmute Generate — Generated RedCollar Target Platform" width="100%">
+</p>
+
+<p align="center">↓</p>
+
+### 3. Launch
+
+Start and supervise the generated RedCollar application on an assigned dynamic port with live health monitoring.
+
+<p align="center">
+  <img src="docs/assets/screenshots/redcollar-launch.png" alt="MetaML Transmute Launch — Running RedCollar Process with Engine Controls" width="100%">
+</p>
+
+<p align="center">↓</p>
+
+### 4. Target Platform
+
+The standalone generated RedCollar Target Platform running independently on its dynamic port with Camunda workflows and RabbitMQ synchronization active.
+
+<p align="center">
+  <img src="docs/assets/screenshots/redcollar-target-platform.png" alt="Standalone Generated RedCollar Target Platform Portal" width="100%">
+</p>
 
 ---
 
 ## Quick Start
 
 ```
-Clone Repository ➔ Build Backend Modules ➔ Start Workbench API ➔ Start Frontend ➔ Model & Generate ➔ Launch
+Clone Repository ➔ Build Backend Modules ➔ Start MetaML API ➔ Start Frontend ➔ Model & Generate ➔ Launch
 ```
 
 ### 1. Requirements
 
-- **Java JDK 24 or newer**: Required to build and run Workbench services (`wbapi`, `workbench`, `nodemanager`) and generated Target Platforms (tested with Adoptium Temurin 25 / target release 24).
+- **Java JDK 24 or newer**: Required to build and run MetaML backend services (`wbapi`, `workbench`, `nodemanager`) and generated Target Platforms (tested with Adoptium Temurin 25 / target release 24).
 - **Node.js (v18+) and npm**: Required for the React web application.
 - **Git**: Required for version control and workspace management.
 - **Docker**: Recommended for running RabbitMQ locally.
-- **RabbitMQ**: Required when utilizing Proxy/Twin AMQP event synchronization. *(Optional for basic Workbench modeling and standalone code generation).*
+- **RabbitMQ**: Required when utilizing Proxy/Twin AMQP event synchronization. *(Optional for basic modeling and standalone code generation).*
 - **Maven**: The repository bundles the Maven Wrapper (`mvnw`, `mvnw.cmd`) in `backend/` and within every generated Target Platform.
 
 ---
@@ -165,7 +187,7 @@ On a fresh clone, install the core backend modules into your local Maven reposit
 
 ---
 
-### 3. Start Workbench REST API
+### 3. Start MetaML REST API (wbapi)
 
 The primary backend service (`wbapi`) runs on port **8082**:
 
@@ -214,9 +236,9 @@ Management console: [http://localhost:15672](http://localhost:15672) *(default c
 
 ---
 
-### 6. Start Node Manager (Optional — For Evolve & Agent Catalog)
+### 6. Start Node Manager (Optional — For Authoring Agent Catalog)
 
-The Node Manager service (`nodemanager`) runs on port **8083** to provide dynamic agent tool discovery:
+The Node Manager service (`nodemanager`) runs on port **8083** as an authoring-time agent catalog stub for dynamic tool discovery:
 
 - **Windows PowerShell:**
   ```powershell
@@ -235,7 +257,7 @@ The Node Manager service (`nodemanager`) runs on port **8083** to provide dynami
 
 1. **Project Setup**: Create a new project under **Project > Create** or open an existing workspace via **Project > Edit**.
 2. **Model**: Open the visual canvas under **Transmute > Model**. Author new workflow diagrams or import an existing `.bpmn` XML file.
-3. **Save**: Click **Save** to persist the workflow definition and register the process with the Workbench engine.
+3. **Save**: Click **Save** to persist the workflow definition and register the process with the MetaML catalog.
 4. **Generate**: Navigate to **Transmute > Generate**, select the process model, and click **Generate** to scaffold an isolated Spring Boot Target Platform.
 5. **Launch**: Navigate to **Transmute > Launch** to build, supervise, and inspect the running platform.
 
@@ -268,16 +290,16 @@ Generated / Stopped
 
 ## Running a Generated Target Platform Separately
 
-Generated Target Platforms are completely standalone Spring Boot microservices bundling their own Maven Wrapper (`mvnw`, `mvnw.cmd`, `.mvn/wrapper/`).
+Generated Target Platforms run independently of the Workbench at runtime after generation and build, operating as dedicated Spring Boot microservices bundling their own Maven Wrapper (`mvnw`, `mvnw.cmd`, `.mvn/wrapper/`).
 
 ### Output Directory Locations
 
-- **Dynamically Generated Platforms**: By default, applications generated from the Workbench backend are written to `../generated-target-platforms/` (a sibling directory outside the repository root).
+- **Dynamically Generated Platforms**: By default, applications generated from MetaML are written to `../generated-target-platforms/` (a sibling directory outside the repository root).
 - **Tracked Reference Platforms**: The repository includes sample reference platforms in `generated-target-platforms/` (such as `redcollar-manufacturing` and `liveverify-wiretransfer`).
 
 ### Local Dependencies
 
-Generated platforms depend on `capability-core` and `reference-providers`. Ensure `mvnw install -DskipTests` has been executed in `backend/` so these artifacts reside in your local Maven repository.
+Generated platforms depend on `capability-core` and `reference-providers` at build time. Ensure `mvnw install -DskipTests` has been executed in `backend/` so these artifacts reside in your local Maven repository (`~/.m2/repository`). Synchronized task and response messaging requires external RabbitMQ.
 
 ### Manual Execution
 
@@ -316,9 +338,11 @@ Generated platforms depend on `capability-core` and `reference-providers`. Ensur
 
 Generated platforms implement a synchronized Proxy/Twin architectural pattern:
 
-- **Proxy Engine**: Outward-facing execution delegates and service tasks that handle live requests, trigger external REST capabilities, and emit process progression events.
+- **Same Embedded Engine**: Both Proxy and Digital Twin process instances execute inside the **same embedded Camunda engine** within the Target Platform microservice, executing both process instances within a single engine.
+- **Proxy Process**: Outward-facing execution delegates and service tasks that handle live requests, trigger bound capabilities, and emit process progression events.
 - **Digital Twin**: Operational shadow replica kept in lockstep with the primary process via AMQP intermediate catch events, enabling runtime safety checks and simulation without side effects.
-- **AMQP Event Bus**: Configured topic exchanges in RabbitMQ decouple event producers and consumers. Process events include `processDefinitionKey`, `businessKey`, `activityId`, and execution payloads.
+- **AMQP Transport**: RabbitMQ provides external asynchronous AMQP transport for task and response handoff messages. Topic exchanges decouple event producers and consumers.
+- **Internal Synchronization Contract**: Target Platform application logic—including `PairRegistry` (tracking correlated `businessKey` instances), `SignalBroadcaster` (@Scheduled 1s poller), and Camunda signal events—enforces synchronization across workflow turns.
 - **Introspection Endpoints**: Dedicated REST controllers provide process health, execution history, and state verification.
 
 ---
@@ -365,6 +389,7 @@ metaml-workbench-source-of-truth/
 ├── frontend/                   # React 18 SPA with bpmn-js canvas (:3000)
 ├── generated-target-platforms/ # Tracked sample generated Target Platform applications
 ├── demo/                       # BPMN process fixtures, test datasets, verification files
+├── TEAM_DEMO_GUIDE.md          # Comprehensive step-by-step team demonstration guide
 └── docs/
     ├── architecture/           # Architecture specs, ADRs, and runtime diagrams
     └── assets/                 # SVGs, animations, and product screenshots
@@ -373,16 +398,17 @@ metaml-workbench-source-of-truth/
         ├── metaml-lifecycle.svg
         ├── metaml-architecture.svg
         └── screenshots/
-            ├── modeler.png
-            ├── generate.png
-            ├── launch.png
-            └── evolve.png
+            ├── redcollar-model.png
+            ├── redcollar-generate.png
+            ├── redcollar-launch.png
+            └── redcollar-target-platform.png
 ```
 
 ---
 
 ## Additional Components & Further Reading
 
+- **Team Demo Guide**: [TEAM_DEMO_GUIDE.md](TEAM_DEMO_GUIDE.md) — Comprehensive, end-to-end verification and demonstration walkthrough.
 - **VS Code Extension**: The MetaML VS Code extension is maintained in the sibling repository `metaml-vscode-plugin`. It communicates with the Workbench REST API for target platform discovery, lifecycle commands, and AI-assisted process evolution.
 - [Platform Context](PLATFORM_CONTEXT.md): High-level system overview and architectural context.
 - [Architecture Specification](docs/architecture/ARCHITECTURE.md): Comprehensive component model, pipeline stages, and boundaries.

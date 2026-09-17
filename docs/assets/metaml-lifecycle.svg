@@ -43,7 +43,7 @@
     .mono { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; }
     .sans { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
     .title { font-size: 13.5px; font-weight: 700; letter-spacing: 0.5px; }
-    .desc { font-size: 11px; fill: #94a3b8; line-height: 1.4; }
+    .desc { font-size: 11px; fill: #94a3b8; line-height: 1.45; }
     .badge { font-size: 9.5px; font-weight: 600; letter-spacing: 0.5px; }
   </style>
 
@@ -59,13 +59,13 @@
     <text x="42" y="32" class="mono badge" fill="#c084fc" text-anchor="middle">STEP 01</text>
     
     <text x="14" y="66" class="sans title" fill="#f8fafc">1. Model</text>
-    <text x="14" y="86" class="mono" font-size="10.5" font-weight="600" fill="#c084fc">BPMN 2.0 Editor</text>
+    <text x="14" y="86" class="mono" font-size="10.5" font-weight="600" fill="#c084fc">BPMN 2.0 Canvas</text>
 
-    <text x="14" y="118" class="sans desc">
-      <tspan x="14" dy="0">Create or import BPMN</tspan>
-      <tspan x="14" dy="16">process models with</tspan>
-      <tspan x="14" dy="16">visual canvas, palette,</tspan>
-      <tspan x="14" dy="16">and token simulation.</tspan>
+    <text x="14" y="116" class="sans desc">
+      <tspan x="14" dy="0">Visual workflow authoring</tspan>
+      <tspan x="14" dy="16">and configuration on canvas</tspan>
+      <tspan x="14" dy="16">with property inspection</tspan>
+      <tspan x="14" dy="16">and validation.</tspan>
     </text>
 
     <rect x="14" y="174" width="172" height="22" rx="4" fill="#090d16" stroke="#1e293b"/>
@@ -73,102 +73,102 @@
   </g>
 
   <!-- Arrow 1 -> 2 -->
-  <path d="M 228 130 L 244 130" stroke="#6366f1" stroke-width="2" stroke-dasharray="3 3"/>
-  <polygon points="244,127 250,130 244,133" fill="#6366f1"/>
+  <path d="M 228 130 L 244 130" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="3 3"/>
+  <polygon points="244,127 250,130 244,133" fill="#8b5cf6"/>
 
-  <!-- Card 2: 2. GENERATE -->
+  <!-- Card 2: 2. SAVE -->
   <g transform="translate(254, 25)">
     <rect width="200" height="210" rx="10" fill="url(#card-grad)" stroke="#334155" stroke-width="1"/>
     <rect width="200" height="4" rx="2" fill="url(#c2-acc)"/>
-    <rect x="14" y="18" width="56" height="20" rx="10" fill="#1e1b4b" stroke="#6366f1" stroke-width="0.8"/>
-    <text x="42" y="32" class="mono badge" fill="#a5b4fc" text-anchor="middle">STEP 02</text>
+    <rect x="14" y="18" width="56" height="20" rx="10" fill="#1e1b4b" stroke="#a855f7" stroke-width="0.8"/>
+    <text x="42" y="32" class="mono badge" fill="#d8b4fe" text-anchor="middle">STEP 02</text>
     
-    <text x="14" y="66" class="sans title" fill="#f8fafc">2. Generate</text>
-    <text x="14" y="86" class="mono" font-size="10.5" font-weight="600" fill="#818cf8">Target Platform</text>
+    <text x="14" y="66" class="sans title" fill="#f8fafc">2. Save</text>
+    <text x="14" y="86" class="mono" font-size="10.5" font-weight="600" fill="#a5b4fc">Process Catalog</text>
 
-    <text x="14" y="118" class="sans desc">
-      <tspan x="14" dy="0">Clone production TP</tspan>
-      <tspan x="14" dy="16">template into isolated</tspan>
-      <tspan x="14" dy="16">Spring Boot project with</tspan>
-      <tspan x="14" dy="16">delegates and listeners.</tspan>
+    <text x="14" y="116" class="sans desc">
+      <tspan x="14" dy="0">Validate executable BPMN,</tspan>
+      <tspan x="14" dy="16">verify engine deployment,</tspan>
+      <tspan x="14" dy="16">and persist to catalog</tspan>
+      <tspan x="14" dy="16">archive.</tspan>
     </text>
 
     <rect x="14" y="174" width="172" height="22" rx="4" fill="#090d16" stroke="#1e293b"/>
-    <text x="24" y="189" class="mono" font-size="9" fill="#94a3b8">Stack: SB 4.1 + JDK 24</text>
+    <text x="24" y="189" class="mono" font-size="9" fill="#94a3b8">Storage: H2 Database</text>
   </g>
 
   <!-- Arrow 2 -> 3 -->
-  <path d="M 458 130 L 474 130" stroke="#38bdf8" stroke-width="2" stroke-dasharray="3 3"/>
-  <polygon points="474,127 480,130 474,133" fill="#38bdf8"/>
+  <path d="M 458 130 L 474 130" stroke="#6366f1" stroke-width="2" stroke-dasharray="3 3"/>
+  <polygon points="474,127 480,130 474,133" fill="#6366f1"/>
 
-  <!-- Card 3: 3. LAUNCH -->
+  <!-- Card 3: 3. GENERATE -->
   <g transform="translate(484, 25)">
     <rect width="200" height="210" rx="10" fill="url(#card-grad)" stroke="#334155" stroke-width="1"/>
     <rect width="200" height="4" rx="2" fill="url(#c3-acc)"/>
-    <rect x="14" y="18" width="56" height="20" rx="10" fill="#082f49" stroke="#0284c7" stroke-width="0.8"/>
-    <text x="42" y="32" class="mono badge" fill="#7dd3fc" text-anchor="middle">STEP 03</text>
+    <rect x="14" y="18" width="56" height="20" rx="10" fill="#082f49" stroke="#6366f1" stroke-width="0.8"/>
+    <text x="42" y="32" class="mono badge" fill="#a5b4fc" text-anchor="middle">STEP 03</text>
     
-    <text x="14" y="66" class="sans title" fill="#f8fafc">3. Launch</text>
-    <text x="14" y="86" class="mono" font-size="10.5" font-weight="600" fill="#38bdf8">Camunda Runtime</text>
+    <text x="14" y="66" class="sans title" fill="#f8fafc">3. Generate</text>
+    <text x="14" y="86" class="mono" font-size="10.5" font-weight="600" fill="#818cf8">Target Platform</text>
 
-    <text x="14" y="118" class="sans desc">
-      <tspan x="14" dy="0">Compile &amp; launch the</tspan>
-      <tspan x="14" dy="16">generated platform.</tspan>
-      <tspan x="14" dy="16">Deploy process into</tspan>
-      <tspan x="14" dy="16">Camunda 7.24 engine.</tspan>
+    <text x="14" y="116" class="sans desc">
+      <tspan x="14" dy="0">Scaffold standalone</tspan>
+      <tspan x="14" dy="16">Spring Boot project with</tspan>
+      <tspan x="14" dy="16">embedded Camunda engine</tspan>
+      <tspan x="14" dy="16">and messaging code.</tspan>
     </text>
 
     <rect x="14" y="174" width="172" height="22" rx="4" fill="#090d16" stroke="#1e293b"/>
-    <text x="24" y="189" class="mono" font-size="9" fill="#94a3b8">Port: 8080 / Cockpit</text>
+    <text x="24" y="189" class="mono" font-size="9" fill="#94a3b8">Output: Standalone Project</text>
   </g>
 
   <!-- Arrow 3 -> 4 -->
-  <path d="M 688 130 L 704 130" stroke="#10b981" stroke-width="2" stroke-dasharray="3 3"/>
-  <polygon points="704,127 710,130 704,133" fill="#10b981"/>
+  <path d="M 688 130 L 704 130" stroke="#0284c7" stroke-width="2" stroke-dasharray="3 3"/>
+  <polygon points="704,127 710,130 704,133" fill="#0284c7"/>
 
-  <!-- Card 4: 4. EXECUTE -->
+  <!-- Card 4: 4. LAUNCH -->
   <g transform="translate(714, 25)">
     <rect width="200" height="210" rx="10" fill="url(#card-grad)" stroke="#334155" stroke-width="1"/>
     <rect width="200" height="4" rx="2" fill="url(#c4-acc)"/>
-    <rect x="14" y="18" width="56" height="20" rx="10" fill="#064e3b" stroke="#059669" stroke-width="0.8"/>
-    <text x="42" y="32" class="mono badge" fill="#6ee7b7" text-anchor="middle">STEP 04</text>
+    <rect x="14" y="18" width="56" height="20" rx="10" fill="#0c2d48" stroke="#0284c7" stroke-width="0.8"/>
+    <text x="42" y="32" class="mono badge" fill="#7dd3fc" text-anchor="middle">STEP 04</text>
     
-    <text x="14" y="66" class="sans title" fill="#f8fafc">4. Execute</text>
-    <text x="14" y="86" class="mono" font-size="10.5" font-weight="600" fill="#34d399">Capability Layer</text>
+    <text x="14" y="66" class="sans title" fill="#f8fafc">4. Launch</text>
+    <text x="14" y="86" class="mono" font-size="10.5" font-weight="600" fill="#38bdf8">Supervised Runtime</text>
 
-    <text x="14" y="118" class="sans desc">
-      <tspan x="14" dy="0">Proxy service tasks</tspan>
-      <tspan x="14" dy="16">execute real business</tspan>
-      <tspan x="14" dy="16">logic, REST endpoints,</tspan>
-      <tspan x="14" dy="16">and pluggable AI agents.</tspan>
+    <text x="14" y="116" class="sans desc">
+      <tspan x="14" dy="0">Build and start application</tspan>
+      <tspan x="14" dy="16">as child JVM process on</tspan>
+      <tspan x="14" dy="16">assigned dynamic port with</tspan>
+      <tspan x="14" dy="16">health probes.</tspan>
     </text>
 
     <rect x="14" y="174" width="172" height="22" rx="4" fill="#090d16" stroke="#1e293b"/>
-    <text x="24" y="189" class="mono" font-size="9" fill="#94a3b8">Engine: Real Services / AI</text>
+    <text x="24" y="189" class="mono" font-size="9" fill="#94a3b8">Runtime: Child JVM / Port</text>
   </g>
 
   <!-- Arrow 4 -> 5 -->
-  <path d="M 918 130 L 934 130" stroke="#f97316" stroke-width="2" stroke-dasharray="3 3"/>
-  <polygon points="934,127 940,130 934,133" fill="#f97316"/>
+  <path d="M 918 130 L 934 130" stroke="#10b981" stroke-width="2" stroke-dasharray="3 3"/>
+  <polygon points="934,127 940,130 934,133" fill="#10b981"/>
 
-  <!-- Card 5: 5. SYNCHRONIZE -->
+  <!-- Card 5: 5. RUN -->
   <g transform="translate(944, 25)">
     <rect width="192" height="210" rx="10" fill="url(#card-grad)" stroke="#334155" stroke-width="1"/>
     <rect width="192" height="4" rx="2" fill="url(#c5-acc)"/>
-    <rect x="14" y="18" width="56" height="20" rx="10" fill="#431407" stroke="#ea580c" stroke-width="0.8"/>
-    <text x="42" y="32" class="mono badge" fill="#fdba74" text-anchor="middle">STEP 05</text>
+    <rect x="14" y="18" width="56" height="20" rx="10" fill="#064e3b" stroke="#10b981" stroke-width="0.8"/>
+    <text x="42" y="32" class="mono badge" fill="#6ee7b7" text-anchor="middle">STEP 05</text>
     
-    <text x="14" y="66" class="sans title" fill="#f8fafc">5. Synchronize</text>
-    <text x="14" y="86" class="mono" font-size="10.5" font-weight="600" fill="#fb923c">Proxy ⇄ Twin</text>
+    <text x="14" y="66" class="sans title" fill="#f8fafc">5. Run</text>
+    <text x="14" y="86" class="mono" font-size="10.5" font-weight="600" fill="#34d399">Proxy ⇄ Twin</text>
 
-    <text x="14" y="118" class="sans desc">
-      <tspan x="14" dy="0">RabbitMQ event bus</tspan>
-      <tspan x="14" dy="16">coordinates runtime</tspan>
-      <tspan x="14" dy="16">lockstep state between</tspan>
-      <tspan x="14" dy="16">Proxy and Digital Twin.</tspan>
+    <text x="14" y="116" class="sans desc">
+      <tspan x="14" dy="0">Execute workflows in</tspan>
+      <tspan x="14" dy="16">lockstep via external</tspan>
+      <tspan x="14" dy="16">RabbitMQ transport with</tspan>
+      <tspan x="14" dy="16">capability execution.</tspan>
     </text>
 
     <rect x="14" y="174" width="164" height="22" rx="4" fill="#090d16" stroke="#1e293b"/>
-    <text x="24" y="189" class="mono" font-size="9" fill="#94a3b8">Broker: RabbitMQ AMQP</text>
+    <text x="24" y="189" class="mono" font-size="9" fill="#94a3b8">Transport: RabbitMQ AMQP</text>
   </g>
 </svg>
