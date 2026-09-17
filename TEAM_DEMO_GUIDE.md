@@ -22,20 +22,35 @@ under tenant-scoped governance rules.
 
 ## 2. How to run it
 
-Three processes. Start them in this order.
+Three processes. Start them in this order. Note that the Maven Wrapper (`mvnw`, `mvnw.cmd`) resides inside `backend/`.
 
-```bash
-# 1. backend (port 8082)
-cd backend
-./mvnw -pl wbapi spring-boot:run
+- **Windows PowerShell:**
+  ```powershell
+  # 1. backend (port 8082)
+  cd backend
+  .\mvnw.cmd -pl wbapi spring-boot:run
 
-# 2. node manager (port 8083) - needed for Evolve
-cd backend
-./mvnw -pl nodemanager spring-boot:run
+  # 2. node manager (port 8083) - needed for Evolve
+  cd backend
+  .\mvnw.cmd -pl nodemanager spring-boot:run
 
-# 3. frontend (port 3000)
-npm start --prefix frontend
-```
+  # 3. frontend (port 3000)
+  npm start --prefix frontend
+  ```
+
+- **Linux / macOS:**
+  ```bash
+  # 1. backend (port 8082)
+  cd backend
+  ./mvnw -pl wbapi spring-boot:run
+
+  # 2. node manager (port 8083) - needed for Evolve
+  cd backend
+  ./mvnw -pl nodemanager spring-boot:run
+
+  # 3. frontend (port 3000)
+  npm start --prefix frontend
+  ```
 
 Then open <http://localhost:3000>.
 

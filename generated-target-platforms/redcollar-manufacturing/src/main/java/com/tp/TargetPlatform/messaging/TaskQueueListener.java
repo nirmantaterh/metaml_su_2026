@@ -8,7 +8,7 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-// The real consumer for task messages - the Camunda signal delivery that releases twin's waiting execution happens here, triggered by consuming the message. Enabled only with metaml.messaging.enabled=true; when disabled, SignalBroadcaster delivers signals directly instead.
+// Consumes task messages from RabbitMQ to deliver Camunda signals releasing waiting twin executions.
 @Component
 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
 public class TaskQueueListener {
@@ -22,7 +22,7 @@ public class TaskQueueListener {
     }
 
     // A malformed payload throws an exception to trigger configured listener retries and dead-letter routing to DLQ_TASKS_QUEUE.
-    @RabbitListener(queues = { "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.sampling-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.laying-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.marking-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.cutting-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.stitching-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.checking-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.pressing-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.packaging-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.shipping-signal" })
+    @RabbitListener(queues = { "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.sampling-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.laying-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.marking-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.cutting-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.stitching-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.checking-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.pressing-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.packaging-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.shipping-signal" })
     public void onTaskMessage(String payload) {
         String[] parts = payload.split("\\|", -1);
         if (parts.length != 4) {

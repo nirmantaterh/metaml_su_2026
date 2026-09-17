@@ -2,12 +2,19 @@ package com.tp.TargetPlatform.worker.proxy;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 import org.camunda.bpm.engine.ExternalTaskService;
+import org.camunda.bpm.engine.RuntimeService;
 import org.camunda.bpm.engine.externaltask.LockedExternalTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
+
+import com.metaml.workbench.automation.AutomationResult;
+import com.metaml.workbench.capability.runtime.CapabilityDispatcher;
+import com.metaml.workbench.capability.runtime.ExternalTaskExecutionContext;
 
 import com.tp.TargetPlatform.worker.GeneratedExternalTaskWorker;
 
@@ -16,6 +23,18 @@ import com.tp.TargetPlatform.worker.GeneratedExternalTaskWorker;
 public class CheckingWorker implements GeneratedExternalTaskWorker {
 
     private static final Logger logger = LoggerFactory.getLogger(CheckingWorker.class);
+    private static final String ACTIVITY_ID = "_8F5A4559-5D75-4D79-AEEC-E6EE61672A5D";
+
+    private final ObjectProvider<CapabilityDispatcher> capabilityDispatcherProvider;
+    private final ObjectProvider<GatewayOutputProvider> outputProvider;
+    private final RuntimeService runtimeService;
+
+    public CheckingWorker(ObjectProvider<CapabilityDispatcher> capabilityDispatcherProvider,
+            ObjectProvider<GatewayOutputProvider> outputProvider, RuntimeService runtimeService) {
+        this.capabilityDispatcherProvider = capabilityDispatcherProvider;
+        this.outputProvider = outputProvider;
+        this.runtimeService = runtimeService;
+    }
 
     @Override
     public String topic() {
@@ -24,11 +43,38 @@ public class CheckingWorker implements GeneratedExternalTaskWorker {
 
     @Override
     public void execute(LockedExternalTask task, ExternalTaskService externalTaskService) {
-            logger.info("Executing generated external-task worker for activity \"Checking\" "
-                    + "(process instance {})", task.getProcessInstanceId());
-            Map<String, Object> variables = new HashMap<>();
-            variables.put("qualityPassed", Math.random() > 0.5);
-            logger.info("Worker completion variables: {}", variables);
-            externalTaskService.complete(task.getId(), "generated-worker", variables);
+        logger.info("Executing generated external-task worker for activity \"Checking\" "
+                + "(process instance {})", task.getProcessInstanceId());
+        Map<String, Object> variables = new HashMap<>();
+        boolean satisfiedByCapability = false;
+        CapabilityDispatcher dispatcher = capabilityDispatcherProvider.getIfAvailable();
+        if (dispatcher != null) {
+            ExternalTaskExecutionContext context =
+                    new ExternalTaskExecutionContext(task, runtimeService);
+            Optional<AutomationResult> dispatched = dispatcher.dispatch(context, ACTIVITY_ID, null);
+            if (dispatched.isPresent()) {
+                logger.info("Capability-dispatched activity \"Checking\" (process instance {})",
+                        task.getProcessInstanceId());
+                variables.putAll(context.completionVariables());
+                satisfiedByCapability = true;
+            }
+        }
+        if (!satisfiedByCapability) {
+            GatewayOutputProvider provider = outputProvider.getIfAvailable();
+            if (provider != null) {
+                logger.info("Invoking registered GatewayOutputProvider {} for activity \"Checking\" "
+                        + "(process instance {})", provider.getClass().getSimpleName(),
+                        task.getProcessInstanceId());
+                Map<String, Object> provided = provider.provide("Checking", task);
+                if (provided != null) {
+                    variables.putAll(provided);
+                }
+            }
+        }
+            if (!variables.containsKey("qualityPassed")) {
+                throw new IllegalStateException("Gateway variable 'qualityPassed' must be set by a legitimate producer — bind a capability provider to this activity, or register a @Component implementing GatewayOutputProvider for topic 'Checking', or set it directly in this worker");
+            }
+        logger.info("Worker completion variables: {}", variables);
+        externalTaskService.complete(task.getId(), "generated-worker", variables);
     }
 }

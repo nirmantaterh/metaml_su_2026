@@ -1,48 +1,42 @@
-# Generated RedCollar Manufacturing Target Platform Application
+# Target Platform (redcollar-manufacturing)
 
-This directory contains a complete, standalone Spring Boot + Camunda 7 Target Platform application generated directly by the MetaML `SpringBootProjectGenerator` from the canonical RedCollar garment manufacturing process models.
+Camunda 7 and Spring Boot process engine application template for generated MetaML Target Platforms.
 
-## Source Process
-- **Proxy Process:** `RedCollar.Manuf` (`src/main/resources/processes/RedCollar.Manuf.bpmn`)
-- **Twin Process:** `RedCollar.Twin` (`src/main/resources/processes/RedCollar.Twin.bpmn`)
-- **Template Scaffold:** `backend/RedCollarTP/`
-- **Generator Engine:** `com.metaml.workbench.generation.SpringBootProjectGenerator`
+## Architecture
 
-## Architecture & Generated Components
+The platform runtime implements a synchronized **Proxy / Twin** architecture:
+- `proxy`  -  outward-facing process delegates and execution listeners that receive commands and drive primary process progression.
+- `twin`  -  operational digital-twin mirror kept in lockstep with the proxy process via RabbitMQ messaging and intermediate catch events.
+- `messaging`  -  AMQP queue configuration, publishers, and listeners providing decoupled process instance coordination.
+- `status`  -  REST controllers for process introspection and runtime status reporting.
 
-The generated application implements the full dual-engine **Proxy / Twin** architecture for runtime process execution and simulation:
+## Configuration
 
-1. **Root Application & Lifecycle**
-   - `RedcollarManufacturingApplication.java`: Spring Boot entrypoint with Camunda Process Engine auto-configuration.
-   - `config/`: Camunda engine configuration, H2 database properties, CORS headers, and process properties.
+Core properties are defined in `src/main/resources/application.properties`:
+- Port and context path (`server.port=8080`)
+- Camunda engine execution settings
+- In-memory H2 database (or configurable file-backed datasource)
+- RabbitMQ messaging topology (`metaml.messaging.enabled=true`)
 
-2. **Proxy Process Layer (`proxy/`)**
-   - `ProxyProcessController.java`: REST controller exposing endpoints to start and inspect external manufacturing process instances (`/api/proxy/start`).
-   - `worker/proxy/`: Camunda external task workers for each manufacturing step (`CuttingWorker`, `LayingWorker`, `StitchingWorker`, `SamplingWorker`, `CheckingWorker`, `MarkingWorker`, `PackagingWorker`, `PressingWorker`, `ShippingWorker`, `EditOrderDetailsWorker`, `OrderMgmtInitializationWorker`, `VerifyOrderWorker`).
+## Build & Run
 
-3. **Twin Process Layer (`twin/`)**
-   - `TwinProcessController.java`: REST endpoints for controlling the mirrored Twin Process (`/api/twin/start`).
-   - `worker/twin/`: Twin external task workers and ML decision agents (`CuttingTwinWorker`, `LayingTwinWorker`, `StitchingTwinWorker`, `SamplingTwinWorker`, `CheckingTwinWorker`, `MarkingTwinWorker`, `PackagingTwinWorker`, `PressingTwinWorker`, `ShippingTwinWorker`, `OrderMgmtInitializationTwinWorker`, `TwinDecisionAgent`).
+The generated Target Platform can run independently of the MetaML Workbench. The Maven Wrapper
+scripts are included in every generated project; their first use downloads Maven if needed.
 
-4. **Inter-Engine Coordination & Messaging (`coordination/` & `messaging/`)**
-   - `PairRegistry.java`: Correlates proxy instance IDs with twin instance IDs using shared business keys.
-   - `RabbitMqConfig.java`, `TaskQueueListener.java`, `ResponseQueueListener.java`, `TaskQueuePublisher.java`, `ResponseQueuePublisher.java`: AMQP queue messaging infrastructure enabling lockstep synchronization.
-   - `signal/SignalBroadcaster.java`: Dispatches intermediate catch signals across engines for all 9 manufacturing stages (`cuttingSignal`, `layingSignal`, `stitchingSignal`, `samplingSignal`, `checkingSignal`, `markingSignal`, `packagingSignal`, `pressingSignal`, `shippingSignal`).
+### Windows
 
-5. **External Task Poller (`worker/`)**
-   - `ExternalTaskPoller.java`, `GeneratedExternalTaskWorker.java`, `SchedulingConfig.java`: Scheduled background poller subscribing to Camunda external task topics.
+```powershell
+.\mvnw.cmd clean compile
+.\mvnw.cmd spring-boot:run
+```
 
-6. **Process Status & Inspection (`status/`)**
-   - `GeneratedProcessStatusController.java`: REST endpoints inspecting runtime process token positions and activity state.
-
-## Building & Running
-
-The application is a standard Maven Spring Boot project:
+### macOS and Linux
 
 ```bash
-# Compile and package
-mvn clean package
-
-# Run standalone
-mvn spring-boot:run
+./mvnw clean compile
+./mvnw spring-boot:run
 ```
+
+The application runs in the foreground. Press `Ctrl+C` in that terminal to stop a separately
+launched Target Platform. When launched from **Transmute -> Launch**, use that page's **Stop**
+control; it stops the Workbench-managed process and its child process tree.

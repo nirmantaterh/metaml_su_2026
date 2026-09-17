@@ -7,13 +7,13 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-// Publishes proxy advance notification, awaiting broker confirmation before returning.
+// Publishes proxy advance notification and waits for publisher confirm before marking delivery.
 @Component
 public class TaskQueuePublisher {
 
     private static final Logger logger = LoggerFactory.getLogger(TaskQueuePublisher.class);
 
-    // Long enough for a broker under normal load to ack/nack; short enough that a genuinely unreachable broker fails this attempt and lets the next broadcaster tick (1s later) retry, rather than blocking the single-threaded scheduler indefinitely.
+    // Timeout for broker publisher confirmation before retry on next broadcaster tick.
     private static final long CONFIRM_TIMEOUT_MS = 5000L;
 
     private final RabbitTemplate rabbitTemplate;

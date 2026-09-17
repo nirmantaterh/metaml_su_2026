@@ -16,8 +16,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-// Generic process-instance introspection for deployed processes. Exposes active activities, process variables,
-// business key, and Camunda incident state for runtime diagnostics and failure-injection testing.
+// Generic, read-only process-instance introspection - works for any deployed process, not just one this project's own generated controllers know about. Backs causal test assertions against real engine state (active activities, process variables, business key) rather than log text. Reliability hardening (Pass 2): also exposes genuine Camunda incident state (not simulated) - both to read it (incidents(), the same real state SignalBroadcaster.awaitingResponse's stuck-partner detection now checks) and, since this generated project has no camunda-bpm-spring-boot-starter-rest dependency of its own (no /engine-rest to reach for this), to deliberately induce and later resolve a REAL incident for failure-injection testing (failExternalTaskPermanently / retryExternalTask). Neither touches Proxy/Twin synchronization logic itself - both operate on whatever process instance/external task the caller names.
 @RestController
 @RequestMapping("/api/v1/process")
 public class GeneratedProcessStatusController {
@@ -53,7 +52,7 @@ public class GeneratedProcessStatusController {
         return ResponseEntity.ok(body);
     }
 
-    // Query activity visit count across execution history.
+    // How many times this process instance has ever entered the given BPMN activity, whether still active or long since completed - authoritative proof of a rework loop (or any other repeat visit), independent of process definition or activity shape. Uses HistoryService (camunda.bpm.history-level=full by default), not the in-memory active-activity view, precisely because a repeat visit's earlier instances are no longer "active" by the time anyone asks.
     @GetMapping("/{processInstanceId}/activity-history/{activityId}/count")
     public ResponseEntity<Map<String, Object>> activityVisitCount(
             @PathVariable String processInstanceId, @PathVariable String activityId) {
@@ -68,7 +67,7 @@ public class GeneratedProcessStatusController {
         return ResponseEntity.ok(body);
     }
 
-    // Exposes active Camunda incidents for a process instance to monitor workflow execution state.
+    // Real Camunda incident state for a process instance - the same query SignalBroadcaster's own stuck-partner detection (Pass 2) runs, exposed read-only so a caller (a test, an operator) can see it too instead of only inferring it from logs.
     @GetMapping("/{processInstanceId}/incidents/count")
     public ResponseEntity<Map<String, Object>> incidentCount(
             @PathVariable String processInstanceId) {
@@ -81,10 +80,11 @@ public class GeneratedProcessStatusController {
         return ResponseEntity.ok(body);
     }
 
-    // Fails a lockable external task for the given topic on the process instance to test incident handling.
+    // Test-support: deliberately fails a real, currently-lockable external task for the given topic on the given process instance, with retries=0 - this is a genuine Camunda incident (job retries exhausted), not a simulated one, produced through the same ExternalTaskService API a real worker uses, just reporting failure instead of completing. Exists because this generated project has no /engine-rest of its own to do this from outside the JVM.
     @PostMapping("/{processInstanceId}/external-task/{topic}/fail-permanently")
     public ResponseEntity<Map<String, Object>> failExternalTaskPermanently(
             @PathVariable String processInstanceId, @PathVariable String topic) {
+        // ExternalTaskQueryTopicBuilder has no processInstanceId filter of its own (only businessKey/processDefinitionId/Key) - resolving the instance's own business key first and filtering on THAT is what actually scopes this to the right instance, not just the right topic (which alone would still work for a single pair, but not when more than one pair shares a topic name concurrently).
         ProcessInstance target = runtimeService.createProcessInstanceQuery()
                 .processInstanceId(processInstanceId)
                 .singleResult();
@@ -106,7 +106,7 @@ public class GeneratedProcessStatusController {
         }
         String externalTaskId = locked.get(0).getId();
         externalTaskService.handleFailure(externalTaskId, "test-failure-injector",
-                "Deliberately failed by test to produce a Camunda incident", 0, 0L);
+                "Deliberately failed by a test to produce a real Camunda incident", 0, 0L);
         Map<String, Object> body = new HashMap<>();
         body.put("externalTaskId", externalTaskId);
         body.put("topic", topic);
@@ -114,7 +114,7 @@ public class GeneratedProcessStatusController {
         return ResponseEntity.ok(body);
     }
 
-    // Diagnostic endpoint to reset retries for an external task, allowing the Camunda job executor to re-attempt execution.
+    // Test-support: the real recovery path for the incident failExternalTaskPermanently produces - restoring retries is what lets Camunda's own job executor pick the external task back up and, since the generated worker's own logic never deliberately fails, complete it normally on the next attempt. Genuine recovery through real Camunda mechanics, not a test-only shortcut that pretends the task completed.
     @PostMapping("/external-task/{externalTaskId}/retry")
     public ResponseEntity<Map<String, Object>> retryExternalTask(
             @PathVariable String externalTaskId) {

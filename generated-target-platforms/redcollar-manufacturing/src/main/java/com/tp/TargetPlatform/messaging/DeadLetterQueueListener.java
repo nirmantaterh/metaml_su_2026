@@ -6,7 +6,7 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-// Consumes both project-scoped DLQs purely to surface a dead-lettered TASK/RESPONSE message in this application's own log - the message itself is already durably held in RabbitMqConfig.DLQ_TASKS_QUEUE / DLQ_RESPONSES_QUEUE and inspectable via the broker's management API regardless of whether anything ever consumes it here.
+// Consumes project-scoped dead-letter queues to log unprocessable task and response messages.
 @Component
 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
 public class DeadLetterQueueListener {

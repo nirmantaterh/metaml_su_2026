@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MetaML Target Platform</title>
+  <link rel="stylesheet" href="vendor/diagram-js.css">
+  <link rel="stylesheet" href="vendor/bpmn-js.css">
+  <link rel="stylesheet" href="vendor/bpmn-embedded.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark">M</span>
+      <div class="titles">
+        <span class="t1">MetaML Target Platform</span>
+        <span class="t2">standalone execution &mdash; no Workbench required</span>
+      </div>
+    </div>
+    <div class="headerStrip">
+      <span class="hstat"><span class="dot" id="dotPlatform"></span> <span id="stPlatform">connecting&hellip;</span></span>
+      <span class="hstat"><span class="dot" id="dotRabbit"></span> <span id="stRabbit">RabbitMQ</span></span>
+      <span class="hstat" id="stUptime"></span>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs" aria-label="Target Platform sections">
+    <button class="tab active" data-view="overview">Overview</button>
+    <button class="tab" data-view="live">Live Execution</button>
+    <button class="tab" data-view="comm">Communication</button>
+    <button class="tab" data-view="runtime">Runtime</button>
+    <button class="tab" data-view="system">System</button>
+  </nav>
+
+  <main>
+
+    <!-- ============ OVERVIEW ============ -->
+    <section id="view-overview" class="view">
+      <div id="ovIncidentBanner" hidden></div>
+
+      <div class="panel overviewHero">
+        <h2 id="ovProcessName">&mdash;</h2>
+        <p class="hint">Original/Main process with a synchronized digital Twin, running on this standalone platform.</p>
+
+        <div class="storyRow" id="ovStory">
+          <div class="storySide original">
+            <div class="label">Original / Main</div>
+            <div class="activity" id="ovOriginalActivity">&mdash;</div>
+            <div class="sub" id="ovOriginalSub">No pair running yet</div>
+          </div>
+          <div class="storyMid">
+            <div class="arrow">&#8596;</div>
+            <div class="caption">RabbitMQ<br>synchronization</div>
+          </div>
+          <div class="storySide twin">
+            <div class="label">Digital Twin</div>
+            <div class="activity" id="ovTwinActivity">&mdash;</div>
+            <div class="sub" id="ovTwinSub">No pair running yet</div>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:14px; display:flex; gap:10px; align-items:center;">
+          <button class="btn" id="btnOpenLive">Open Live Execution &rarr;</button>
+          <button class="btn secondary" id="btnStartRun" hidden>Start New Run</button>
+          <span class="hint" id="ovStartHint" style="margin:0;"></span>
+        </div>
+      </div>
+
+      <div class="cardRow" id="ovCards"></div>
+
+      <div class="panel" id="ovSyncPanel" hidden>
+        <h3>Recent Synchronization</h3>
+        <ul class="syncSummary" id="ovSyncList"></ul>
+      </div>
+
+      <div class="panel dataPanel">
+        <h3>Deployed Process Definitions</h3>
+        <div id="ovDefinitions"></div>
+      </div>
+    </section>
+
+    <!-- ============ LIVE EXECUTION ============ -->
+    <section id="view-live" class="view" hidden>
+      <div class="panel liveToolbar">
+        <div class="pairBar">
+          <label class="hint" style="margin:0;">Pair:</label>
+          <select id="pairSelect"></select>
+          <span class="sep">&middot;</span>
+          <span class="pill" id="pairOriginalStatus">&mdash;</span>
+          <span class="sep">&middot;</span>
+          <span class="pill" id="pairTwinStatus">&mdash;</span>
+          <span style="flex:1"></span>
+          <label class="scenarioPicker" for="scenarioPreset">Scenario
+            <select id="scenarioPreset">
+              <option value="happy">Happy Path</option>
+              <option value="edit">Order Requires Editing</option>
+              <option value="rework">Quality/Rework Until Resolved</option>
+            </select>
+          </label>
+          <button class="btn secondary small" id="btnStartRun2" hidden>Start New Run</button>
+        </div>
+        <div class="executionControl" id="executionControl" hidden>
+          <div><span class="legendLabel">Execution control</span><span class="hint" id="executionState"></span></div>
+          <button class="btn secondary small" id="btnCompleteProcess">Complete Process</button>
+          <button class="btn small" id="btnNextStep">Go to Next Step</button>
+          <span class="hint" id="configuredScenario"></span>
+          <span class="hint" id="providersUsed"></span>
+        </div>
+        <div class="statusLegend" aria-label="Execution status legend">
+          <span class="legendLabel">Execution states</span>
+          <span class="pill ACTIVE">ACTIVE</span>
+          <span class="pill WAITING_SYNC">WAITING SYNC</span>
+          <span class="pill COMPLETED">COMPLETED</span>
+          <span class="pill INCIDENT">INCIDENT</span>
+        </div>
+        <div class="empty" id="liveEmpty" hidden>No Original/Twin pair is running. Start one, or complete the demo generation steps described in the report.</div>
+      </div>
+
+      <div id="liveBody">
+        <div class="execGrid">
+          <div class="panel bpmnCard original">
+            <div class="bpmnHead">
+              <span class="name" id="origBpmnName">Original</span>
+              <span class="side">Original</span>
+            </div>
+            <div class="bpmnCanvas" id="origCanvas"></div>
+            <div class="bpmnNote">Source: deployed BPMN XML + real Camunda activity/signal state.</div>
+          </div>
+
+          <div class="panel syncCenter">
+            <h3>Synchronization</h3>
+            <div id="syncSteps"></div>
+            <div id="taskPanelHost"></div>
+          </div>
+
+          <div class="panel bpmnCard twin">
+            <div class="bpmnHead">
+              <span class="name" id="twinBpmnName">Twin</span>
+              <span class="side">Twin</span>
+            </div>
+            <div class="bpmnCanvas" id="twinCanvas"></div>
+            <div class="bpmnNote">Actual MetaML-generated Twin BPMN + real Camunda activity/signal state.</div>
+          </div>
+        </div>
+
+        <div class="panel evidencePanel">
+          <details class="evidence">
+            <summary>Technical evidence: step-by-step state table</summary>
+            <div id="stepTable" style="margin-top:8px;"></div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ COMMUNICATION ============ -->
+    <section id="view-comm" class="view" hidden>
+      <div class="panel commPanel">
+        <h2>RabbitMQ TASK / RESPONSE Exchange</h2>
+        <p class="hint">For the pair selected in Live Execution. Source: real log records from this platform's own generated TaskQueuePublisher / TaskQueueListener / ResponseQueuePublisher / ResponseQueueListener.</p>
+        <div class="row" style="display:flex; gap:8px; margin-bottom:10px; font-size:11px; color:var(--ink-soft); font-weight:700; text-transform:uppercase; letter-spacing:.4px;">
+          <div style="flex:1;">Original / Main</div><div style="width:90px; text-align:center;">RabbitMQ</div><div style="flex:1;">Digital Twin</div>
+        </div>
+        <div id="commRows"></div>
+        <div class="empty" id="commEmpty" hidden>No TASK/RESPONSE messages recorded yet for this pair.</div>
+      </div>
+
+      <div class="panel evidencePanel">
+        <details class="evidence">
+          <summary>Technical evidence: raw message log</summary>
+          <div id="commTable" style="margin-top:8px;"></div>
+        </details>
+      </div>
+    </section>
+
+    <!-- ============ RUNTIME ============ -->
+    <section id="view-runtime" class="view" hidden>
+      <div class="panel runtimePanel">
+        <div class="filterBar">
+          <button class="chip active" data-kind="">All</button>
+          <button class="chip" data-kind="LOG,ERROR">System</button>
+          <button class="chip" data-kind="CAPABILITY">Capability</button>
+          <button class="chip" data-kind="ERROR">Error / Incident</button>
+        </div>
+        <p class="hint">Original/Proxy and Twin runtime activity, kept separate. Source: this JVM's own log records, classified by the generated code's own PROXY/TWIN labeling.</p>
+        <div class="runtimeGrid">
+          <div class="panel runtimeCol original">
+            <div class="colHead"><span>Original / Proxy</span><span id="runtimeOrigCount"></span></div>
+            <div class="runtimeList" id="runtimeOrig"></div>
+          </div>
+          <div class="panel runtimeCol twin">
+            <div class="colHead"><span>Digital Twin</span><span id="runtimeTwinCount"></span></div>
+            <div class="runtimeList" id="runtimeTwin"></div>
+          </div>
+        </div>
+        <div class="panel" id="runtimeOtherPanel" hidden>
+          <h3>Other Activity</h3>
+          <p class="hint" id="runtimeOtherHint"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SYSTEM ============ -->
+    <section id="view-system" class="view" hidden>
+      <div class="sysGrid">
+        <div class="panel">
+          <h3>Capability Providers</h3>
+          <p class="hint">Available to this Target Platform. Technical simulation changes provider availability only; it never sets BPMN business results.</p>
+          <div class="providerChips" id="sysProviders"></div>
+          <div class="providerModes" id="sysProviderModes"></div>
+        </div>
+        <div class="panel">
+          <h3>Camunda Engine</h3>
+          <div class="linkRow">
+            <a href="/camunda/app/cockpit/" target="_blank" rel="noopener">Open Camunda Cockpit &#8599;</a>
+            <a href="/camunda/app/tasklist/" target="_blank" rel="noopener">Open Camunda Tasklist &#8599;</a>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Platform</h3>
+          <div class="kvList" id="sysPlatform"></div>
+        </div>
+        <div class="panel">
+          <h3>Process Instances</h3>
+          <div id="sysInstances"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="vendor/bpmn-navigated-viewer.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -9,6 +9,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.tp.TargetPlatform.portal.RunExecutionGate;
+import com.tp.TargetPlatform.portal.StandaloneCapabilityResolver;
+
+
+
 // Polls all registered external-task topics and dispatches locked tasks to the matching GeneratedExternalTaskWorker. Uses the embedded engine's ExternalTaskService directly (fetchAndLock + complete) instead of the HTTP-based external-task client starter, which depends on Jersey — incompatible with Spring Boot 4.x.
 @Component
 public class ExternalTaskPoller {
@@ -21,14 +26,23 @@ public class ExternalTaskPoller {
 
     private final ExternalTaskService externalTaskService;
     private final List<GeneratedExternalTaskWorker> workers;
+    private final RunExecutionGate executionGate;
+    private final StandaloneCapabilityResolver capabilityResolver;
+
     private final int maxRetries;
 
     public ExternalTaskPoller(ExternalTaskService externalTaskService,
             List<GeneratedExternalTaskWorker> workers,
+            RunExecutionGate executionGate,
+            StandaloneCapabilityResolver capabilityResolver,
+
             @org.springframework.beans.factory.annotation.Value(
                     "${metaml.worker.max-retries:3}") int maxRetries) {
         this.externalTaskService = externalTaskService;
         this.workers = workers;
+        this.executionGate = executionGate;
+        this.capabilityResolver = capabilityResolver;
+
         this.maxRetries = maxRetries;
         logger.info("ExternalTaskPoller initialized with {} worker(s): {} (maxRetries={})",
                 workers.size(), workers.stream().map(GeneratedExternalTaskWorker::topic).toList(),
@@ -44,7 +58,14 @@ public class ExternalTaskPoller {
                         .execute();
                 for (LockedExternalTask task : tasks) {
                     try {
+                        if (!executionGate.mayExecute(task)) {
+                            externalTaskService.unlock(task.getId());
+                            continue;
+                        }
+                        capabilityResolver.resolveIfUnambiguous(task);
+
                         worker.execute(task, externalTaskService);
+                        executionGate.afterExecution(task);
                     } catch (Exception e) {
                         handleWorkerFailure(worker, task, e);
                     }
@@ -61,11 +82,15 @@ public class ExternalTaskPoller {
         Integer currentRetries = task.getRetries();
         int remaining = (currentRetries == null ? maxRetries : currentRetries) - 1;
         if (remaining > 0) {
-            logger.warn("Worker {} failed on task {} ({} retries remaining): {}",
-                    worker.topic(), task.getId(), remaining, e.getMessage(), e);
+            logger.warn("TECHNICAL_TASK_FAILURE: topic={} activityId={} taskId={} processInstanceId={} "
+                            + "businessKey={} retriesRemaining={} exception={}", worker.topic(),
+                    task.getActivityId(), task.getId(), task.getProcessInstanceId(),
+                    task.getBusinessKey(), remaining, e.getMessage(), e);
         } else {
-            logger.error("Worker {} failed on task {} - no retries remaining, task now has an "
-                    + "incident: {}", worker.topic(), task.getId(), e.getMessage(), e);
+            logger.error("TECHNICAL_TASK_FAILURE: topic={} activityId={} taskId={} processInstanceId={} "
+                            + "businessKey={} retriesRemaining=0 incident=true exception={}",
+                    worker.topic(), task.getActivityId(), task.getId(), task.getProcessInstanceId(),
+                    task.getBusinessKey(), e.getMessage(), e);
         }
         externalTaskService.handleFailure(task.getId(), WORKER_ID, e.getMessage(),
                 Math.max(remaining, 0), RETRY_BACKOFF_MS);

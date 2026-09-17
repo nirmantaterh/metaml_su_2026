@@ -8,7 +8,7 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-// The real consumer for response messages - the Camunda signal delivery that releases proxy's waiting execution happens here, triggered by consuming the message.
+// Consumes response messages from RabbitMQ to deliver Camunda signals releasing waiting proxy executions.
 @Component
 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
 public class ResponseQueueListener {
@@ -20,8 +20,9 @@ public class ResponseQueueListener {
     public ResponseQueueListener(RuntimeService runtimeService) {
         this.runtimeService = runtimeService;
     }
+
     // Validates message payload and routes to DLQ on failure, handling idempotent delivery states consistently with TaskQueueListener.
-    @RabbitListener(queues = { "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.sampling-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.laying-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.marking-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.cutting-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.stitching-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.checking-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.pressing-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.packaging-signal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.shipping-signal" })
+    @RabbitListener(queues = { "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.sampling-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.laying-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.marking-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.cutting-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.stitching-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.checking-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.pressing-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.packaging-signal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.shipping-signal" })
     public void onResponseMessage(String payload) {
         String[] parts = payload.split("\\|", -1);
         if (parts.length != 4) {

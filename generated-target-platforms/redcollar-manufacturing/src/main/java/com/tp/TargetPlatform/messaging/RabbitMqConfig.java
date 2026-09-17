@@ -14,45 +14,45 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-// Configures RabbitMQ exchange, queues, DLX routing, and publisher confirms for synchronization.
+// Configures RabbitMQ topology, dead-letter routing, and confirms for proxy-twin synchronization.
 @Configuration
 @ConditionalOnProperty(name = "metaml.messaging.enabled", havingValue = "true")
 public class RabbitMqConfig {
 
     private static final Logger logger = LoggerFactory.getLogger(RabbitMqConfig.class);
 
-    public static final String EXCHANGE = "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.exchange";
+    public static final String EXCHANGE = "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.exchange";
 
-    public static final String DLX_EXCHANGE = "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.dlx";
-    public static final String DLQ_TASKS_QUEUE = "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.dlq.tasks";
-    public static final String DLQ_RESPONSES_QUEUE = "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.dlq.responses";
+    public static final String DLX_EXCHANGE = "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.dlx";
+    public static final String DLQ_TASKS_QUEUE = "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.dlq.tasks";
+    public static final String DLQ_RESPONSES_QUEUE = "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.dlq.responses";
     public static final String DLQ_TASKS_ROUTING_KEY = "dlq.tasks";
     public static final String DLQ_RESPONSES_ROUTING_KEY = "dlq.responses";
 
     // Shared signal name -> its dedicated task queue (proxy asks twin to advance past this signal). The single source of truth for which signals have RabbitMQ queues at all - a signal absent from this map exists on only one side and is delivered directly instead (see SignalBroadcaster.deliverTo).
     public static final Map<String, String> TASK_QUEUE_BY_SIGNAL = Map.ofEntries(
-            Map.entry("samplingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.sampling-signal"),
-            Map.entry("layingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.laying-signal"),
-            Map.entry("markingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.marking-signal"),
-            Map.entry("cuttingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.cutting-signal"),
-            Map.entry("stitchingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.stitching-signal"),
-            Map.entry("checkingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.checking-signal"),
-            Map.entry("pressingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.pressing-signal"),
-            Map.entry("packagingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.packaging-signal"),
-            Map.entry("shippingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.shipping-signal")
+            Map.entry("samplingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.sampling-signal"),
+            Map.entry("layingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.laying-signal"),
+            Map.entry("markingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.marking-signal"),
+            Map.entry("cuttingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.cutting-signal"),
+            Map.entry("stitchingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.stitching-signal"),
+            Map.entry("checkingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.checking-signal"),
+            Map.entry("pressingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.pressing-signal"),
+            Map.entry("packagingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.packaging-signal"),
+            Map.entry("shippingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.shipping-signal")
     );
 
     // Shared signal name -> its dedicated response queue (twin reports it advanced).
     public static final Map<String, String> RESPONSE_QUEUE_BY_SIGNAL = Map.ofEntries(
-            Map.entry("samplingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.sampling-signal"),
-            Map.entry("layingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.laying-signal"),
-            Map.entry("markingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.marking-signal"),
-            Map.entry("cuttingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.cutting-signal"),
-            Map.entry("stitchingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.stitching-signal"),
-            Map.entry("checkingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.checking-signal"),
-            Map.entry("pressingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.pressing-signal"),
-            Map.entry("packagingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.packaging-signal"),
-            Map.entry("shippingSignal", "redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.shipping-signal")
+            Map.entry("samplingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.sampling-signal"),
+            Map.entry("layingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.laying-signal"),
+            Map.entry("markingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.marking-signal"),
+            Map.entry("cuttingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.cutting-signal"),
+            Map.entry("stitchingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.stitching-signal"),
+            Map.entry("checkingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.checking-signal"),
+            Map.entry("pressingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.pressing-signal"),
+            Map.entry("packagingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.packaging-signal"),
+            Map.entry("shippingSignal", "redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.shipping-signal")
     );
 
     public static final Map<String, String> TASK_ROUTING_KEY_BY_SIGNAL = Map.ofEntries(
@@ -79,7 +79,7 @@ public class RabbitMqConfig {
             Map.entry("shippingSignal", "sync.responses.shipping-signal")
     );
 
-    // mandatory=true is what makes the broker return (rather than silently drop) a message this exchange/routing-key combination cannot route to any queue - shouldn't happen with this project's own fixed topology, but a returned message is NOT the same failure a publisher confirm NACK catches (a NACK is the broker failing to accept the message at all; a return is the broker accepting it and then finding nowhere to route it), so both are wired here for the same reason: neither must fail silently.
+    // mandatory=true ensures unroutable messages trigger returnsCallback rather than being silently dropped.
     public RabbitMqConfig(RabbitTemplate rabbitTemplate) {
         rabbitTemplate.setMandatory(true);
         rabbitTemplate.setReturnsCallback(returned -> logger.error(
@@ -97,7 +97,7 @@ public class RabbitMqConfig {
 
 @Bean
 public Queue q0_sampling_signalTaskQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.sampling-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.sampling-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_TASKS_ROUTING_KEY)
@@ -111,7 +111,7 @@ public Binding q0_sampling_signalTaskBinding() {
 
 @Bean
 public Queue q0_sampling_signalResponseQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.sampling-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.sampling-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_RESPONSES_ROUTING_KEY)
@@ -125,7 +125,7 @@ public Binding q0_sampling_signalResponseBinding() {
 
 @Bean
 public Queue q1_laying_signalTaskQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.laying-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.laying-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_TASKS_ROUTING_KEY)
@@ -139,7 +139,7 @@ public Binding q1_laying_signalTaskBinding() {
 
 @Bean
 public Queue q1_laying_signalResponseQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.laying-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.laying-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_RESPONSES_ROUTING_KEY)
@@ -153,7 +153,7 @@ public Binding q1_laying_signalResponseBinding() {
 
 @Bean
 public Queue q2_marking_signalTaskQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.marking-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.marking-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_TASKS_ROUTING_KEY)
@@ -167,7 +167,7 @@ public Binding q2_marking_signalTaskBinding() {
 
 @Bean
 public Queue q2_marking_signalResponseQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.marking-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.marking-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_RESPONSES_ROUTING_KEY)
@@ -181,7 +181,7 @@ public Binding q2_marking_signalResponseBinding() {
 
 @Bean
 public Queue q3_cutting_signalTaskQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.cutting-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.cutting-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_TASKS_ROUTING_KEY)
@@ -195,7 +195,7 @@ public Binding q3_cutting_signalTaskBinding() {
 
 @Bean
 public Queue q3_cutting_signalResponseQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.cutting-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.cutting-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_RESPONSES_ROUTING_KEY)
@@ -209,7 +209,7 @@ public Binding q3_cutting_signalResponseBinding() {
 
 @Bean
 public Queue q4_stitching_signalTaskQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.stitching-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.stitching-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_TASKS_ROUTING_KEY)
@@ -223,7 +223,7 @@ public Binding q4_stitching_signalTaskBinding() {
 
 @Bean
 public Queue q4_stitching_signalResponseQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.stitching-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.stitching-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_RESPONSES_ROUTING_KEY)
@@ -237,7 +237,7 @@ public Binding q4_stitching_signalResponseBinding() {
 
 @Bean
 public Queue q5_checking_signalTaskQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.checking-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.checking-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_TASKS_ROUTING_KEY)
@@ -251,7 +251,7 @@ public Binding q5_checking_signalTaskBinding() {
 
 @Bean
 public Queue q5_checking_signalResponseQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.checking-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.checking-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_RESPONSES_ROUTING_KEY)
@@ -265,7 +265,7 @@ public Binding q5_checking_signalResponseBinding() {
 
 @Bean
 public Queue q6_pressing_signalTaskQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.pressing-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.pressing-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_TASKS_ROUTING_KEY)
@@ -279,7 +279,7 @@ public Binding q6_pressing_signalTaskBinding() {
 
 @Bean
 public Queue q6_pressing_signalResponseQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.pressing-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.pressing-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_RESPONSES_ROUTING_KEY)
@@ -293,7 +293,7 @@ public Binding q6_pressing_signalResponseBinding() {
 
 @Bean
 public Queue q7_packaging_signalTaskQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.packaging-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.packaging-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_TASKS_ROUTING_KEY)
@@ -307,7 +307,7 @@ public Binding q7_packaging_signalTaskBinding() {
 
 @Bean
 public Queue q7_packaging_signalResponseQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.packaging-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.packaging-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_RESPONSES_ROUTING_KEY)
@@ -321,7 +321,7 @@ public Binding q7_packaging_signalResponseBinding() {
 
 @Bean
 public Queue q8_shipping_signalTaskQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.shipping-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.shipping-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_TASKS_ROUTING_KEY)
@@ -335,7 +335,7 @@ public Binding q8_shipping_signalTaskBinding() {
 
 @Bean
 public Queue q8_shipping_signalResponseQueue() {
-    return QueueBuilder.durable("redcollarmanuf.996d36c2-286a-419a-b7c5-68d9a3808b3c.sync.responses.shipping-signal")
+    return QueueBuilder.durable("redcollarmanuf.e1d5e524-5a61-47b7-801e-f73d90f9cd04.sync.responses.shipping-signal")
             .withArgument("x-queue-type", "quorum")
             .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
             .withArgument("x-dead-letter-routing-key", DLQ_RESPONSES_ROUTING_KEY)

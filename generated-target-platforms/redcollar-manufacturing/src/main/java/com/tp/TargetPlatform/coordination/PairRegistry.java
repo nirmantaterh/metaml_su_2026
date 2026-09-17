@@ -5,14 +5,14 @@ import java.util.concurrent.ConcurrentMap;
 
 import org.springframework.stereotype.Component;
 
-// Pairs a proxy instance with its twin by the caller-supplied business key both /start endpoints accept - no BPMN-specific knowledge. The first process instance to register a given business key is the "initiator" (proxy, in this generated platform's own usage); the next instance to register the SAME key is the "responder" (twin). A business key is pairing/correlation data only, not the communication mechanism itself - see SignalBroadcaster for how these roles turn each shared signal into a real, targeted proxy -> twin -> proxy handoff instead of an undifferentiated broadcast.
+// Pairs proxy and twin process instances by shared businessKey correlation identifier.
 @Component
 public class PairRegistry {
 
     private final ConcurrentMap<String, String> initiators = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, String> responders = new ConcurrentHashMap<>();
 
-    // Returns "initiator" for the first instance registered under businessKey, "responder" for the second, and null for a blank key or a third-or-later instance sharing an already-claimed key - unpaired, callers fall back to their own default behavior.
+    // Classifies process instance as initiator (first) or responder (second) for the businessKey.
     public String registerAndClassify(String businessKey, String processInstanceId) {
         if (businessKey == null || businessKey.isBlank()) {
             return null;

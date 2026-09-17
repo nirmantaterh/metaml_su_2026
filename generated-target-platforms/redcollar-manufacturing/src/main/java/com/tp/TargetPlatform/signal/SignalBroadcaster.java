@@ -29,7 +29,10 @@ public class SignalBroadcaster {
     private final PairRegistry pairRegistry;
     private final TaskQueuePublisher taskQueuePublisher;
     private final ResponseQueuePublisher responseQueuePublisher;
-    private final Set<String> awaitingResponse = ConcurrentHashMap.newKeySet();
+    // The responder subscription released for each handoff. A responder may loop
+    // back to the same signal after it completes its gated work; that creates a new
+    // subscription id and is proof that the released turn really completed.
+    private final Map<String, String> awaitingResponderSubscriptions = new ConcurrentHashMap<>();
     private final Set<String> everDelivered = ConcurrentHashMap.newKeySet();
     private final Map<String, Integer> partnerArrivalTicks = new ConcurrentHashMap<>();
     private static final int MAX_PARTNER_ARRIVAL_TICKS = 5;
@@ -84,18 +87,18 @@ public class SignalBroadcaster {
         }
 
         String handoffKey = businessKey + "|" + signalName;
-        if (awaitingResponse.contains(handoffKey)) {
-            if (responderHasAdvancedPast(signalName, partnerInstanceId)) {
-                awaitingResponse.remove(handoffKey);
+        if (awaitingResponderSubscriptions.containsKey(handoffKey)) {
+            if (responderHasAdvancedPast(signalName, partnerInstanceId,
+                    awaitingResponderSubscriptions.get(handoffKey))) {
+                awaitingResponderSubscriptions.remove(handoffKey);
                 stuckOnIncidentLogged.remove(handoffKey);
                 deliverTo(signalName, subscription, businessKey, "RESPONSE");
             } else {
-                // Distinguishes an in-progress partner from an unresolvable incident: checks for open Camunda incidents on the partner instance.
-                // If an incident exists, logs an observable error rather than silently waiting, while preventing premature proxy progression until the partner legitimately advances.
+                // Checks whether the partner instance has an active Camunda incident blocking advancement.
                 boolean partnerHasOpenIncident = runtimeService.createIncidentQuery()
                         .processInstanceId(partnerInstanceId).count() > 0;
                 if (partnerHasOpenIncident) {
-                    // add() itself is what makes this fire only the FIRST tick an incident is observed for this handoffKey - checking the incident BEFORE calling add() (rather than relying on add()'s own return value to short- circuit the query) is what keeps a legitimately-slow, incident-free tick from ever marking this handoffKey "already logged".
+                    // Logs the incident once per handoffKey until resolved.
                     if (stuckOnIncidentLogged.add(handoffKey)) {
                         logger.error("STUCK: proxy execution {} (businessKey={}) is waiting on "
                                 + "RESPONSE for signal '{}', but its twin partner "
@@ -106,7 +109,7 @@ public class SignalBroadcaster {
                                 partnerInstanceId);
                     }
                 } else {
-                    // No incident currently open (never had one, or a prior one was already resolved) - clear any stale suppression so a LATER incident on this same handoffKey logs again instead of staying silenced forever.
+                    // Clear logged state when no incidents remain.
                     stuckOnIncidentLogged.remove(handoffKey);
                 }
             }
@@ -121,7 +124,7 @@ public class SignalBroadcaster {
                     .orElse(null);
             if (responderSubscription != null) {
                 deliverTo(signalName, responderSubscription, businessKey, "REQUEST");
-                awaitingResponse.add(handoffKey);
+                awaitingResponderSubscriptions.put(handoffKey, responderSubscription.getId());
             }
             return;
         }
@@ -131,10 +134,48 @@ public class SignalBroadcaster {
         }
     }
 
+    // "The partner will never turn up here, stop waiting for it." Getting this wrong in
+    // the permissive direction is what breaks lockstep: releasing this side early is
+    // indistinguishable, from the outside, from a synchronization that never happened.
+    //
+    // The five-tick budget predates human activities. It assumes both sides reach a
+    // shared signal within seconds, which held while every gated activity was an
+    // engine-driven service or external task. It does not hold when the partner is a
+    // person: a Proxy parked on a userTask reaches its sync point only when someone
+    // completes the task, which is minutes or hours, not five seconds - and the budget
+    // would release the Twin long before that, letting it run the whole process
+    // through while the human had not started.
+    //
+    // So the budget is now spent only when the partner is DEMONSTRABLY not coming:
+    //   - it already passed this signal (everDelivered), or
+    //   - its process instance is gone, or
+    //   - it is itself parked on signals and none of them is this one, which is the
+    //     divergent-path case the budget was written for and still covers.
+    // A partner that is alive and still working - a human task, a long service call -
+    // is a partner that is still coming, and this side keeps waiting for it.
     private boolean partnerNotComing(String waitKey, String partnerInstanceId, String signalName) {
         if (everDelivered.contains(partnerInstanceId + "|" + signalName)) {
             partnerArrivalTicks.remove(waitKey);
             return true;
+        }
+        ProcessInstance partner = runtimeService.createProcessInstanceQuery()
+                .processInstanceId(partnerInstanceId)
+                .singleResult();
+        if (partner == null) {
+            partnerArrivalTicks.remove(waitKey);
+            return true;
+        }
+        List<EventSubscription> partnerSignals = runtimeService.createEventSubscriptionQuery()
+                .processInstanceId(partnerInstanceId)
+                .eventType("signal")
+                .list();
+        boolean partnerParkedElsewhere = !partnerSignals.isEmpty()
+                && partnerSignals.stream().noneMatch(s -> s.getEventName().equals(signalName));
+        if (!partnerParkedElsewhere) {
+            // Still working towards this rendezvous. Reset rather than accumulate, so a
+            // partner that later diverges still gets a full budget from that point.
+            partnerArrivalTicks.remove(waitKey);
+            return false;
         }
         int ticks = partnerArrivalTicks.merge(waitKey, 1, Integer::sum);
         if (ticks >= MAX_PARTNER_ARRIVAL_TICKS) {
@@ -144,8 +185,11 @@ public class SignalBroadcaster {
         return false;
     }
 
-    // Checks whether the responder has completed or transitioned past the task gated by signalName.
-    private boolean responderHasAdvancedPast(String signalName, String responderInstanceId) {
+    // True once the responder moved past the exact subscription that released its
+    // gated task: it may subscribe to another signal, return to this signal through
+    // a loop (with a new subscription id), or complete entirely.
+    private boolean responderHasAdvancedPast(String signalName, String responderInstanceId,
+            String releasedSubscriptionId) {
         ProcessInstance stillActive = runtimeService.createProcessInstanceQuery()
                 .processInstanceId(responderInstanceId)
                 .singleResult();
@@ -156,9 +200,10 @@ public class SignalBroadcaster {
                 .processInstanceId(responderInstanceId)
                 .eventType("signal")
                 .list();
-        boolean stillOnSameSignal = responderSignals.stream()
-                .anyMatch(s -> s.getEventName().equals(signalName));
-        if (stillOnSameSignal) {
+        boolean stillOnReleasedSubscription = responderSignals.stream()
+                .anyMatch(s -> s.getEventName().equals(signalName)
+                        && s.getId().equals(releasedSubscriptionId));
+        if (stillOnReleasedSubscription) {
             return false;
         }
         return !responderSignals.isEmpty();
