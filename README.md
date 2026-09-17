@@ -1,7 +1,7 @@
 # MetaML
 
 <p align="center">
-  <img src="docs/assets/metaml-hero.svg" alt="MetaML — Model-Driven Infrastructure for Executable, Synchronized Process Systems" width="100%">
+  <img src="docs/assets/metaml-hero.png" alt="MetaML — Model-Driven Infrastructure for Executable, Synchronized Process Systems" width="100%">
 </p>
 
 <p align="center">
@@ -393,7 +393,7 @@ metaml-workbench-source-of-truth/
 └── docs/
     ├── architecture/           # Architecture specs, ADRs, and runtime diagrams
     └── assets/                 # SVGs, animations, and product screenshots
-        ├── metaml-hero.svg
+        ├── metaml-hero.png
         ├── metaml-flow.gif
         ├── metaml-lifecycle.svg
         ├── metaml-architecture.svg
