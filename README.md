@@ -26,14 +26,16 @@
   <img src="docs/assets/metaml-flow.gif" alt="MetaML Process Lifecycle and Event Flow Demonstration" width="100%">
 </p>
 
-The platform transitions seamlessly from visual workflow specification to isolated microservice execution and event-driven lockstep synchronization:
+The platform transitions seamlessly from visual workflow specification to isolated microservice execution and event-driven Proxy/Twin synchronization:
 
-1. **Phase 1: Model on Canvas**: Author, inspect, or import executable business workflows (demonstrated with the canonical RedCollar garment manufacturing process) on the React BPMN 2.0 canvas with gateways, service tasks, and element properties.
-2. **Phase 2: Save & Generate**: Persist validated process definitions to the catalog, then compile and scaffold a dedicated Spring Boot microservice project pre-configured with Camunda, specialized Maven dependencies, and AMQP messaging.
-3. **Phase 3: Launch Runtime**: Build and start the generated microservice as a supervised child JVM process, binding an automatically allocated dynamic port with automated health probes.
-4. **Phase 4: Standalone Portal**: Connect directly to the Target Platform's standalone web interface and embedded Camunda Cockpit, running independently of the Workbench at runtime.
-5. **Phase 5: Capability Execution**: Dispatch pluggable execution components (services, tools, or automated tasks such as `order-approval` and `quality-check`) via the `CapabilityDispatcher`.
-6. **Phase 6: RabbitMQ Lockstep**: RabbitMQ provides external asynchronous AMQP transport for task and response handoff messages, coordinating the Proxy business process and Digital Twin shadow replica in lockstep.
+1. **Model**: Author or inspect BPMN workflows on the MetaML visual canvas.
+2. **Save**: Validate the executable BPMN definition and persist the process in the MetaML catalog.
+3. **Generate**: Compile the saved process into a dedicated Spring Boot Target Platform project with Camunda, runtime code, and messaging integration.
+4. **Launch**: Build and start the generated Target Platform as a supervised child JVM on an assigned dynamic port.
+5. **Run**: Execute correlated Proxy and Digital Twin workflows inside the Target Platform's single embedded Camunda engine.
+6. **Execute**: Dispatch bound capabilities such as rules, services, tools, or agents from process activities through the capability runtime.
+7. **Synchronize**: Target Platform runtime logic coordinates Proxy/Twin rendezvous and release, while external RabbitMQ transports task and response handoff messages.
+8. **System**: MetaML owns modeling, persistence, generation, and launch; the generated Target Platform owns runtime execution; RabbitMQ remains external transport.
 
 ---
 
@@ -46,10 +48,10 @@ The platform transitions seamlessly from visual workflow specification to isolat
 | Stage | Scope | Description | Runtime / Storage |
 | :--- | :--- | :--- | :--- |
 | **1. Model** | `MetaML` / Canvas | Visual workflow authoring and configuration on canvas with BPMN 2.0 elements, sequence flows, and properties. | Input: `.bpmn` XML / UI |
-| **2. Save** | `MetaML` / Catalog | Validate executable BPMN structure and persist process definitions and versioned metadata to the catalog archive. | Storage: H2 Database (`/api/v1/projects`) |
+| **2. Save** | `MetaML` / Catalog | Validate executable BPMN structure and persist process definitions and versioned metadata to the catalog archive. | Storage: Process model file/archive stores + H2-backed metadata |
 | **3. Generate** | `MetaML` / Engine | Scaffold an isolated Spring Boot microservice project pre-configured with Camunda 7.24, Maven wrapper, and AMQP bindings. | Output: Standalone Project Directory |
 | **4. Launch** | `MetaML` / Supervisor | Build and start the generated application as a supervised child JVM process on an assigned dynamic port with live health probes. | Runtime: Child JVM Process / Dynamic Port |
-| **5. Run** | `Target Platform` / Runtime | Execute correlated Proxy and Twin workflows in lockstep inside the embedded Camunda engine via external RabbitMQ transport. | Transport: RabbitMQ AMQP (`:5672`) |
+| **5. Run** | `Target Platform` / Runtime | Execute correlated Proxy and Digital Twin workflows inside a single embedded Camunda engine, with external RabbitMQ providing asynchronous task/response transport. | Transport: RabbitMQ AMQP (`:5672`) |
 
 ---
 
@@ -63,10 +65,10 @@ The platform transitions seamlessly from visual workflow specification to isolat
 
 - **MetaML Workbench (Host / Control Plane)**:
   - **UI & Modeler Canvas (Port 3000)**: React 18 single-page application providing the visual BPMN 2.0 modeling canvas (`bpmn-js`), Transmute Studio (Model, Generate, Launch), and the agent catalog.
-  - **`wbapi` Control Plane (Port 8082)**: Spring Boot REST API orchestrating project persistence, BPMN model versioning, validation, and generation endpoints backed by an embedded H2 database.
-  - **`SpringBootProjectGenerator` (`workbench`)**: Core generation engine performing identity specialization, template instantiation (`RedCollarTP`), Maven dependency wiring, and configuration generation.
-  - **`ProcessLauncher` (`workbench`)**: Child JVM process supervisor managing application startup, dynamic port allocation, health probing, and termination.
-  - **Catalog Subsystem (`nodemanager` Port 8083)**: Dynamic agent discovery and capability catalog stub for authoring-time tool discovery (not a Target Platform runtime component).
+  - **`wbapi` Control Plane (Port 8082)**: Spring Boot REST/API layer exposing project, model, generation, and launch endpoints while delegating core persistence, validation, generation, and runtime lifecycle operations to the `workbench` module. Workbench state and model metadata are persisted through H2-backed storage.
+  - **`SpringBootProjectGenerator` (`workbench`)**: Core Target Platform generation engine responsible for specializing the selected process, instantiating the Target Platform template, copying / synthesizing BPMN and runtime sources, wiring Maven dependencies, and generating runtime configuration.
+  - **`SpringBootProjectLauncher` (`workbench`)**: Generated Target Platform process supervisor responsible for dynamic port allocation, child JVM startup, readiness probing, runtime tracking, and termination.
+  - **Catalog Subsystem (`nodemanager`, Port 8083)**: Authoring-time capability / agent discovery and catalog service used by the Workbench during modeling and evolution. It is not part of the generated Target Platform runtime path.
 
 - **Generated Target Platform (Standalone Microservice :PORT)**:
   Runs independently of the Workbench at runtime after generation and compilation:
@@ -98,7 +100,7 @@ The platform transitions seamlessly from visual workflow specification to isolat
   <tr>
     <td width="50%" valign="top">
       <h3>Proxy / Twin Synchronization</h3>
-      <p>Execute correlated Proxy and Twin workflows inside the same embedded Camunda engine, linked by <code>businessKey</code>. Asynchronous AMQP transport via external RabbitMQ paired with internal signal broadcasting maintains lockstep execution across correlated Proxy and Twin instances within a single engine.</p>
+      <p>Execute correlated Proxy and Twin workflows inside a single embedded Camunda engine, linked by <code>businessKey</code>. External RabbitMQ provides AMQP transport for task and response handoff messages, while Target Platform runtime logic maintains Proxy/Twin correlation and synchronization across workflow turns.</p>
     </td>
     <td width="50%" valign="top">
       <h3>Extensible Capabilities &amp; Agents</h3>
@@ -143,7 +145,7 @@ Start and supervise the generated RedCollar application on an assigned dynamic p
 
 ### 4. Target Platform
 
-The standalone generated RedCollar Target Platform running independently on its dynamic port with Camunda workflows and RabbitMQ synchronization active.
+The standalone generated RedCollar Target Platform running on its dynamic port with correlated Proxy/Twin execution and external RabbitMQ transport active.
 
 <p align="center">
   <img src="docs/assets/screenshots/redcollar-target-platform.png" alt="Standalone Generated RedCollar Target Platform Portal" width="100%">
@@ -154,7 +156,7 @@ The standalone generated RedCollar Target Platform running independently on its 
 ## Quick Start
 
 ```
-Clone Repository ➔ Build Backend Modules ➔ Start MetaML API ➔ Start Frontend ➔ Model & Generate ➔ Launch
+Clone Repository ➔ Build Backend ➔ Start MetaML ➔ Model ➔ Save ➔ Generate ➔ Launch
 ```
 
 ### 1. Requirements
@@ -222,7 +224,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ### 5. Start RabbitMQ (For Proxy / Twin Synchronization)
 
-RabbitMQ routes AMQP events between Proxy delegates and Digital Twin instances:
+RabbitMQ provides the external AMQP transport for task and response handoff messages used by correlated Proxy/Twin execution:
 
 ```bash
 # Start container with management console
@@ -338,11 +340,11 @@ Generated platforms depend on `capability-core` and `reference-providers` at bui
 
 Generated platforms implement a synchronized Proxy/Twin architectural pattern:
 
-- **Same Embedded Engine**: Both Proxy and Digital Twin process instances execute inside the **same embedded Camunda engine** within the Target Platform microservice, executing both process instances within a single engine.
+- **Same Embedded Engine**: Proxy and Digital Twin run as correlated BPMN process instances inside a single embedded Camunda engine within the generated Target Platform.
 - **Proxy Process**: Outward-facing execution delegates and service tasks that handle live requests, trigger bound capabilities, and emit process progression events.
-- **Digital Twin**: Operational shadow replica kept in lockstep with the primary process via AMQP intermediate catch events, enabling runtime safety checks and simulation without side effects.
+- **Digital Twin**: Automated counterpart correlated with the Proxy by `businessKey`, progressing through mirrored workflow turns under the Target Platform synchronization contract.
 - **AMQP Transport**: RabbitMQ provides external asynchronous AMQP transport for task and response handoff messages. Topic exchanges decouple event producers and consumers.
-- **Internal Synchronization Contract**: Target Platform application logic—including `PairRegistry` (tracking correlated `businessKey` instances), `SignalBroadcaster` (@Scheduled 1s poller), and Camunda signal events—enforces synchronization across workflow turns.
+- **Internal Synchronization Contract**: Target Platform application logic—including `PairRegistry` (tracking correlated `businessKey` instances), `SignalBroadcaster` (@Scheduled 1s poller), and Camunda signal events—enforces synchronization across workflow turns. Camunda intermediate signal catch events coordinate workflow rendezvous, while RabbitMQ transports asynchronous task and response handoff messages between synchronization turns.
 - **Introspection Endpoints**: Dedicated REST controllers provide process health, execution history, and state verification.
 
 ---
@@ -381,7 +383,7 @@ npm test -- --watchAll=false
 metaml-workbench-source-of-truth/
 ├── backend/
 │   ├── wbapi/                  # Spring Boot REST API & Workbench entry point (:8082)
-│   ├── workbench/              # Codegen engine, BPMN transforms, ProcessLauncher
+│   ├── workbench/              # Code generation, BPMN transforms, SpringBootProjectGenerator, SpringBootProjectLauncher
 │   ├── capability-core/        # Shared capability contracts & execution context
 │   ├── providers/              # Reference capability provider implementations
 │   ├── nodemanager/            # Node Manager service stub & agent catalog (:8083)
