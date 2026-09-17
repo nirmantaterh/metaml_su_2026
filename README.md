@@ -46,12 +46,12 @@ The platform transitions seamlessly from visual workflow specification to isolat
 </p>
 
 | Stage | Scope | Description | Runtime / Storage |
-| :--- | :--- | :--- | :--- |
-| **1. Model** | `MetaML` / Canvas | Visual workflow authoring and configuration on canvas with BPMN 2.0 elements, sequence flows, and properties. | Input: `.bpmn` XML / UI |
-| **2. Save** | `MetaML` / Catalog | Validate executable BPMN structure and persist process definitions and versioned metadata to the catalog archive. | Storage: Process model file/archive stores + H2-backed metadata |
-| **3. Generate** | `MetaML` / Engine | Scaffold an isolated Spring Boot microservice project pre-configured with Camunda 7.24, Maven wrapper, and AMQP bindings. | Output: Standalone Project Directory |
-| **4. Launch** | `MetaML` / Supervisor | Build and start the generated application as a supervised child JVM process on an assigned dynamic port with live health probes. | Runtime: Child JVM Process / Dynamic Port |
-| **5. Run** | `Target Platform` / Runtime | Execute correlated Proxy and Digital Twin workflows inside a single embedded Camunda engine, with external RabbitMQ providing asynchronous task/response transport. | Transport: RabbitMQ AMQP (`:5672`) |
+|---|---|---|---|
+| **1. Model** | `MetaML Workbench` / Canvas | Author and configure BPMN 2.0 workflows using elements, sequence flows, gateways, tasks, and properties. | Input: `.bpmn` XML / UI |
+| **2. Save** | `MetaML Workbench` / Persistence | Validate the BPMN definition and persist the process model, metadata, and model state through Workbench persistence. | Storage: Model/archive files + H2-backed metadata |
+| **3. Generate** | `MetaML Workbench` / Generator | Generate a standalone Spring Boot Target Platform project containing the specialized BPMN/runtime sources, Camunda 7.24 configuration, Maven wrapper, capabilities, and messaging integration. | Output: Generated Target Platform directory |
+| **4. Launch** | `MetaML Workbench` / Launcher | Build and start the generated Target Platform as a supervised child JVM on an allocated dynamic port, with startup/readiness probing. | Runtime: Child JVM / Dynamic port |
+| **5. Run** | `Generated Target Platform` / Runtime | Execute correlated Proxy and Digital Twin BPMN instances inside a single embedded Camunda engine, with external RabbitMQ providing asynchronous task/response transport. | Transport: External RabbitMQ AMQP (`:5672`) |
 
 ---
 
@@ -227,7 +227,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 RabbitMQ provides the external AMQP transport for task and response handoff messages used by correlated Proxy/Twin execution:
 
 ```bash
-# Start container with management console
+# First-time container creation
 docker run -d --name metaml-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
 
 # Subsequent starts
@@ -270,15 +270,22 @@ The Node Manager service (`nodemanager`) runs on port **8083** as an authoring-t
 The **Transmute > Launch** dashboard manages the execution lifecycle of generated platforms:
 
 ```
-Generated / Stopped
-        │
-      Launch
-        ▼
-     Running
-        │
-   ┌────┴─────────────────────────┐
-   ▼                              ▼
-[Open Platform] [Open Cockpit] [Stop]
+Generated
+    │
+  Launch
+    ▼
+ Running
+    │
+    ├── Open Platform
+    ├── Open Cockpit
+    │
+    └── Stop
+         │
+         ▼
+      Stopped
+         │
+       Launch
+         └──────────────► Running
 ```
 
 - **Launch**: Starts the Target Platform as a supervised child JVM process on an automatically selected free port.
@@ -382,19 +389,20 @@ npm test -- --watchAll=false
 ```
 metaml-workbench-source-of-truth/
 ├── backend/
-│   ├── wbapi/                  # Spring Boot REST API & Workbench entry point (:8082)
-│   ├── workbench/              # Code generation, BPMN transforms, SpringBootProjectGenerator, SpringBootProjectLauncher
+│   ├── wbapi/                  # Spring Boot REST/API control layer (:8082)
+│   ├── workbench/              # Generation + runtime lifecycle services
+│   │                           # SpringBootProjectGenerator, SpringBootProjectLauncher
 │   ├── capability-core/        # Shared capability contracts & execution context
 │   ├── providers/              # Reference capability provider implementations
-│   ├── nodemanager/            # Node Manager service stub & agent catalog (:8083)
-│   └── RedCollarTP/            # Canonical Spring Boot + Camunda template scaffold
+│   ├── nodemanager/            # Authoring-time capability/agent catalog (:8083)
+│   └── RedCollarTP/            # Canonical Target Platform template
 ├── frontend/                   # React 18 SPA with bpmn-js canvas (:3000)
-├── generated-target-platforms/ # Tracked sample generated Target Platform applications
-├── demo/                       # BPMN process fixtures, test datasets, verification files
-├── TEAM_DEMO_GUIDE.md          # Comprehensive step-by-step team demonstration guide
+├── generated-target-platforms/ # Tracked reference/sample Target Platforms
+├── demo/                       # BPMN fixtures, test data, and verification material
+├── TEAM_DEMO_GUIDE.md          # End-to-end demonstration guide
 └── docs/
     ├── architecture/           # Architecture specs, ADRs, and runtime diagrams
-    └── assets/                 # SVGs, animations, and product screenshots
+    └── assets/                 # Visual documentation assets
         ├── metaml-hero.png
         ├── metaml-flow.gif
         ├── metaml-lifecycle.svg
