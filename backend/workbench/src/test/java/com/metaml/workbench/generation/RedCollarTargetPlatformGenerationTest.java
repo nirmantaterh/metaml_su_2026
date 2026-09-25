@@ -55,9 +55,14 @@ class RedCollarTargetPlatformGenerationTest {
         assertThat(project.directory().resolve("mvnw")).isRegularFile();
         assertThat(project.directory().resolve("mvnw.cmd")).isRegularFile();
         assertThat(project.directory().resolve(".mvn/wrapper/maven-wrapper.properties")).isRegularFile();
-        assertThat(Files.readString(project.directory().resolve("README.md")))
+        String readme = Files.readString(project.directory().resolve("README.md"));
+        assertThat(readme)
                 .contains("mvnw.cmd spring-boot:run")
-                .contains("Ctrl+C");
+                .contains("Ctrl+C")
+                .contains("## Standalone Execution")
+                .contains("Starting the Target Platform application is not the same as starting a correlated process pair.")
+                .contains("http://localhost:8080/api/proxy/start?businessKey=$key&executionMode=STEP")
+                .contains("Generated synchronization rendezvous");
 
         Path tpRoot = project.directory().resolve("src/main/java/com/tp/TargetPlatform");
 
@@ -103,11 +108,18 @@ class RedCollarTargetPlatformGenerationTest {
                 .contains("SCENARIO_PRESETS")
                 .contains("capability-responses")
                 .contains("Order Requires Editing")
-                .contains("technical-mode");
+                .contains("technical-mode")
+                .contains("btnStartRunRuntime")
+                .contains("$('runtimeEmptyState').hidden = !!d")
+                .contains("$('btnStartRunRuntime').addEventListener('click', startNewRun)");
         assertThat(Files.readString(staticRoot.resolve("index.html")))
                 .contains("scenarioPreset")
                 .contains("configuredScenario")
-                .contains("sysProviderModes");
+                .contains("sysProviderModes")
+                .contains("No correlated Proxy/Twin run has started yet.")
+                .contains("Starting the Target Platform starts the runtime, but it does not automatically create a process run.")
+                .contains("btnStartRunRuntime")
+                .contains("this page does not create a separate event stream");
 
         // 3. Verify External Task Workers (Proxy & Twin)
         assertThat(tpRoot.resolve("worker/proxy/CuttingWorker.java")).exists();

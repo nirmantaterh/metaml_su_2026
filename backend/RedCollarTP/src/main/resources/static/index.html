@@ -182,8 +182,13 @@
           <button class="chip" data-kind="CAPABILITY">Capability</button>
           <button class="chip" data-kind="ERROR">Error / Incident</button>
         </div>
-        <p class="hint">Original/Proxy and Twin runtime activity, kept separate. Source: this JVM's own log records, classified by the generated code's own PROXY/TWIN labeling.</p>
-        <div class="runtimeGrid">
+        <p class="hint">Runtime entries are captured from this Target Platform JVM's actual log records. PROXY/TWIN attribution and event kind are UI classifications of those same records; this page does not create a separate event stream.</p>
+        <div class="panel" id="runtimeEmptyState" hidden>
+          <h3>No correlated Proxy/Twin run has started yet.</h3>
+          <p class="hint">Starting the Target Platform starts the runtime, but it does not automatically create a process run.</p>
+          <button class="btn secondary" id="btnStartRunRuntime" hidden>Start New Run</button>
+        </div>
+        <div class="runtimeGrid" id="runtimeActivity">
           <div class="panel runtimeCol original">
             <div class="colHead"><span>Original / Proxy</span><span id="runtimeOrigCount"></span></div>
             <div class="runtimeList" id="runtimeOrig"></div>

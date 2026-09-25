@@ -160,6 +160,7 @@ async function probePairStart() {
   }
   $('btnStartRun').hidden = !state.pairStartAvailable;
   $('btnStartRun2').hidden = !state.pairStartAvailable;
+  $('btnStartRunRuntime').hidden = !state.pairStartAvailable;
 }
 
 function selectedScenario() {
@@ -486,6 +487,8 @@ async function renderComm() {
 async function renderRuntime() {
   const logs = await getJson('/api/portal/logs?limit=400&kinds=' + encodeURIComponent(state.runtimeKindFilter));
   const d = state.detail;
+  $('runtimeEmptyState').hidden = !!d;
+  $('runtimeActivity').hidden = !d;
   const originalPid = d ? d.original.processInstanceId : null;
   const twinPid = d ? d.twin.processInstanceId : null;
 
@@ -609,6 +612,7 @@ document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () =>
 $('btnOpenLive').addEventListener('click', () => showView('live'));
 $('btnStartRun').addEventListener('click', startNewRun);
 $('btnStartRun2').addEventListener('click', startNewRun);
+$('btnStartRunRuntime').addEventListener('click', startNewRun);
 $('btnCompleteProcess').addEventListener('click', () => controlExecution('complete'));
 $('btnNextStep').addEventListener('click', () => controlExecution('next'));
 $('pairSelect').addEventListener('change', (e) => { state.userKey = e.target.value || null; tick(); });
